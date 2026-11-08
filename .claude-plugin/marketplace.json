@@ -1,0 +1,14 @@
+{
+  "name": "proved-port",
+  "description": "Plugins for porting C libraries to proved Rust behind a drop-in C ABI.",
+  "owner": {
+    "name": "wolfi-dev"
+  },
+  "plugins": [
+    {
+      "name": "proved-c-port",
+      "source": "./plugins/proved-c-port",
+      "description": "Port a C library to Rust behind a drop-in C ABI, prove it with Verus and Kani, and benchmark it against the C original."
+    }
+  ]
+}
