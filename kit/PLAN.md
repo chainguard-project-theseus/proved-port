@@ -1,9 +1,10 @@
 # Starter kit: plan
 
 A plan for moving the reusable tooling of proved C-ABI ports into
-`kit/` in this repository, from wolfi-dev/pcre3 (main `4e2a6bc9`),
+`kit/` in this repository, from wolfi-dev/pcre3 (main `5216e03d`),
 wolfi-dev/challoc (main `7ef336c4`) and the box and emulator scripts
-that are not yet in any repository. Nothing is moved yet.
+that are not yet in any repository. Section 5 gives each step's
+status.
 
 Each step is a **move**: the tool lands here, the port that had it
 consumes it from the kit through its pin (section 4), and the in-tree
@@ -94,14 +95,17 @@ kit/
   README.md                  what the kit is, and the skill that uses it
   reference/                 step 0: the local-only box, stats and emulator
                              scripts as they were, until each moves below
+  templates/                 FLOOR, RLIMIT, REACH, MINTS, SEAMS, THEOREMS, the verus
+                             README's headings, theorem and Kani record skeletons,
+                             ABI-nnn ledger, AGENTS and CONTRIBUTING outlines (step 1)
   verus/
     count/                   one counter: config-driven crates, both ledger back ends
-    seams/                   ledger generator and checker (Go), record templates
-    templates/               README, THEOREMS, SEAMS, TODO, FLOOR, RLIMIT, theorem and record skeletons
+    seams/                   ledger generator and checker (Go)
     lint/                    unsafe/assume lint, guard-test helper crate
   abi/
     check/                   abi.sh, header-check, glibc-max, map lint
-    ledger/                  ABI-nnn template and citation lint
+    ledger/                  ABI-nnn citation lint (the entry format is
+                             templates/docs/abi-changes.md)
   diff/
     fuzz-diff/               generic dlopen driver shell, known-table harness, citation lint
     ratchet/                 per-block deviations ratchet
@@ -205,9 +209,22 @@ is deleted in that PR.
    headers, `verus/README.md`, `docs/abi-changes.md` "Entry format" and
    the record format of `verus/seams/kani-*.md` is replaced by a pointer
    to the kit template at the pinned version; the figures and rows stay.
-   challoc: the same for `verus/FLOOR`, `verus/README.md` and
-   `verus/RESULTS.md`. Exit: neither port restates a rule a template
-   states.
+   challoc: the same for `verus/README.md` and `verus/RESULTS.md`;
+   `verus/FLOOR` waits for step 2, because challoc's counter reads
+   `combined-functions` and `combined-lines` where the template names
+   the kit counter's `checked-*`. The FLOOR template's raise rule is a
+   per-port choice (`{RAISE_RULE}`): pcre3's pointer keeps the same-PR
+   rule and challoc's keeps its own-PR rule; the counter passes a share
+   above its figure either way. Exit: neither port restates a rule a
+   template states.
+   **Status:** the kit side is done: `kit/templates/` (FLOOR, RLIMIT,
+   REACH, MINTS, SEAMS.md, THEOREMS.md, a headings-only verus
+   README.md with the five sections the headers cite, the theorem and
+   Kani record skeletons, the `ABI-nnn` ledger, AGENTS.md and
+   CONTRIBUTING.md outlines; `kit/templates/README.md` says how to apply
+   them). The verus README's prose and the TODO skeleton are not
+   templated yet. The pcre3 and challoc PRs that replace their rule text
+   with pointers are to come, after the kit pin (section 4) exists.
 2. **Counter, unsafe/assume lint and Kani runner.**
    - pcre3: delete `verus/count/` and `verus/kani/run.sh`; add
      `proved-port.toml` (the four crates, the `test-util` feature, the
@@ -224,8 +241,10 @@ is deleted in that PR.
      `ci/lint-unsafe.sh`, which is deleted.
    - challoc: delete `verus/count/`; the Makefile's `verus` recipe (the
      `cd verus/count && cargo run` line) runs the kit counter with the
-     generated-ledger back end; `verus.yaml` drops its `counter tests`
-     step; `kani.yaml`'s `sh ci/kani-regular.sh` and the
+     generated-ledger back end, and `verus/FLOOR` renames its
+     `combined-*` lines to `checked-*` and takes the template's header
+     as a pointer, with the own-PR raise rule; `verus.yaml` drops its
+     `counter tests` step; `kani.yaml`'s `sh ci/kani-regular.sh` and the
      `kani-boolcmp` lint's `scripts/kani-boolcmp.sh` call the kit's,
      and both scripts are deleted.
 3. **Seam ledger generator** (Go rewrite of challoc's `verus/seams.sh`,

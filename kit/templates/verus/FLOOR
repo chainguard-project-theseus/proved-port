@@ -1,0 +1,37 @@
+# The shares of executable functions and of their lines that the verus
+# check holds main to (verus/count --floor; verus/README.md, "Coverage"):
+# the counter's `shipped` row, every crate of {PORT} but one whose
+# Cargo.toml says `publish = false` ({UNSHIPPED_CRATES}), rounded down to
+# a tenth of a percent.
+#
+# The four figure names are the ones the kit's counter reads.
+# `functions` and `lines` are the verified share: Verus checks them.
+# `checked-functions` and `checked-lines` add the trusted functions Kani
+# discharges ({DISCHARGED_BY: the `discharged_by = "kani"` marker,
+# verus/README.md, "Kani"; or, with the generated-ledger back end, the
+# seams the ledger marks discharged, verus/SEAMS.md, "Status"}), which
+# hold on the bounded inputs their records under verus/seams/ name.
+#
+# New executable code comes with its proofs (CONTRIBUTING.md), so a change
+# keeps each share at or above these figures. The check passes a share
+# above its figure and names the figure to record; when it is recorded is
+# the port's choice, so keep one of these and delete the other:
+# {RAISE_RULE: same PR: a change that raises a share raises its figure
+# here, to the one the check names, in the same pull request. When two
+# pull requests both raise it, the second to merge takes the figures its
+# run on the new base names. | own PR: the figures rise in their own pull
+# requests between merges, to the figures the check names, so that pull
+# requests landing in parallel do not conflict here.}
+#
+# A figure set below the base revision's fails unless a
+# `lowered FIGURE P REASON` line here, new in that change, names that
+# figure and value.
+#
+# A `lowered` line is the last resort: close the gap by verifying more
+# code first. Its REASON names exactly what became trusted or outside, and
+# the counts before and after (`N of M shipped functions verified, P%,
+# against main's SHA at N' of M'`).
+functions 0.0
+lines 0.0
+checked-functions 0.0
+checked-lines 0.0
