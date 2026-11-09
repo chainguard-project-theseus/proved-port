@@ -1,0 +1,37 @@
+# wolfi-dev/challoc's verus/count.toml: the configuration under which the
+# kit counter's tables and FLOOR report match challoc's in-tree
+# verus/count (kit/count/README.md, "Parity", which lists where they do
+# not yet).
+
+[crates]
+# One crate at the root. Its Cargo.toml says `publish = false` (it is not
+# a crates.io crate), and it ships.
+members = [{ name = "challoc", path = ".", ships = true }]
+# `challoc_tls_check` is the debug TLS check build the tlscheck job makes.
+test_cfgs = ["test", "kani", "challoc_tls_check"]
+# challoc's tests bind a variable named `tracked`, a Verus keyword
+# (api/mallctl.rs); Verus code never writes `let tracked =`.
+stand_ins = [["let tracked =", "let trackd_ ="]]
+# challoc's ghost column counts the proofs of Verus-only code too.
+verus_only_ghost = true
+
+[floor]
+path = "verus/FLOOR"
+checked = "combined"
+
+# The generated ledger (verus/seams.sh) says which trusted functions are
+# discharged; the premise files define the labels an Isla or Kani status
+# may name.
+[ledger]
+dir = "verus/ledger"
+
+[ledger.isla]
+file = "verus/isla/seams.md"
+sections = [{ heading = "## Platform premises", prefixes = "PK" }]
+
+[ledger.kani]
+file = "verus/kani/premises.md"
+sections = [
+  { heading = "## Premises", prefixes = "C" },
+  { heading = "## Loader and kernel premises", prefixes = "L", callers = true },
+]

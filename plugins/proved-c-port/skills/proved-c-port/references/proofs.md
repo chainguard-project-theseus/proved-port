@@ -40,6 +40,22 @@ re-checked on each Verus upgrade:
 A rewrite made only to get through Verus must behave the same, and the
 crate's tests must pass unchanged.
 
+### When vstd cannot be a dependency of every build
+
+A `verus!` block needs vstd's `verus!` macro in every build, so vstd
+must be an ordinary dependency. A port whose MSRV is below vstd's
+(expat-rs: Rust 1.82, while vstd's proc-macro dependencies need 1.85)
+keeps vstd optional behind a feature and uses Verus's attribute form
+instead: plain Rust functions carry their contracts in
+`#[cfg_attr(feature = "verus", verus_spec(...))]` (with `verus_verify`),
+proof steps go in `proof!` statements under `#[cfg(feature = "verus")]`,
+and spec functions and lemmas live in a `#[cfg(feature = "verus")]
+verus! { }` block. The cost is ghost code split across that block and
+the function bodies. The kit counter classes an attribute-form function
+as verified, and code under the feature as built only for Verus, when
+`verus/count.toml` names the feature (`[crates] verus_features =
+["verus"]`).
+
 ## Refinement layering
 
 Each layer extends the spec first, then the code over it, in its own PR:
@@ -123,8 +139,9 @@ challoc's `no_assume_or_admit_in_verified_code`).
 
 ## The FLOOR ratchet
 
-A source-reading counter (`verus/count`, built on `verus_syn`) classes
-every executable function and line as verified, trusted, discharged or
+A source-reading counter (the kit's `kit/count`, configured by the
+port's `verus/count.toml`; built on `verus_syn`) classes every
+executable function and line as verified, trusted, discharged or
 outside `verus!`, leaving out test-only and verifier-only code. It
 fails when:
 

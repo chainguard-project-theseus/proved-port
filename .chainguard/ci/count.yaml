@@ -1,0 +1,33 @@
+# The kit counter's own CI (kit/count): its tests, clippy -D warnings
+# over every target, and rustfmt. The ports' verus checks drop their
+# `counter tests` step when they switch to the kit counter
+# (kit/PLAN.md, step 2), so these are the counter's only tests. All
+# block. Toolchain: the Wolfi rust stream pcre3's test.yaml uses (it
+# carries rustc, cargo, rustfmt and clippy); bump with it. git is for
+# the tests that build a repository to read a base revision from.
+version: 1
+
+environment:
+  packages: [rust-1.99, build-base, busybox, git]
+
+checks:
+  count-test:
+    description: cargo test --locked over kit/count.
+    trigger: [presubmit, postsubmit]
+    timeout: 15m
+    network: &crates
+      egress: [index.crates.io, static.crates.io]
+    cmd: [cargo, test, --locked, --manifest-path, kit/count/Cargo.toml]
+
+  count-clippy:
+    description: cargo clippy -D warnings over kit/count, tests included.
+    trigger: [presubmit, postsubmit]
+    timeout: 15m
+    network: *crates
+    cmd: [cargo, clippy, --locked, --manifest-path, kit/count/Cargo.toml, --all-targets, --, -D, warnings]
+
+  count-rustfmt:
+    description: cargo fmt --check over kit/count. Run `cargo fmt` there before committing.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [cargo, fmt, --manifest-path, kit/count/Cargo.toml, --check]
