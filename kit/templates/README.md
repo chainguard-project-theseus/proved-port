@@ -7,9 +7,12 @@ wolfi-dev/pcre3 at `5216e03d` and wolfi-dev/challoc at `7ef336c4` with
 the project names taken out.
 The rule text in each header (how FLOOR ratchets, how RLIMIT headroom
 and REACH rows work) is the contract the counter enforces and agents
-read, so keep it as written; fill in the placeholders and the rows.
-`AGENTS.md` and `CONTRIBUTING.md` point at those headers rather than
-restating them.
+read, so keep it as written in the port's own file; fill in the
+placeholders and the rows. Each header ends with a
+`# kit: proved-port kit/v{KIT_VERSION}` line naming the kit version it
+came from, and a lint is to diff the port's header against the template
+at that version (kit/PLAN.md, step 1). `AGENTS.md` and `CONTRIBUTING.md`
+point at those headers rather than restating them.
 
 | template | copy to | what it holds |
 |---|---|---|

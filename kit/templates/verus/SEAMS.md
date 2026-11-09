@@ -29,14 +29,20 @@ contract is still trusted, now as vstd's.
   hyphen between them (`S-cr9`, a seam of one of the `CR` theorems).
   Ids are assigned once and never reused; a theorem that rests on
   another theorem's seam names its id instead of copying the row.
+  Ids assigned in an older form keep it, since an id is never renamed:
+  pcre3's `S-dn1-1` (the theorem's whole id, a hyphen, then the number)
+  and `S-jit-2` (a hyphen after the family) are two. New ids take the
+  form above, numbered after the family's ids in that form. The counter
+  reads any id that starts `S-`.
 - **item**: the items the seam covers, as the source names them.
 - **kind**: `assume_specification`, `external_body`,
   `external_fn_specification`, `external_type_specification`,
   `external_trait_specification`, `#[verifier::external]`, `axiom`, or a
   token minted on trust (`Tracked::assume_new`).
 - **category**: `core library`, `std library`, `permanent (the C
-  caller's contract)`, `operating system`, `machine model`, or the
-  port code outside `verus!` it stands for.
+  caller's contract)`, `operating system`, `machine model`, a
+  dependency (`the memchr crate`), `Verus limit` (a construct Verus
+  rejects), or the port code outside `verus!` it stands for.
 - **where**: the file that states the contract.
 - **contract**: what the seam assumes, then `grounds:` (the documentation
   quoted at the contract, or the observed result) and `used by` (the
@@ -45,8 +51,10 @@ contract is still trusted, now as vstd's.
   `none needed`, or `none: the premise`.
 - **status**: `trusted`, `discharged by Kani {KANI_RELEASE}
   (`verus/seams/kani-<id in lower case>.md`)` with the bounds the
-  record names, or `verified over <seam>` once the item is inside
-  `verus!`.
+  record names, `verified over <seam>` once the item is inside
+  `verus!`, or `retired (<theorem>): <why>` once the seam is gone (the
+  item verified, or no longer built outside tests). A retired row
+  stays, so its id is not reused.
 
 | # | item | kind | category | where | contract | proposed tool | status |
 |---|---|---|---|---|---|---|---|

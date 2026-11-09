@@ -37,3 +37,5 @@
 # So the list only shrinks unless a change says otherwise in the row
 # itself: one that adds an unverified function a C caller reaches, or
 # moves or renames one, marks its row `new`.
+#
+# kit: proved-port kit/v{KIT_VERSION}

@@ -16,9 +16,14 @@
 # default where it had none) needs an `rlimit-raised NAME N REASON` line
 # here, new in that change, for that function and N.
 #
-# Restore headroom before raising a limit: split the function, narrow what
-# it unfolds (`opaque`, `reveal` in one scope, a lemma in place of an
-# inline proof). Raise the rlimit last, to the smallest N that holds the
+# Restore headroom before raising a limit, in this order:
+# `#[verifier::spinoff_prover]`, which gives the function a Z3 process of
+# its own; a split of the proof into lemmas, each on a prover of its own;
+# a smaller context (narrow what it unfolds: `opaque`, `reveal` in one
+# scope, a lemma in place of an inline proof). Never a weaker contract or
+# an `assume`. Raise the rlimit last, to the smallest N that holds the
 # function within max-share, and say in REASON what it uses on its own
 # prover (`{FUNCTION_EXAMPLE}: 17.5M, 58% of the default and 19% of 30`).
+#
+# kit: proved-port kit/v{KIT_VERSION}
 max-share 65

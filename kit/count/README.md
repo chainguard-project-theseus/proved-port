@@ -22,7 +22,9 @@ executable function; `--floor` holds the `shipped` row to the FLOOR
 file; `--base-rev` also holds FLOOR (and REACH and RLIMIT) to that
 revision's copies, and fails when the revision does not resolve;
 `--rlimit` reads the statistics `cargo verus ... -- --time-expanded
---output-json` printed. `--version` prints the counter's version.
+--output-json` printed. `--version` prints the counter's version. An
+unknown option or a second ROOT fails the run (exit 2), so a misspelt
+`--flor` cannot leave the floor unchecked.
 
 ## Configuration
 

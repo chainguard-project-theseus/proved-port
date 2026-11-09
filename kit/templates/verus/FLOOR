@@ -31,6 +31,8 @@
 # code first. Its REASON names exactly what became trusted or outside, and
 # the counts before and after (`N of M shipped functions verified, P%,
 # against main's SHA at N' of M'`).
+#
+# kit: proved-port kit/v{KIT_VERSION}
 functions 0.0
 lines 0.0
 checked-functions 0.0
