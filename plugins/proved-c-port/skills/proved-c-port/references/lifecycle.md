@@ -88,11 +88,31 @@ or an open bug.
 1. Bring the Verus toolchain into CI as a pinned package first (pcre3
    landed its first theorem before the CI gate existed and paid for it
    in post-merge rlimit breaks).
-2. Prove leaf modules first (UTF decoding, tables, parsers), where vstd
+2. Bootstrap the counter with the first proof. A port at FLOOR 0.0 with
+   no counter cannot land a proof through a gate that refuses
+   unmeasured `verus!` code, and changing the gate to let one through
+   reads as a CI bypass. So the first proof PR does it all at once: it
+   adds `verus/count.toml` and runs the kit counter
+   (`kit/count/README.md`, "Bootstrapping") in the verus check, copies
+   the kit's `verus/FLOOR` template, and raises FLOOR from 0.0 to the
+   figures the counter names on that PR. Run the counter on the PR's
+   base too: every figure there is 0.0, which shows the gate measured
+   before the proof moved it.
+   **Pending the first `kit/vX.Y.Z` release:** a check cannot install
+   the counter yet. This repository is internal and the ports' check
+   guests reach crates.io alone, so `cargo install --git` of a pinned
+   rev fails there, and no package exists to pin
+   (`kit/count/README.md`, "Release"). Until the release, run it
+   outside CI, pinned to a sha of this repository
+   (`CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install --locked --git https://github.com/wolfi-dev/proved-port --rev <sha> verus-count`,
+   which uses git's GitHub credentials), and record the base's and the PR's figures
+   in the PR body; the verus check runs it once the release is
+   installable there.
+3. Prove leaf modules first (UTF decoding, tables, parsers), where vstd
    already has a specification to prove against.
-3. Move outward one theorem per PR: each lands `verus/theorems/<ID>.md`
+4. Move outward one theorem per PR: each lands `verus/theorems/<ID>.md`
    with a statement, a seams table and mutation checks.
-4. Then the interpreter's state model, so later fast paths have
+5. Then the interpreter's state model, so later fast paths have
    something to be proved equal to.
 
 pcre3's history shows the layering: T1 (UTF decoding) on day 3, then

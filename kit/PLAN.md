@@ -12,6 +12,12 @@ challoc, where it had the tool) builds and runs the tool from the kit
 and no copy is left behind. Two copies would mean two rule sets that
 drift, which is what the move exists to prevent.
 
+Both pcre3 and challoc align to every kit piece: each switches to it in
+the PR that deletes its in-tree copy, never in a separate earlier or
+later one, and each kit piece is shown to give the same figures as both
+ports' copies before it lands (kit/count/README.md, "Parity", for step
+2).
+
 Paths below are relative to each source repository. Tools marked
 **local only** live in Matt's working notes (`pcre3-work/`) and in no
 repository; step 0 commits them here before anything depends on them.
@@ -123,7 +129,7 @@ kit/
 
 ## 3. What each part needs to become generic
 
-1. **One configuration file** (`proved-port.toml`): crate names, shipped
+1. **One configuration file** (`verus/count.toml`): crate names, shipped
    crate rule, test-only cfg names and features, ledger style, record
    directory, hot-export list, box names and zones, package pins.
 2. **Split the counter's project-specific checks** (RN1 recursion table,
@@ -210,7 +216,7 @@ is deleted in that PR.
    states.
 2. **Counter, unsafe/assume lint and Kani runner.**
    - pcre3: delete `verus/count/` and `verus/kani/run.sh`; add
-     `proved-port.toml` (the four crates, the `test-util` feature, the
+     `verus/count.toml` (the four crates, the `test-util` feature, the
      record directory, RN1's table, CD1's roots, `verus/REACH`). The
      Makefile's `verus` recipe runs the kit counter in place of
      `cd verus/count && cargo run ...`, with the same `--floor`,
@@ -228,6 +234,21 @@ is deleted in that PR.
      step; `kani.yaml`'s `sh ci/kani-regular.sh` and the
      `kani-boolcmp` lint's `scripts/kani-boolcmp.sh` call the kit's,
      and both scripts are deleted.
+   - **Status:** the counter is in `kit/count/`, configured by a port's
+     `verus/count.toml`, with both back ends (the Kani marker and the
+     generated ledger) and pcre3's REACH, CD1, MINTS, recursion and
+     rlimit checks behind sections of the configuration. Its output is
+     byte-identical to challoc's counter (main `fcde6b2`) and to
+     pcre3's (main `158cf87a`) but for the `ok compile inputs` line,
+     which also names the roots it resolved, under
+     `kit/count/configs/`. It also counts Verus's attribute form, for
+     expat-rs. `.chainguard/ci/count.yaml` runs its tests, clippy and
+     rustfmt. pcre3's switch PR carries the call-arity and dropped-rlimit
+     fixes the kit made to pcre3's code, so the two match on the
+     switching commit. Still to come in this step: the unsafe/assume
+     lint and the Kani runner, the release that ports pin (section 4),
+     and the pcre3 and challoc PRs that switch to the kit counter and
+     delete `verus/count/`.
 3. **Seam ledger generator** (Go rewrite of challoc's `verus/seams.sh`,
    with `verus/seams-mutants.sh` as its tests). challoc: the Makefile's
    `sh verus/seams.sh --check` runs the kit generator; the generated
