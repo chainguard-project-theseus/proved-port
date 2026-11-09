@@ -1,0 +1,165 @@
+---
+name: proved-c-port
+description: Port a C library to memory-safe Rust behind a drop-in C ABI, then prove it with Verus and Kani and benchmark it against the C original. Use when asked to "rewrite a C library in Rust", "replace libfoo with a Rust drop-in", keep ABI or soname compatibility, build a differential or fuzz-diff harness against the C oracle, write Verus proofs or Kani harnesses for a port, manage a verified-coverage FLOOR or rlimit headroom, add a JIT or fast path that must be proved equal to the slow path, or measure a port against the C library on bare-metal boxes. Distilled from pcre3 (PCRE2) and challoc (malloc).
+---
+
+# Proved C ports
+
+Use this skill when porting a C library to Rust where the Rust library
+must load in place of the C one (same header, sonames, symbols, error
+codes) and must be proved safe, shown correct against the C original,
+and measured at least as fast. The worked examples are wolfi-dev/pcre3
+(a PCRE2 10.49 replacement) and wolfi-dev/challoc (a jemalloc-compatible
+`malloc`).
+
+The C library is the specification you did not have to write. Every rule
+below exists to keep the port tied to it: compare against it, prove what
+the comparison cannot reach, and measure against it on the same machine
+in the same run.
+
+## When it applies
+
+Apply it when all of these hold:
+
+- An existing C library has real consumers you cannot rebuild or patch
+  (distro packages, `LD_PRELOAD` users).
+- The port ships as a shared object with the C library's ABI.
+- Safety claims will be made about the port (memory safety, bounded
+  work, no metadata corruption), so they need proofs, not prose.
+
+Do not apply the proof parts to throwaway prototypes. Prototype first,
+measure, then prove the shape that wins (see `references/perf.md`).
+
+## The loop
+
+Every phase has an exit criterion. Do not start a phase before the one
+above it meets its criterion. `references/lifecycle.md` has the detail.
+
+1. **ABI inventory and C oracle.** List every exported symbol, version
+   node, header constant, struct layout, error code and error text. Load
+   the C library as an oracle in the same process as the port. Exit:
+   `abi.sh` and `header-check.sh` equivalents pass against the C
+   library's own `-dev` package.
+2. **Comparison harnesses before code.** Upstream's test suite through
+   upstream's driver, a differential runner, a differential fuzzer
+   (`fuzz-diff`) and an ABI fuzzer under ASan/UBSan. Exit: each harness
+   runs against the C library itself and passes its self-test.
+3. **Port.** One issue, one PR, crate boundaries that keep `unsafe` in
+   one crate. Exit: the conformance ratchet only shrinks; every
+   remaining difference has a numbered ledger entry.
+4. **Prove in layers.** Spec first, then refinement layers, each its own
+   PR with a theorem file, a seams table and mutants. Exit: the FLOOR
+   rises and nothing new is trusted without a record.
+5. **Fast paths.** JIT, direct emit, fast tiers: proved equal to the
+   slow path, never merely checked at runtime. Exit: the equality
+   theorem, the differential legs green on every target arch.
+6. **Default on.** Flip the feature in the default build last, with a CI
+   leg that keeps the build without it. Exit: every leg runs the native
+   code on every arch it claims.
+
+## Non-negotiable rules
+
+Each rule has a correct and a wrong form. The references explain why.
+
+### The C library decides what is correct
+
+Correct: a divergence found by fuzz-diff is a bug, or it gets an
+`ABI-nnn` ledger entry and a narrow predicate in `known.c` citing it.
+
+Wrong: widening a known-divergence predicate until the fuzzer goes
+quiet, or adding a line to the deviations list without a ledger entry.
+
+### `unsafe` lives in one crate, and nothing unwinds into C
+
+Correct: every crate but the C API crate is `#![forbid(unsafe_code)]`;
+every `extern "C"` body runs under a `catch_unwind` guard that returns
+an error code. (challoc is `no_std` with `panic = "abort"` instead: an
+allocator aborts on inconsistency, it never continues.)
+
+Wrong: a safe `fn` pointer type that lets a forbid-unsafe crate jump to
+an arbitrary address (pcre3's `RawFind`, flagged in its trust audit).
+
+### New executable code comes with its proofs
+
+Correct: new shipped code sits inside `verus!` and verifies; code that
+cannot is one minimal `external_body` or `assume_specification` seam
+with a contract, a ledger row, and a Kani record where Kani can check
+it.
+
+Wrong: adding a trusted seam to make a proof pass. The spellings are
+`assume`, `admit`, `Tracked::assume_new`, `assume_specification`,
+`external_body`, `external_fn_specification`,
+`external_type_specification`, `external_trait_specification`,
+`#[verifier::external]` and `axiom fn`.
+
+### Fast paths are proved equal, not checked
+
+Correct: the emitter's postcondition carries the safety certificate and
+the equality to the interpreter; the runtime checker runs only in tests,
+as an oracle over corpora and mutants.
+
+Wrong: shipping a runtime checker as the safety argument, or a fast path
+whose equality is "tested on the corpus".
+
+### Coverage only ratchets up
+
+Correct: a PR that drops a share closes the gap by verifying more code;
+a `lowered FIGURE P REASON` line is the last resort and names exactly
+what became trusted.
+
+Wrong: asking a maintainer to lower the floor when more verification is
+possible.
+
+### Measure before you prove, and measure against the C library
+
+Correct: a written hypothesis with a predicted number, an unproved
+prototype, a same-run box measurement with md5-checked arms named by
+sha, then the proof, then a re-measure.
+
+Wrong: proving an optimization before measuring it, or quoting numbers
+from different runs side by side.
+
+### Land small, signed, literal
+
+Correct: one commit per PR, labels set before the push, literal push
+targets, no update-branch API, every review thread answered after the
+push that fixes it.
+
+Wrong: a branch-update merge commit, a computed push target, or a reply
+posted before the fix is pushed.
+
+## References
+
+- [lifecycle.md](references/lifecycle.md): phases, exit criteria, how
+  the work was layered.
+- [proofs.md](references/proofs.md): Verus spec choice, refinement
+  layers, seams, FLOOR, rlimit headroom, mutants, what to prove versus
+  test.
+- [abi-compat.md](references/abi-compat.md): the oracle, the comparison
+  legs, the known-differences ledger, upstream bugs, consumers.
+- [perf.md](references/perf.md): hypotheses, arms, the three
+  comparisons, boxes, emulated counts, attribution, full tables.
+- [landing.md](references/landing.md): commits, stacks, pushes, labels,
+  review threads, PR bodies.
+- [agent-brief.md](references/agent-brief.md): the block to paste into
+  every sub-agent brief.
+- [pitfalls.md](references/pitfalls.md): dated lessons, one rule each.
+- [allocator.md](references/allocator.md): what is different when the
+  C library is `malloc`.
+
+## Audit
+
+Before calling a phase done, check:
+
+- This grep against the base, which matches every trusted-seam spelling
+  in the rule above: every new hit has a seam row and a reason.
+
+  ```
+  grep -rnE 'assume\(|admit\(|assume_new|assume_specification|external_body|external_(fn|type|trait)_specification|verifier::external\]|axiom fn' --include=*.rs
+  ```
+- The FLOOR and RLIMIT files against the base revision: a lowered figure
+  has a new `lowered` line; a raised rlimit has an `rlimit-raised` line.
+- The PR body: box numbers name the arms by sha, the run, and all three
+  comparisons, with every row.
+- `grep -c '^### ABI-'` in the ledger against the deviations and
+  `known.c` citations: no citation names a missing entry.

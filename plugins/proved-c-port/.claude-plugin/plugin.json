@@ -1,0 +1,12 @@
+{
+  "name": "proved-c-port",
+  "description": "Port a C library to Rust behind a drop-in C ABI, prove it with Verus and Kani, and benchmark it against the C original. Distilled from wolfi-dev/pcre3 and wolfi-dev/challoc.",
+  "version": "0.1.0",
+  "author": {
+    "name": "wolfi-dev"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/wolfi-dev/proved-port",
+  "repository": "https://github.com/wolfi-dev/proved-port",
+  "keywords": ["c", "rust", "ffi", "abi", "verus", "kani", "benchmarking"]
+}
