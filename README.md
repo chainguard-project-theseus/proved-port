@@ -10,10 +10,11 @@ This repository holds:
   `proved-c-port` skill: the lifecycle, proof discipline, ABI
   compatibility, performance method, landing rules, a sub-agent brief
   template and dated pitfalls.
-- **`kit/`**, the plan for a starter kit of the tooling the method
-  relies on (coverage counter and FLOOR ratchet, seam and theorem
-  skeletons, differential and fuzz harnesses, bench scripts). The kit is
-  extracted piece by piece, and the ports it came from consume it.
+- **`kit/`**, a starter kit of the tooling the method relies on
+  (coverage counter and FLOOR ratchet, seam and theorem skeletons,
+  differential and fuzz harnesses, bench scripts), extracted piece by
+  piece as `kit/PLAN.md` lays out; the ports it came from consume it.
+  `kit/templates/` holds the document skeletons a new port copies.
 
 The method is distilled from two ports in this organization:
 
