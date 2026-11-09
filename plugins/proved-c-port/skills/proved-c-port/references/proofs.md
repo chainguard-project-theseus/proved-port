@@ -116,11 +116,18 @@ SKILL.md's audit grep matches every one of these spellings.
 - Statuses: trusted, discharged (another tool covers the whole
   contract), discharged on premises (named C or platform premises stay),
   partly checked.
-- A Kani discharge needs four things in the same change: the harness,
-  a `verus/seams/kani-<id>.md` record (contract quoted, harnesses,
-  inputs and bounds, toolchain, mutation check), the row's status, and
-  the inert `#[cfg_attr(any(), discharged_by = "kani")]` marker. The
-  counter fails a marker with no record.
+- With hand-written tables (pcre3), a Kani discharge needs four things
+  in the same change: the harness, a `verus/seams/kani-<id>.md` record
+  (contract quoted, harnesses, inputs and bounds, toolchain, mutation
+  check), the row's status, and the inert
+  `#[cfg_attr(any(), discharged_by = "kani")]` marker. The counter fails
+  a marker with no record.
+- With a generated ledger (challoc), the discharge is the status column
+  of the seam's overrides line, naming the harness and copying the
+  item's contract and body hashes from its ledger entry; the ledger
+  check fails once the item changes, until the status is revisited. The
+  counter refuses the marker in this mode, so a function cannot be
+  discharged twice.
 - Cross-project discharge by reading is allowed but stays trusted:
   pcre3's `c_malloc`/`c_free` seam is discharged by reading challoc's
   theorems at a pinned commit, and the record says nothing re-checks it.
@@ -154,9 +161,14 @@ fails when:
 
 Rules:
 
-- A change that raises a share raises FLOOR in the same PR, to the
-  figures the check names. When two PRs both raise it, the second to
-  merge re-measures on the new base; never pick a side of the conflict.
+- The check passes a share above its figure and names the figure to
+  record. When to record it is the port's choice, stated in its FLOOR
+  header (the kit template's `{RAISE_RULE}`): pcre3 raises FLOOR in the
+  same PR, and when two PRs both raise it, the second to merge
+  re-measures on the new base, never picking a side of the conflict;
+  challoc raises it in its own PRs between merges, so parallel PRs never
+  conflict there. Follow the port's header, and never raise FLOOR in a
+  feature PR of a port with the own-PR rule.
 - A drop is closed by verifying more code, in the PR or in a small PR
   that lands first. A `lowered` line is the last resort, and its reason
   names exactly which functions or lines became trusted or outside, with

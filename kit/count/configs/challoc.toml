@@ -17,6 +17,9 @@ verus_only_ghost = true
 
 [floor]
 path = "verus/FLOOR"
+# FLOOR's names today. The change that renames them to `checked-*`
+# (kit/PLAN.md, step 2) drops this line and adds
+# `renamed_from = "combined"`, so its base's copy still compares.
 checked = "combined"
 
 # The generated ledger (verus/seams.sh) says which trusted functions are
