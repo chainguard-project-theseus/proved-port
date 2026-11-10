@@ -164,7 +164,19 @@ kit/
 
 ## 4. How a port pins the kit
 
-Recommended: **a released, versioned package**. Each kit tag
+TODO: once proved-port (and the ports) are public, publish verus-count as a package (crates.io or a Wolfi apk installed as a pinned environment package) and replace vendoring.
+
+Now: **vendoring** (decided 2026-11-09). While this repository is
+internal, a port's check guests cannot reach it, so step 2's install
+mechanism is a copy: `kit/sync.sh PORT_ROOT` copies `kit/count` at a
+commit of this repository into the port's `verus/count/` and records
+the commit in `verus/count/KIT`, and `kit/sync.sh --check PORT_ROOT`,
+run by whoever changes the copy, fails on any drift from that commit
+(`kit/count/README.md`, "Adopting: vendoring"). The port's checks build
+the copy; they need no egress beyond crates.io. A port moves to a newer
+kit in a PR that re-runs the sync.
+
+Later, once the TODO above is done: **a released, versioned package**. Each kit tag
 (`kit/vX.Y.Z`) builds one package holding the counter binary, the Go
 tools, the scripts and the templates. A port installs it in each
 check's `environment: packages:` pinned with `~`, the way pcre3 already
@@ -187,7 +199,7 @@ Rejected:
   this repository is internal, GitHub credentials in every check; and it
   covers only the Go tools, not the Rust counter or the shell scripts.
 
-Prerequisite, to settle before step 2: a package built here must be
+Prerequisite, to settle before the package replaces vendoring: a package built here must be
 installable in pcre3's and challoc's check guests. This repository is
 internal, so that needs a package repository those guests can read. If
 there is none, the fallback is a release tarball fetched and checked by
@@ -251,7 +263,7 @@ is deleted in that PR.
      keeping `KANI_ONLY`, `KANI_EXCLUDE` and `KANI_JOBS`. In
      `.chainguard/ci/verus.yaml` the `counter tests` step leaves the
      `verus` and `verus-main` checks (the kit's own CI tests the
-     counter), and the kit package joins `environment: packages:`;
+     counter), and the check builds the vendored copy (section 4);
      `make verus` and `make kani` stay the commands. `lint.yaml`'s
      `forbid(unsafe_code) roots` step runs the kit lint in place of
      `ci/lint-unsafe.sh`, which is deleted.
@@ -277,10 +289,13 @@ is deleted in that PR.
      expat-rs. `.chainguard/ci/count.yaml` runs its tests, clippy and
      rustfmt. pcre3's switch PR carries the call-arity and dropped-rlimit
      fixes the kit made to pcre3's code, so the two match on the
-     switching commit. Still to come in this step: the unsafe/assume
-     lint and the Kani runner, the release that ports pin (section 4),
-     and the pcre3 and challoc PRs that switch to the kit counter and
-     delete `verus/count/`.
+     switching commit. The install mechanism is vendoring (section 4):
+     a port's `verus/count/` is the copy `kit/sync.sh` makes, so
+     "delete `verus/count/`" above means replacing the in-tree counter
+     with that copy, and `kit/sync.sh --check` is what shows no other
+     copy is left. `count-sync` tests the sync. Still to come in this
+     step: the unsafe/assume lint and the Kani runner, and the pcre3 and
+     challoc PRs that switch to the vendored kit counter.
 3. **Seam ledger generator** (Go rewrite of challoc's `verus/seams.sh`,
    with `verus/seams-mutants.sh` as its tests). challoc: the Makefile's
    `sh verus/seams.sh --check` runs the kit generator; the generated

@@ -143,7 +143,8 @@ Where the counters still differ, on inputs neither port has today:
 A port with no counter and FLOOR 0.0 adopts the counter in its first
 proof PR (the skill's lifecycle.md, phase 4):
 
-1. Add `verus/count.toml` (the two-line form above is enough to start)
+1. Vendor the counter ("Adopting: vendoring", below), add
+   `verus/count.toml` (the two-line form above is enough to start)
    and run the counter in the verus check:
    `verus-count --floor verus/FLOOR --base-rev "$BASE" .`.
 2. Copy `kit/templates/verus/FLOOR`, whose figures are all 0.0.
@@ -159,9 +160,44 @@ expat-rs's U1 worktree, with `verus_features = ["verus"]`, it counts
 `utf8::invalid_char` (57 lines) as verified, the only one, as the
 pilot's hand count did.
 
+## Adopting: vendoring
+
+TODO: once proved-port (and the ports) are public, publish verus-count as a package (crates.io or a Wolfi apk installed as a pinned environment package) and replace vendoring.
+
+A port's check guests cannot reach this repository, so a port carries
+a copy of this crate at `verus/count/`, made by `kit/sync.sh` from a
+clone of this repository:
+
+```sh
+kit/sync.sh PORT_ROOT          # copy kit/count at HEAD to PORT_ROOT/verus/count
+kit/sync.sh --check PORT_ROOT  # fail unless the copy matches its recorded commit
+```
+
+- The copy is `git archive` of `kit/count` at the clone's HEAD, so it
+  holds exactly what that commit holds: no `target/`, no uncommitted
+  edit (the sync refuses while `kit/count` has any), and none of the
+  files a later kit deletes. It replaces the whole directory.
+- `verus/count/KIT` records the commit, and the tag when HEAD has one.
+  The sync refuses a `verus/count/` with no `KIT` file: that is the
+  port's own counter, for the port's PR to delete.
+- `--check` fails when a file is added, deleted or edited or changes
+  its executable bit, or when the recorded commit or tag does not
+  resolve in the clone; it ignores `verus/count/target/`. The port's CI
+  cannot reach this repository to run it, so whoever changes the copy
+  runs it and names the commit in the PR.
+- The crate builds where it lands: it is its own workspace (the empty
+  `[workspace]` table) with its own `Cargo.lock`, and nothing in it
+  names a path outside it. The port's verus check builds it with
+  `cargo build --locked --release --manifest-path verus/count/Cargo.toml`
+  (a `--target-dir` outside the copy keeps `git status` clean) and runs
+  it as Bootstrapping, step 1, says.
+- Moving to a newer kit is a port PR that re-runs the sync. Never edit
+  the copy: a fix the port needs lands in `kit/count` first.
+
 ## Release
 
-Ports pin the kit as a released package (kit/PLAN.md, section 4). A
+Ports will pin the kit as a released package (kit/PLAN.md, section 4)
+once the TODO above is done; until then they vendor it. A
 release of this crate needs:
 
 - a version: `Cargo.toml` says `0.0.0` until the first `kit/vX.Y.Z` tag

@@ -1,10 +1,12 @@
 # The kit counter's own CI (kit/count): its tests, clippy -D warnings
-# over every target, and rustfmt. The ports' verus checks drop their
+# over every target, rustfmt, and the test of kit/sync.sh, which
+# vendors it into a port. The ports' verus checks drop their
 # `counter tests` step when they switch to the kit counter
 # (kit/PLAN.md, step 2), so these are the counter's only tests. All
 # block. Toolchain: the Wolfi rust stream pcre3's test.yaml uses (it
 # carries rustc, cargo, rustfmt and clippy); bump with it. git is for
-# the tests that build a repository to read a base revision from.
+# the tests that build a repository to read a base revision from, and
+# for kit/sync.sh, which count-sync tests.
 version: 1
 
 environment:
@@ -31,3 +33,11 @@ checks:
     trigger: [presubmit, postsubmit]
     timeout: 5m
     cmd: [cargo, fmt, --manifest-path, kit/count/Cargo.toml, --check]
+
+  count-sync:
+    description: >-
+      kit/sync-test.sh: kit/sync.sh vendors kit/count into a scratch
+      port, and its --check passes on the copy and fails on drift.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [sh, kit/sync-test.sh]

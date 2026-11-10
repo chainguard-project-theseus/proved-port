@@ -98,16 +98,18 @@ or an open bug.
    figures the counter names on that PR. Run the counter on the PR's
    base too: every figure there is 0.0, which shows the gate measured
    before the proof moved it.
-   **Pending the first `kit/vX.Y.Z` release:** a check cannot install
-   the counter yet. This repository is internal and the ports' check
-   guests reach crates.io alone, so `cargo install --git` of a pinned
-   rev fails there, and no package exists to pin
-   (`kit/count/README.md`, "Release"). Until the release, run it
-   outside CI, pinned to a sha of this repository
-   (`CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install --locked --git https://github.com/wolfi-dev/proved-port --rev <sha> verus-count`,
-   which uses git's GitHub credentials), and record the base's and the PR's figures
-   in the PR body; the verus check runs it once the release is
-   installable there.
+   **Vendor the counter:** the ports' check guests cannot reach this
+   repository, so the port carries a copy. From a clone of this
+   repository, `kit/sync.sh PORT_ROOT` copies `kit/count` at the clone's
+   HEAD to `verus/count/` and records the commit in `verus/count/KIT`;
+   the verus check builds it from there
+   (`cargo build --locked --release --manifest-path verus/count/Cargo.toml`)
+   and runs it. Never edit the copy: a fix lands in `kit/count` first,
+   and the port re-syncs in its own PR. Before pushing a change to
+   `verus/count/`, run `kit/sync.sh --check PORT_ROOT`, which fails on
+   any drift from the recorded commit (the port's CI cannot run it), and
+   name the commit in the PR body (`kit/count/README.md`, "Adopting:
+   vendoring").
 3. Prove leaf modules first (UTF decoding, tables, parsers), where vstd
    already has a specification to prove against.
 4. Move outward one theorem per PR: each lands `verus/theorems/<ID>.md`
