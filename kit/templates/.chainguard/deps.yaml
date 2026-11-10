@@ -1,0 +1,234 @@
+# The Chainguard Checks deps agent opens one pull request per entry, on
+# chainguard/deps/<name>, that updates the entry's pins and fixes what the
+# updates break. It answers review comments from people with write access,
+# failing checks on its own commits, and conflicts. Schedules are UTC. The
+# paths and prompt guide the agent; they are not enforced. The agent sees
+# only its entry's prompt, so each repeats the rules it needs. This file
+# replaces Dependabot: the port has no .github/dependabot.yml.
+#
+# The agent's pull requests are opened by chainguard[bot]. A port whose
+# .chainguard/ci/identities.yaml has a `trust` section, which places a
+# pull request by its opener, adds `chainguard: 107423345` to the
+# `github.app` list of the group its member subring trusts (challoc's
+# `bots`); without it those pull requests run at ring 0, hermetic checks
+# only, and cannot reach crates.io (mono ai-cicd/sandbox/docs/identities.md,
+# "Trust policy"). A port with no trust section needs nothing.
+#
+# Pins no entry moves:
+# - verus/count: the port's copy of the proved-port kit counter. It changes
+#   only by re-running wolfi-dev/proved-port's kit/sync.sh, which the
+#   agent's guest cannot reach (that repository is internal).
+# - {Any other pin that moves only with a person's run or decision (a
+#   bench baseline, a workload), and why; or delete this item.}
+#
+# rust-version (Cargo.toml) and the msrv check's toolchain move only
+# through the msrv entry, together, and every other entry leaves them
+# alone.
+#
+# Within a scheduled run each entry's pull request is one commit, and the
+# run folds its later fixes into it. A turn (review comments, failing
+# checks, a conflict) adds a commit on top of the pull request's head and
+# never amends: a turn's bases are that head and main's tip. The squash
+# merge gives main one commit. AGENTS.md (Workflow, step 3) names this as
+# the exception to one commit per pull request.
+#
+# Every entry is merge: manual: a person approves every pull request.
+# kit: proved-port kit/v{KIT_VERSION}
+version: 1
+updates:
+- name: crates
+  schedule: "0 {DEPS_HOUR} * * 1" # Mondays
+  paths:
+    - "Cargo.toml"
+    - "Cargo.lock"
+    - "crates/*/Cargo.toml"
+    - "fuzz/Cargo.toml"
+    - "fuzz/Cargo.lock"
+  environment: dev
+  merge: manual
+  prompt: >-
+    Update the crate dependencies of the root workspace and the fuzz/
+    workspace, and their lockfiles, to their latest compatible releases,
+    preferring releases at least 7 days old. Leave vstd alone: the
+    toolchain entry moves it with the Verus release. Leave verus/count and
+    its Cargo.lock alone: it changes only by re-syncing proved-port's kit.
+    Add no new dependency. Keep rust-version in Cargo.toml as it is (the
+    msrv entry moves it): every update must still build with `cargo build --locked --release` on
+    the msrv check's toolchain (its rust-1.NN package in
+    .chainguard/ci/test.yaml); leave out an update that needs a newer
+    rustc and say so. Every crate but {CAPI_CRATE} stays
+    #![forbid(unsafe_code)]. Run `make lint`, `make test` and `make
+    conformance`. tests/upstream/deviations.txt is a ratchet: only remove
+    lines; a new failure is a regression the update caused, so leave that
+    update out rather than add a line. verus/FLOOR never goes down and
+    never gains a `lowered` line from this entry: if `make verus` reports
+    a lower share after an update, leave the update out. Keep verus/RLIMIT
+    as its header requires. Do not edit .chainguard/deps.yaml unless a
+    person asks in a comment.
+
+- name: toolchain
+  schedule: "0 {DEPS_HOUR} * * 2" # Tuesdays
+  paths:
+    - ".chainguard/ci/**"
+    - ".chainguard/develop.yaml"
+    - "verus/README.md"
+    - "verus/THEOREMS.md"
+    - "AGENTS.md"
+    - "CONTRIBUTING.md"
+  environment: dev
+  merge: manual
+  prompt: >-
+    Move the Rust toolchain, Verus and Kani together. These pins move as a
+    set: the Wolfi rust-1.NN stream every .chainguard/ci file and
+    .chainguard/ci/env/dev.yaml names (every check but msrv); the `verus~`
+    package version in .chainguard/ci/verus.yaml and env/dev.yaml, and the
+    exact vstd version in the root Cargo.toml's [workspace.dependencies]
+    with its Cargo.lock entries, which must be the vstd that Verus release
+    names (`cargo update -p vstd --precise`); and the `kani~` package
+    version in the same two files and the release the Kani records under
+    verus/seams/ name. The Wolfi verus and kani packages are built against
+    one rust stream: pick the newest Verus whose Wolfi package exists, take
+    the rust stream it needs, and the newest Kani built for that stream. If
+    no consistent set is newer than the current one, change nothing. Keep
+    every mention of the versions in AGENTS.md, CONTRIBUTING.md,
+    verus/README.md and verus/THEOREMS.md in step. Leave Cargo.toml's
+    rust-version and the msrv check's toolchain alone: the msrv entry
+    moves them. Install the new packages with apk
+    in the guest and commit the moves before you run anything: the run
+    has a two-hour budget and stops ten minutes early, and a run that
+    stops after a commit still pushes it as a draft, while one that
+    committed nothing pushes nothing. Fold later fixes in this run into
+    that commit; on a turn, add a commit on top of the pull request's
+    head. Then run `make lint`, `make test`, `make conformance`, `make
+    verus` and `make kani`. The body names the suites the guest ran and
+    any suite it did not finish. A Verus bump keeps 0 verification
+    errors. verus/FLOOR never goes down and never gains a `lowered` line
+    from this entry, and verus/RLIMIT gains no `rlimit-raised` line: if
+    the new Verus needs either, or fails a proof, fix the proof if the fix
+    is small and say what changed, else leave Verus where it is and say
+    why. Leave verus/count and its Cargo.lock alone: it changes only by
+    re-syncing proved-port's kit, which the guest cannot reach; say so in
+    the body if the new Verus needs a newer verus_syn there. Do not edit
+    .chainguard/deps.yaml unless a person asks in a comment.
+
+- name: msrv
+  schedule: "30 {DEPS_HOUR} * * 2" # Tuesdays
+  paths:
+    - "Cargo.toml"
+    - "crates/*/Cargo.toml"
+    - ".chainguard/ci/test.yaml"
+    - "CONTRIBUTING.md"
+    - "AGENTS.md"
+    - "README.md"
+  environment: dev
+  merge: manual
+  prompt: >-
+    Try raising the minimum supported Rust version: the workspace
+    `rust-version` in the root Cargo.toml (every crate inherits it) and
+    the msrv check's rust-1.NN package in .chainguard/ci/test.yaml move
+    together, to the same release (CONTRIBUTING.md, Toolchain). Raise it
+    to the newest Wolfi rust-1.NN stream that is no newer than the one the
+    other checks use (.chainguard/ci/env/dev.yaml), or, when an update
+    another entry left out needs a newer rustc, to the release that update
+    needs. Never lower it. While rust-version already equals that stream,
+    change nothing. The raise must keep every check green: run `cargo
+    build --locked --release` with the new stream installed with apk, and
+    `make lint` (clippy with -D warnings on the default stream), fixing
+    what the new floor's lints and incompatible_msrv flag, and `make
+    test`. Update every place that states the msrv in the same pull
+    request: Cargo.toml's comment, test.yaml's msrv description
+    ("Cargo.toml, 1.NN"), CONTRIBUTING.md's Toolchain paragraph, and
+    AGENTS.md, README.md and docs that name it. The pull request body
+    says who the raise drops: which distributions' and Wolfi's rustc
+    releases are older than the new floor and can no longer build {PORT}
+    (for example Debian stable, Ubuntu LTS, Fedora, RHEL and Alpine's
+    current rustc), and what the raise buys. Leave the build stream to the
+    toolchain entry. verus/FLOOR never goes down and never gains a
+    `lowered` line from this entry. Do not edit .chainguard/deps.yaml
+    unless a person asks in a comment.
+
+- name: tools
+  schedule: "0 {DEPS_HOUR} * * 3" # Wednesdays
+  paths:
+    - ".chainguard/ci/lint.yaml"
+    - ".chainguard/ci/fuzz.yaml"
+    - ".chainguard/ci/env/dev.yaml"
+  environment: dev
+  merge: manual
+  prompt: >-
+    Two tool pins. First, the `shellcheck~` package in
+    .chainguard/ci/lint.yaml and .chainguard/ci/env/dev.yaml: move both to
+    the newest release packaged, then run `sh ci/shellcheck.sh` and fix new
+    findings in the scripts it lists. Second, the clang-NN and
+    compiler-rt-NN Wolfi packages in .chainguard/ci/fuzz.yaml and
+    env/dev.yaml: move them together to the newest stream Wolfi ships, and
+    run `make fuzz-diff` and `make fuzz-abi` briefly. Keep every mention of
+    the versions in the docs in step. Do not touch the rust stream (the
+    toolchain entry). A fuzz finding is a real bug: leave the update out
+    and describe it. Do not edit .chainguard/deps.yaml unless a person asks
+    in a comment.
+
+- name: {REFERENCE_NAME}
+  schedule: "0 {DEPS_HOUR} * * 4" # Thursdays
+  paths:
+    - "tests/upstream/**"
+    - "fuzz/abi/**"
+    - "fuzz/diff/**"
+    - "include/**"
+    - "ci/abi.sh"
+    - "docs/abi-changes.md"
+  environment: dev
+  merge: manual
+  prompt: >-
+    {PORT} reimplements {LIBRARY} {UPSTREAM_VERSION} and is ABI-compatible
+    with it; its reference is the release Wolfi's {REFERENCE_PACKAGES}
+    packages ship. Do nothing unless Wolfi ships a newer {LIBRARY}
+    release than the one tests/upstream/README.md's Provenance names.
+    When it does, move the whole reference in this one pull request, and
+    draft it unless every check passes: the pins of {REFERENCE_PACKAGES}
+    in every .chainguard/ci file and env/dev.yaml; tests/upstream's
+    sources and test data replaced with the new release's unmodified
+    files (update Provenance's tag, tarball and SHA-256) and its patches
+    rebased onto them; fuzz/abi's harnesses and patches; the vendored
+    headers under include/; the version nodes and export set ci/abi.sh
+    checks (a new node chained onto the last, every existing node kept),
+    and the new API the release adds; and every mention of
+    "{UPSTREAM_VERSION}" naming the reference in docs, check descriptions
+    and comments. The known-differences rows must stay true for the new
+    release, in the same pull request: each docs/abi-changes.md ABI-nnn
+    entry (say which still hold), tests/upstream/deviations.txt and
+    tests/upstream/differential.txt (each reason cites an active ABI-nnn
+    entry), and fuzz/diff's known rows. deviations.txt only loses lines: a
+    block of the new tests that {PORT} fails is a regression to fix, or,
+    if too large for this pull request, to list in the body for a person,
+    never a line to add unless a person asks in a comment. Run `make
+    conformance`, `make test`, `make lint` and `make verus`; verus/FLOOR
+    never goes down and never gains a `lowered` line from this entry.
+    Leave verus/count alone. Do not edit .chainguard/deps.yaml unless a
+    person asks in a comment.
+
+- name: consumers
+  schedule: "0 {DEPS_HOUR} * * 5" # Fridays
+  paths: ["tests/consumers/**", ".chainguard/ci/consumers.yaml"]
+  environment: .chainguard/ci/consumers.yaml
+  merge: manual
+  prompt: >-
+    Each tests/consumers/<name>/ runs a Wolfi consumer of {LIBRARY}
+    against {PORT}'s library, from the upstream source release Wolfi ships
+    (pinned by version and SHA-256 in its run.sh, and named with the Wolfi
+    package version it matches in its README.md) or from a Wolfi package
+    .chainguard/ci/consumers.yaml names. Move a consumer only when Wolfi's
+    package of it now builds a newer upstream release: set run.sh's
+    version and SHA-256 (download the release and hash it) and the
+    README's two versions, or move the package's versioned stream in
+    consumers.yaml and env/dev.yaml together. Move at most about 5
+    consumers per pull request, those furthest behind first; name the rest
+    in the body. Run each moved one with `make consumers NAME=<name>`.
+    expected-failures.txt lists the tests that may fail, each with an
+    allowed reason (fails with {LIBRARY} too, saying how that was shown; a
+    documented difference linking its docs/abi-changes.md entry; or a
+    {PORT} bug linking its issue): remove lines that no longer fail, and
+    add a line only with one of those reasons, shown in the body. A new
+    failure that is a {PORT} bug is left for a person: keep that consumer
+    at its old version and describe the failure. Do not edit
+    .chainguard/deps.yaml unless a person asks in a comment.

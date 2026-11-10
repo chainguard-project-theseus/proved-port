@@ -123,8 +123,10 @@ kit/
     emu/                     the aarch64 emulator, with an x86-64 decoder to come
     attribution/             SPE and uprobe flows
     codegen/                 codegen diff, fast-path budget, noalias check
-  ci/
-    chainguard/              check templates: verus, kani, conformance, fuzz, consumers, lint
+  templates/.chainguard/     check templates (lint, test, verus, fuzz, conformance,
+                             consumers), environments, develop, deps, reviewers and
+                             the review prompt; templates/.github/ the codeowners
+                             sidecar (step 8)
   make/
     proved-port.mk           include-able verus, kani, remote, bench targets
   docs/
@@ -346,3 +348,15 @@ is deleted in that PR.
    delete their own. The `.chainguard/ci/*.yaml` files stay in each port
    (Checks reads them from the repository); the kit ships templates for
    new ports and a lint that a port's checks call the kit's targets.
+   **Status:** the templates are in `kit/templates/.chainguard/` and
+   `kit/templates/.github/` (`kit/templates/README.md`, "Repository
+   configuration"): the check files in the shape pcre3, challoc, chainz
+   and expat-rs share, the default and dev environments, `develop.yaml`,
+   the deps agent's `deps.yaml` (which replaces Dependabot), the
+   reviewer's `reviewers.yaml` and prompt skeleton, and the codeowners
+   sidecar with its rendering. Each, filled with a sample port's values,
+   passes `chainctl checks validate`. One setting is not a file: the
+   default branch requires `Chainguard Checks (presubmit)` pinned to the
+   `chainguard` check app, through chainguard-dev/infra's github-iac
+   (chainguard-dev/infra#5389; `kit/templates/README.md`, "The required
+   check"). Still to come: the Makefile include and the lint.

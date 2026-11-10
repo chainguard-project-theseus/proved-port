@@ -1,0 +1,96 @@
+# Fuzzing, on request only: label a pull request ci/run:<check> (or
+# `chainctl checks run . --check <check>` on a pushed commit); none is
+# part of `Chainguard Checks (presubmit)`. `make fuzz`, `make fuzz-diff`
+# and `make fuzz-abi` run the same scripts in a development session.
+#
+# fuzz: libFuzzer on the safe crates on stable Rust (ci/fuzz.sh).
+# fuzz-diff: the differential fuzzer (ci/fuzz-diff.sh, fuzz/diff/), each
+# input through {LIBRARY} {UPSTREAM_VERSION} and {PORT}, results
+# compared; its self-test first shows each side is the library it is
+# named for and that a planted difference fails the run.
+# fuzz-abi: upstream's own OSS-Fuzz harnesses under ASan and UBSan,
+# linked against {PORT}'s library (ci/fuzz-abi.sh, fuzz/abi/), after a
+# self-test.
+# known-citations, on every pull request and merge, checks only that
+# each row of the differential fuzzer's known-differences table
+# (fuzz/diff/known.c, or known.rs) cites an active docs/abi-changes.md
+# entry or an open issue (`ci/fuzz-diff.sh --check-known`).
+# kit: proved-port kit/v{KIT_VERSION}
+version: 1
+
+environment:
+  # build-base: the C++ compiler libFuzzer is built with.
+  packages: [{RUST_STREAM}, build-base, busybox]
+
+checks:
+  fuzz:
+    when: {requested: true}
+    description: >-
+      libFuzzer on the safe crates for 20 minutes per architecture. Worth
+      running on changes to the parser or the engine.
+    foreach:
+      - {name: amd64, resources: medium-amd64, vars: {FUZZ_SECONDS: "1200", FUZZ_JOBS: auto}}
+      - {name: arm64, resources: medium-arm64, vars: {FUZZ_SECONDS: "1200", FUZZ_JOBS: auto}}
+    timeout: 50m
+    network: &crates
+      egress: [index.crates.io, static.crates.io]
+    cmd: [sh, ci/fuzz.sh]
+
+  fuzz-diff:
+    when: {requested: true}
+    description: >-
+      The differential fuzzer for 10 minutes per architecture: each input
+      through {LIBRARY} {UPSTREAM_VERSION} and {PORT}, results compared,
+      after the self-test.
+    environment:
+      # clang and compiler-rt: libFuzzer and UBSan for the C driver;
+      # {REFERENCE_PACKAGES}: the reference library and headers.
+      packages: [{RUST_STREAM}, build-base, busybox, clang-{CLANG_STREAM}, compiler-rt-{CLANG_STREAM}, {REFERENCE_PACKAGES}]
+    foreach:
+      - {name: amd64, resources: medium-amd64, vars: {FUZZ_SECONDS: "600", FUZZ_JOBS: auto}}
+      - {name: arm64, resources: medium-arm64, vars: {FUZZ_SECONDS: "600", FUZZ_JOBS: auto}}
+    timeout: 30m
+    network: *crates
+    steps:
+      - name: selftest
+        cmd: [sh, ci/fuzz-diff.sh, --selftest]
+      - name: fuzz
+        cmd: [sh, ci/fuzz-diff.sh]
+
+  known-citations:
+    description: >-
+      Every known-differences row of fuzz/diff cites an active docs/abi-changes.md entry
+      or an issue that neither this pull request's description nor a
+      commit since the row's citation closes (Fixes #n, ...): a fix
+      deletes its row. ci/fuzz-diff.sh --check-known.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      # git: the commits since each row.
+      packages: [busybox, git]
+    vars:
+      # Absent on a postsubmit run (and in a development session).
+      {PORT_ENV}_PR_BODY: ${{ context.github.pull_request.body }}
+    cmd: [sh, ci/fuzz-diff.sh, --check-known]
+
+  fuzz-abi:
+    when: {requested: true}
+    description: >-
+      Upstream's OSS-Fuzz harnesses under ASan and UBSan, linked against
+      {PORT}'s library, for 10 minutes per architecture after the
+      self-test.
+    environment:
+      # clang and compiler-rt: libFuzzer, ASan and UBSan for the C
+      # harnesses; {REFERENCE_PACKAGES}: the library the self-test's
+      # preflight must refuse; git: applies fuzz/abi/patches.
+      packages: [{RUST_STREAM}, build-base, busybox, clang-{CLANG_STREAM}, compiler-rt-{CLANG_STREAM}, {REFERENCE_PACKAGES}, git]
+    foreach:
+      - {name: amd64, resources: medium-amd64, vars: {FUZZ_SECONDS: "600", FUZZ_JOBS: auto}}
+      - {name: arm64, resources: medium-arm64, vars: {FUZZ_SECONDS: "600", FUZZ_JOBS: auto}}
+    timeout: 30m
+    network: *crates
+    steps:
+      - name: selftest
+        cmd: [sh, ci/fuzz-abi.sh, --selftest]
+      - name: fuzz
+        cmd: [sh, ci/fuzz-abi.sh]

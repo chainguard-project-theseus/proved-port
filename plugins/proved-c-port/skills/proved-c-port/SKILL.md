@@ -122,7 +122,9 @@ from different runs side by side.
 ### Land small and literal
 
 Correct: one commit per PR, signed where the repository's policy
-requires it (`references/landing.md`), labels set before the push,
+requires it (`references/landing.md`), except a deps agent PR
+(`chainguard/deps/<name>`), which holds a commit per turn, is
+squash-merged, and is never rewritten on request; labels set before the push,
 literal push targets, no update-branch API, every review thread
 answered after the push that fixes it.
 

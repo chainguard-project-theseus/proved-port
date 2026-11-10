@@ -20,6 +20,15 @@ than bend:
 - That every deliberate difference is a numbered ledger entry.
 - That new executable code comes with its proofs (once phase 4 starts).
 
+Set up the repository from proved-port's `kit/templates/` ("Repository
+configuration" in its README): the `.chainguard/ci/` checks and the
+`env/default.yaml` and `env/dev.yaml` environments, `.chainguard/develop.yaml`,
+`.chainguard/deps.yaml` in place of Dependabot, the Checks reviewer
+(`reviewers.yaml` and `review-prompt.md`), and the `.github/codeowners.yaml`
+sidecar with its rendered `CODEOWNERS`. The required check is not a
+file: add the repository to chainguard-dev/infra's github-iac ruleset
+(as chainguard-dev/infra#5389 does).
+
 Exit: the principles are in the repo, and the CI aggregate check
 (`Chainguard Checks (presubmit)` or equivalent) is the only required
 check.

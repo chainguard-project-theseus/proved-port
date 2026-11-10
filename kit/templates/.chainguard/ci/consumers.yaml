@@ -1,0 +1,41 @@
+# The consumers check (tests/consumers/README.md): Wolfi consumers of
+# {LIBRARY}, each run with {LIBRARY} {UPSTREAM_VERSION} and with
+# {PORT}'s library, their tests (or outputs) compared. Every case first
+# checks that the loader resolves the consumer's library to {PORT}'s.
+# One instance per consumer, each running ci/consumers.sh with CONSUMER
+# set; `make consumers NAME=<name>` runs the same in a development
+# session. On request only: label a pull request ci/run:consumers. A
+# port whose consumers all come from packages and fit a few minutes may
+# run them on every pull request instead (`trigger: [presubmit,
+# postsubmit]` in place of `when`). Every instance must fit 50 minutes.
+# kit: proved-port kit/v{KIT_VERSION}
+version: 1
+
+environment:
+  # What the harness and every consumer need. A consumer's own build
+  # dependencies are in tests/consumers/<name>/packages, which the harness
+  # installs with apk (hence apk-tools, wolfi-keys and the Wolfi hosts).
+  packages: [{RUST_STREAM}, build-base, busybox, bash, curl, ca-certificates-bundle, apk-tools, wolfi-keys, {REFERENCE_PACKAGES}]
+
+checks:
+  consumers:
+    when: {requested: true}
+    description: >-
+      Wolfi consumers of {LIBRARY} run against {PORT}'s library, plus the
+      harness selftest. Worth running on changes to the C ABI.
+    resources: large
+    timeout: 50m
+    network:
+      egress:
+        - index.crates.io
+        - static.crates.io
+        # apk: tests/consumers/<name>/packages
+        - packages.wolfi.dev
+        - apk.cgr.dev
+        # {Each host a consumer's pinned source tarball comes from, or
+        # delete this comment when every consumer comes from a package.}
+    foreach:
+      - {name: selftest, vars: {CONSUMER: selftest}, resources: medium, timeout: 20m}
+      # One entry per consumer.
+      - {name: {CONSUMER_NAME}, vars: {CONSUMER: {CONSUMER_NAME}}}
+    cmd: [sh, ci/consumers.sh]

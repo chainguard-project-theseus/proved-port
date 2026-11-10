@@ -1,0 +1,59 @@
+# Lint: rustfmt, clippy -D warnings, the source rules and shellcheck. All
+# block. `make lint` runs every check in a development session.
+# Toolchain: the Wolfi stream {RUST_STREAM} every check file uses but
+# msrv; bump them together.
+# kit: proved-port kit/v{KIT_VERSION}
+version: 1
+
+environment:
+  packages: [{RUST_STREAM}, build-base, busybox]
+
+checks:
+  rustfmt:
+    description: cargo fmt --all --check. Run `cargo fmt` before committing.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [cargo, fmt, --all, --check]
+
+  clippy:
+    description: >-
+      cargo clippy -D warnings over every crate and target, tests included.
+    trigger: [presubmit, postsubmit]
+    resources: medium
+    timeout: 20m
+    network: &crates
+      egress: [index.crates.io, static.crates.io]
+    steps:
+      - name: workspace
+        cmd: [cargo, clippy, --locked, --workspace, --all-targets, --, -D, warnings]
+      # A workspace --workspace does not reach (fuzz/ is one) gets a step
+      # of its own, with its own CARGO_TARGET_DIR.
+      - name: fuzz workspace
+        cmd: [env, CARGO_TARGET_DIR=target/fuzz, cargo, clippy, --locked, --manifest-path, fuzz/Cargo.toml, --all-targets, --, -D, warnings]
+
+  source-rules:
+    description: >-
+      Every crate but {CAPI_CRATE} is #![forbid(unsafe_code)] and every
+      unsafe block in {CAPI_CRATE} has a SAFETY: comment
+      (ci/lint-unsafe.sh); the vendored headers define every macro exactly
+      as {LIBRARY} {UPSTREAM_VERSION} does (ci/header-check.sh).
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      packages: [busybox, {REFERENCE_PACKAGES}]
+    steps:
+      - name: unsafe confinement and SAFETY comments
+        cmd: [sh, ci/lint-unsafe.sh]
+      - name: header constants
+        cmd: [sh, ci/header-check.sh]
+
+  shellcheck:
+    description: shellcheck over every shell script git tracks (ci/shellcheck.sh).
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      # Wolfi does not package shellcheck; the chainguard.dev repository
+      # does. Keep the pin in step with .chainguard/ci/env/dev.yaml. git
+      # lists the scripts.
+      packages: [busybox, git, shellcheck~{SHELLCHECK_RELEASE}]
+    cmd: [sh, ci/shellcheck.sh]

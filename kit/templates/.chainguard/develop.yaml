@@ -1,0 +1,6 @@
+# Development sessions (`chainctl develop`, `make`): the environment in
+# .chainguard/ci/env/dev.yaml on a large guest (8 vCPU, 32 GiB).
+# kit: proved-port kit/v{KIT_VERSION}
+version: 1
+from: .chainguard/ci/env/dev.yaml
+resources: large
