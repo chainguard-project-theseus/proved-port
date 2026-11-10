@@ -1,0 +1,26 @@
+# Lint of the kit's shell scripts: shellcheck (the pinned upstream
+# release kit/shellcheck.sh fetches) over every kit/*.sh file git
+# tracks. Blocks.
+version: 1
+
+environment:
+  packages:
+    - busybox
+    - curl   # kit/shellcheck.sh fetches the pinned release
+    - git    # kit/shellcheck.sh lists the scripts with git ls-files
+    - xz
+
+checks:
+  shellcheck:
+    description: >-
+      shellcheck (pinned upstream release) over every kit/*.sh file git
+      tracks (kit/shellcheck.sh).
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    network:
+      egress:
+        - github.com
+        # The release download redirects here.
+        - release-assets.githubusercontent.com
+        - objects.githubusercontent.com
+    cmd: [sh, kit/shellcheck.sh]
