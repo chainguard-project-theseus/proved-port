@@ -1,0 +1,13 @@
+# {CAPI_CRATE} tests that hit an open, Miri-confirmed bug (ci/miri.sh).
+# Each row: the test's full name as `cargo test -- --list` prints it, the
+# issue, and what Miri flags. ci/miri.sh leaves these out of the runs,
+# then requires each to fail still under Stacked Borrows, with undefined
+# behaviour; the fix that makes one pass deletes its row, and a test that
+# fails another way fails the check until its row is updated. A test that
+# fails under Miri for any other reason (an operation Miri does not
+# support, a C call) is not a row: it says so with cfg(miri), or its file
+# goes in ci/miri.sh's `nomiri`.
+#
+# {What the rows share, if they share a cause, and the issue that tracks
+# Miri over the crate; or delete this paragraph.}
+# kit: proved-port kit/v{KIT_VERSION}

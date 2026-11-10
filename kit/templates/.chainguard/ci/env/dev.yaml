@@ -8,7 +8,9 @@
 # built against {RUST_STREAM}, so the stream moves with them; shellcheck
 # is lint.yaml's pin; clang and compiler-rt are fuzz.yaml's; bash, curl,
 # ca-certificates-bundle, apk-tools and wolfi-keys are consumers.yaml's,
-# whose harness installs each consumer's packages with apk.
+# whose harness installs each consumer's packages with apk; libgcc is
+# the optional miri.yaml's (curl and ca-certificates-bundle also fetch its
+# pinned rustup), and a port without the miri checks deletes it.
 # {REFERENCE_PACKAGES} is {LIBRARY} {UPSTREAM_VERSION}, the reference
 # every comparison check pins.
 # {Name each further package and the target that needs it, or delete
@@ -16,4 +18,4 @@
 # kit: proved-port kit/v{KIT_VERSION}
 version: 1
 environment:
-  packages: [{RUST_STREAM}, build-base, binutils, busybox, make, git, bash, curl, ca-certificates-bundle, apk-tools, wolfi-keys, clang-{CLANG_STREAM}, compiler-rt-{CLANG_STREAM}, {REFERENCE_PACKAGES}, verus~{VERUS_RELEASE}, kani~{KANI_RELEASE}, shellcheck~{SHELLCHECK_RELEASE}]
+  packages: [{RUST_STREAM}, build-base, binutils, busybox, make, git, bash, curl, ca-certificates-bundle, apk-tools, wolfi-keys, libgcc, clang-{CLANG_STREAM}, compiler-rt-{CLANG_STREAM}, {REFERENCE_PACKAGES}, verus~{VERUS_RELEASE}, kani~{KANI_RELEASE}, shellcheck~{SHELLCHECK_RELEASE}]
