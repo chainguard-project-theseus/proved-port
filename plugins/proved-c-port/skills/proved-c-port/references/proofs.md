@@ -15,6 +15,10 @@ ordinary builds, so the shipped library is unchanged.
 - Treat generated tables as the specification of their lookups, and say
   so in the trusted base (pcre3: the UCD tables; their match with
   upstream is checked by `ucdgen --check`, not proved).
+- When a premise comes from a hand-written table and a test pins it
+  rather than a proof (expat-rs's U1 needs the byte-type table to give
+  a lead byte its sequence length), list it in the theorem file's
+  Premises table with the test that pins it.
 - Prefer theorems that remove a whole vulnerability class over theorems
   that rule out one defect. Pick them from upstream's CVE survey.
 - Write the spec of the slow path first (an interpreter's state model,
@@ -142,7 +146,10 @@ SKILL.md's audit grep matches every one of these spellings.
 
 Never add any of the seam spellings above to make a proof pass. Lint
 for them (pcre3's `ci/lint-unsafe.sh`,
-challoc's `no_assume_or_admit_in_verified_code`).
+challoc's `no_assume_or_admit_in_verified_code`). The counter classes a
+function as trusted rather than refusing it, so keep the lint beside the
+counter; chainz's `verus/count.sh` also refuses an `external` attribute
+on an `impl` or a `mod`.
 
 ## The FLOOR ratchet
 
@@ -168,7 +175,8 @@ Rules:
   re-measures on the new base, never picking a side of the conflict;
   challoc raises it in its own PRs between merges, so parallel PRs never
   conflict there. Follow the port's header, and never raise FLOOR in a
-  feature PR of a port with the own-PR rule.
+  feature PR of a port with the own-PR rule, except the first proof PR
+  that brings the counter (`references/lifecycle.md`, phase 4).
 - A drop is closed by verifying more code, in the PR or in a small PR
   that lands first. A `lowered` line is the last resort, and its reason
   names exactly which functions or lines became trusted or outside, with
