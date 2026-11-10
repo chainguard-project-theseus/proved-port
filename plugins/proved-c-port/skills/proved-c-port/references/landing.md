@@ -16,6 +16,10 @@ and safe to merge while main moves every 15 minutes.
   address, or run `gitsign verify --certificate-identity=...` from the
   main checkout (it cannot open a linked worktree). A wrong-identity
   signature stops the agent; it does not re-sign on its own.
+- Follow its sign-off rule too, which is separate from signing:
+  challoc's CONTRIBUTING.md asks for a Developer Certificate of Origin
+  `Signed-off-by:` line on every commit (`git commit -s`), on top of
+  the signature.
 - An approved, green PR about to merge is left alone. If it must change
   after approval, say so in a reply.
 

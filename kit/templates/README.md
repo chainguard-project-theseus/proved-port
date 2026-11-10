@@ -21,7 +21,7 @@ point at those headers rather than restating them.
 | `verus/REACH` | `verus/REACH` | functions a C caller reaches that Verus does not check |
 | `verus/MINTS` | `verus/MINTS` | the C caller's token kinds and mints, for a port that mints tokens through one trusted function |
 | `verus/README.md` | `verus/README.md` | headings only: the five sections the headers cite |
-| `verus/SEAMS.md` | `verus/SEAMS.md` | the core-library seams table and its columns |
+| `verus/SEAMS.md` | `verus/SEAMS.md` | the core-library seams table and its columns, for hand-written seams tables. A port on the counter's generated-ledger back end (`[ledger]`) keeps a SEAMS.md that defines the ledger's kinds, categories, tools and statuses, with a "Status" section, which verus/FLOOR's header cites (challoc's; kit step 3 templates it) |
 | `verus/THEOREMS.md` | `verus/THEOREMS.md` | the trusted base and the theorem index |
 | `verus/theorems/TEMPLATE.md` | `verus/theorems/<ID>.md` | one theorem: statement, mutants, checks, what it does not say, seams |
 | `verus/seams/kani-TEMPLATE.md` | `verus/seams/kani-<seam id>.md` | one Kani record: contract, statement, translation, review, tests |

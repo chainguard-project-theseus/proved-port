@@ -42,7 +42,7 @@ an error. A check whose section is left out does not run.
 | | `verus_features` | features only Verus's build enables, as `verus_keep_ghost` |
 | | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords; one that would rewrite a name the counter classes code by (`external_body`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, a test cfg, a configured macro or mint, ...) is refused |
 | | `verus_only_ghost` | count the ghost functions of Verus-only code in the ghost column |
-| `[floor]` | `path`, `checked` | the FLOOR file (default `verus/FLOOR`); the prefix of the two verified-or-discharged figures (default `checked`) |
+| `[floor]` | `path`, `checked`, `renamed_from` | the FLOOR file (default `verus/FLOOR`); the prefix of the two verified-or-discharged figures (default `checked`); an older prefix the base revision's copy may still give them under, for the change that renames them (challoc's `combined`) |
 | `[rlimit]` | `path` | the RLIMIT file (default `verus/RLIMIT`) |
 | `[kani]` | `records` | the directory of `kani-*.md` records that cover the `discharged_by = "kani"` marker |
 | `[seams]` | `tables`, `theorems` | the seams tables, and a directory whose every `*.md` holds one |
@@ -87,6 +87,7 @@ in-tree counter, but for one line:
 |---|---|---|---|---|
 | pcre3 | wolfi-dev/pcre3 main `158cf87a` | `configs/pcre3.toml` | identical but the `ok compile inputs` line | identical but that line (3,919 lines) |
 | challoc | wolfi-dev/challoc main `fcde6b2` | `configs/challoc.toml` | identical | identical (1,674 lines) |
+| challoc | wolfi-dev/challoc main `39751a02` | `configs/challoc.toml` | identical (also with no flag, and `--list --floor verus/FLOOR --base-rev fcde6b2`) | identical (1,672 lines) |
 
 The kit's `ok compile inputs` line also names each root it resolved
 and where (`(roots Regex::new at crates/pcre3/src/regex.rs:274,
@@ -115,7 +116,18 @@ Where the counters still differ, on inputs neither port has today:
 
 - challoc's counter takes a missing `combined-*` figure in the FLOOR
   under test as 0.0; the kit's requires all four (a base revision's
-  copy may still lack them).
+  copy may still lack them). challoc's FLOOR has given all four since
+  `4f7b840b`, so no base revision a pull request compares with lacks
+  them.
+- Renaming challoc's `combined-*` figures to `checked-*` (kit/PLAN.md,
+  step 2) needs `renamed_from = "combined"` in the change that renames
+  them: without it the base revision's copy names figures the
+  configuration does not, and the run stops (`unknown figure
+  "combined-functions"`, exit 2). With it, on `39751a02` with FLOOR's
+  lines renamed, `--floor verus/FLOOR --base-rev HEAD` passes with the
+  same four figures, and a `checked-lines` set 0.1 below the base's
+  fails for want of a `lowered` line. The key may stay after the rename;
+  it only widens what a base's copy may name.
 - challoc's counter reads an inline `#[cfg(verus_keep_ghost)] mod { }`
   as shipped code; the kit reads it as Verus-only, as pcre3's does, so
   only its trusted functions count.

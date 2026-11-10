@@ -96,6 +96,12 @@ pub(crate) struct Floor {
     /// (`checked-functions`) or `combined`.
     #[serde(default = "default_checked")]
     pub(crate) checked: String,
+    /// A prefix the base revision's copy may still give those two figures
+    /// under (challoc's `combined`), read there as `checked` names them, so
+    /// the change that renames them compares with its base. The file under
+    /// test takes `checked` alone.
+    #[serde(default)]
+    pub(crate) renamed_from: Option<String>,
 }
 
 impl Default for Floor {
@@ -103,6 +109,7 @@ impl Default for Floor {
         Floor {
             path: default_floor(),
             checked: default_checked(),
+            renamed_from: None,
         }
     }
 }
@@ -382,6 +389,7 @@ mod tests {
         assert_eq!(c.crates.dir.as_deref(), Some("crates"));
         assert_eq!(c.floor.path, "verus/FLOOR");
         assert_eq!(c.floor.checked, "checked");
+        assert_eq!(c.floor.renamed_from, None);
         assert_eq!(c.rlimit.path, "verus/RLIMIT");
         assert_eq!(c.test_atoms(), ["test", "kani"]);
         assert!(c.recursion.is_none() && c.reach.is_none());

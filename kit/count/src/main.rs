@@ -43,7 +43,9 @@
 //! names the figure to record when the share has risen past it.
 //! `--base-rev REV` also fails a figure FILE sets below `REV:verus/FLOOR`'s
 //! without a new `lowered` line for it, and fails when REV does not
-//! resolve.
+//! resolve. With `[floor] renamed_from`, REV's copy may give the checked
+//! figures under that older prefix, so the change that renames them
+//! compares with its base.
 //!
 //! With `[recursion]`, it checks recursion (verus/theorems/RN1.md): it fails on a
 //! cycle of direct calls, within one file, through a function of a shipped
@@ -1842,7 +1844,9 @@ fn main() {
             let path = &cfg.floor.path;
             match base_file(&root, rev, path) {
                 Ok(Some(text)) => {
-                    let base = fig.read(&text, &format!("{rev}:{path}"));
+                    let base = fig
+                        .for_base(cfg.floor.renamed_from.as_deref())
+                        .read(&text, &format!("{rev}:{path}"));
                     let (lowering_ok, report) = fig.lowering(&head, &base);
                     print!("{report}");
                     ok &= lowering_ok;
@@ -2291,6 +2295,9 @@ fn base_file(root: &Path, rev: &str, file: &str) -> Result<Option<String>, Strin
 struct Figures {
     names: [String; 4],
     file: String,
+    /// The names a base revision's copy may still give the last two
+    /// figures under (`[floor] renamed_from`), read as those figures.
+    renamed: Option<[String; 2]>,
 }
 
 impl Default for Figures {
@@ -2346,6 +2353,18 @@ impl Figures {
                 format!("{checked}-lines"),
             ],
             file: file.into(),
+            renamed: None,
+        }
+    }
+
+    /// These figures as a base revision's copy may give them: with
+    /// `renamed_from`, its `{renamed_from}-functions` and
+    /// `{renamed_from}-lines` are read as the checked figures, and a
+    /// `lowered` line naming one as naming that figure.
+    fn for_base(&self, renamed_from: Option<&str>) -> Figures {
+        Figures {
+            renamed: renamed_from.map(|p| [format!("{p}-functions"), format!("{p}-lines")]),
+            ..self.clone()
         }
     }
 
@@ -2372,7 +2391,11 @@ impl Figures {
             let words: Vec<&str> = line.split_whitespace().collect();
             let n = i + 1;
             let figure = |key: &str, value: &str| -> Result<(usize, u32), String> {
-                let Some(k) = self.names.iter().position(|f| f == key) else {
+                let renamed = || {
+                    let old = self.renamed.as_ref()?;
+                    old.iter().position(|f| f == key).map(|j| REQUIRED + j)
+                };
+                let Some(k) = self.names.iter().position(|f| f == key).or_else(renamed) else {
                     return Err(format!("line {n}: unknown figure {key:?}"));
                 };
                 parse_tenths(value)
@@ -2384,7 +2407,8 @@ impl Figures {
                     if reason.is_empty() {
                         return Err(format!("line {n}: a lowered line needs a reason"));
                     }
-                    lowered.push(((*key).to_owned(), figure(key, value)?.1));
+                    let (k, v) = figure(key, value)?;
+                    lowered.push((self.names[k].clone(), v));
                 }
                 [key, value] => {
                     let (k, v) = figure(key, value)?;
@@ -4763,6 +4787,58 @@ verus! {
             shares(&t, (2, 30)),
             Floor([Some(600), Some(600), Some(800), Some(900)])
         );
+    }
+
+    /// With `[floor] renamed_from`, the base revision's copy is read under
+    /// the old prefix as well, so the change that renames the checked
+    /// figures (challoc's `combined-` to `checked-`) still compares with
+    /// its base; the file under test takes the new names alone.
+    #[test]
+    fn a_base_may_give_the_checked_figures_their_old_names() {
+        let fig = Figures::new("checked", "x/FLOOR");
+        let old = "functions 1.0\nlines 2.0\ncombined-functions 3.5\ncombined-lines 4.0\nlowered combined-lines 3.9 an old reason\n";
+        assert!(
+            fig.parse(old).is_err(),
+            "old names without renamed_from: got = Ok, wanted = Err"
+        );
+        let base = fig.for_base(Some("combined")).parse(old).expect("parses");
+        assert_eq!(
+            base,
+            FloorFile {
+                floor: Floor([Some(10), Some(20), Some(35), Some(40)]),
+                lowered: vec![("checked-lines".into(), 39)],
+            },
+            "base: got = {base:?}, wanted = the old figures as the checked ones"
+        );
+        assert!(
+            fig.for_base(Some("combined"))
+                .parse("functions 1.0\nlines 2.0\ncombined-lines 4.0\nchecked-lines 4.0\n")
+                .is_err(),
+            "a figure under both names: got = Ok, wanted = Err"
+        );
+        for (text, want) in [
+            ("checked-functions 3.5\nchecked-lines 4.0\n", true),
+            ("checked-functions 3.4\nchecked-lines 4.0\n", false),
+            (
+                "checked-functions 3.4\nchecked-lines 4.0\nlowered checked-functions 3.4 moved out\n",
+                true,
+            ),
+            // The base's reason, under its old name, is not new here.
+            (
+                "checked-functions 3.5\nchecked-lines 3.9\nlowered checked-lines 3.9 a new reason\n",
+                false,
+            ),
+            (
+                "checked-functions 3.5\nchecked-lines 3.8\nlowered checked-lines 3.8 moved out\n",
+                true,
+            ),
+            ("checked-functions 3.5\nchecked-lines 3.8\n", false),
+        ] {
+            let text = format!("functions 1.0\nlines 2.0\n{text}");
+            let head = fig.parse(&text).expect("parses");
+            let (ok, report) = fig.lowering(&head, &base);
+            assert_eq!(ok, want, "{text:?}: got = {ok}, wanted = {want}\n{report}");
+        }
     }
 
     /// The crates come from the configuration: `dir`'s subdirectories with a

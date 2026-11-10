@@ -258,8 +258,11 @@ is deleted in that PR.
    - challoc: delete `verus/count/`; the Makefile's `verus` recipe (the
      `cd verus/count && cargo run` line) runs the kit counter with the
      generated-ledger back end, and `verus/FLOOR` renames its
-     `combined-*` lines to `checked-*` and takes the template's header
-     as a pointer, with the own-PR raise rule; `verus.yaml` drops its
+     `combined-*` lines to `checked-*` and keeps the template's header
+     text, with the kit version line, and the own-PR raise rule (its
+     `verus/count.toml` sets `renamed_from = "combined"`, so the PR's
+     base copy still
+     compares: kit/count/README.md, "Parity"); `verus.yaml` drops its
      `counter tests` step; `kani.yaml`'s `sh ci/kani-regular.sh` and the
      `kani-boolcmp` lint's `scripts/kani-boolcmp.sh` call the kit's,
      and both scripts are deleted.
