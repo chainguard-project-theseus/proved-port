@@ -119,11 +119,12 @@ sha, then the proof, then a re-measure.
 Wrong: proving an optimization before measuring it, or quoting numbers
 from different runs side by side.
 
-### Land small, signed, literal
+### Land small and literal
 
-Correct: one commit per PR, labels set before the push, literal push
-targets, no update-branch API, every review thread answered after the
-push that fixes it.
+Correct: one commit per PR, signed where the repository's policy
+requires it (`references/landing.md`), labels set before the push,
+literal push targets, no update-branch API, every review thread
+answered after the push that fixes it.
 
 Wrong: a branch-update merge commit, a computed push target, or a reply
 posted before the fix is pushed.

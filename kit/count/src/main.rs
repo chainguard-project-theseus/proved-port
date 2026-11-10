@@ -1606,37 +1606,62 @@ fn usage(e: impl std::fmt::Display) -> ! {
     std::process::exit(2);
 }
 
-fn main() {
-    let mut list = false;
-    let mut floor = None;
-    let mut base_rev = None;
-    let mut stats = None;
-    let mut config_file = None;
-    let mut root = PathBuf::from(".");
-    let mut args = std::env::args().skip(1);
+/// The command line, as `parse_args` reads it.
+#[derive(Debug, Default, PartialEq)]
+struct Args {
+    list: bool,
+    version: bool,
+    floor: Option<PathBuf>,
+    base_rev: Option<String>,
+    stats: Option<PathBuf>,
+    config_file: Option<PathBuf>,
+    root: Option<PathBuf>,
+}
+
+/// Reads the arguments after the program name. An argument that starts
+/// with `-` and is not an option fails, as does a second ROOT: a
+/// misspelt `--flor FILE` would otherwise be read as ROOT, and the run
+/// would pass with no floor checked.
+fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
+    let mut out = Args::default();
     while let Some(a) = args.next() {
-        if a == "--list" {
-            list = true;
-        } else if a == "--version" {
-            println!("verus-count {}", env!("CARGO_PKG_VERSION"));
-            return;
-        } else if a == "--floor" || a == "--base-rev" || a == "--rlimit" || a == "--config" {
-            let Some(v) = args.next() else {
-                usage(format!("{a} needs a value"));
-            };
-            if a == "--floor" {
-                floor = Some(PathBuf::from(v));
-            } else if a == "--rlimit" {
-                stats = Some(PathBuf::from(v));
-            } else if a == "--config" {
-                config_file = Some(PathBuf::from(v));
-            } else {
-                base_rev = Some(v);
+        match a.as_str() {
+            "--list" => out.list = true,
+            "--version" => out.version = true,
+            "--floor" | "--base-rev" | "--rlimit" | "--config" => {
+                let v = args.next().ok_or_else(|| format!("{a} needs a value"))?;
+                match a.as_str() {
+                    "--floor" => out.floor = Some(PathBuf::from(v)),
+                    "--rlimit" => out.stats = Some(PathBuf::from(v)),
+                    "--config" => out.config_file = Some(PathBuf::from(v)),
+                    _ => out.base_rev = Some(v),
+                }
             }
-        } else {
-            root = PathBuf::from(a);
+            _ if a.starts_with('-') => return Err(format!("unknown option {a}")),
+            _ if out.root.is_some() => {
+                return Err(format!("a second ROOT {a}: give one repository root"));
+            }
+            _ => out.root = Some(PathBuf::from(a)),
         }
     }
+    Ok(out)
+}
+
+fn main() {
+    let Args {
+        list,
+        version,
+        floor,
+        base_rev,
+        stats,
+        config_file,
+        root,
+    } = parse_args(std::env::args().skip(1)).unwrap_or_else(|e| usage(e));
+    if version {
+        println!("verus-count {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    let root = root.unwrap_or_else(|| PathBuf::from("."));
     let config_file = config_file.unwrap_or_else(|| root.join("verus/count.toml"));
     let cfg = Config::read(&config_file).unwrap_or_else(|e| usage(e));
     let crates = crate_dirs(&root, &cfg).unwrap_or_else(|e| usage(e));
@@ -3360,6 +3385,46 @@ mod tests {
         .unwrap();
         assert!(test_util_enablers(&root, &test_util()).is_err());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A misspelt option fails instead of becoming ROOT, so a run cannot
+    /// pass with a gate quietly left off.
+    #[test]
+    fn unknown_options_and_a_second_root_fail() {
+        let parse = |a: &[&str]| parse_args(a.iter().map(|s| s.to_string()));
+        assert_eq!(
+            parse(&[
+                "--floor",
+                "verus/FLOOR",
+                "--base-rev",
+                "HEAD^",
+                "--rlimit",
+                "s.json",
+                "--list",
+                "r"
+            ]),
+            Ok(Args {
+                list: true,
+                floor: Some("verus/FLOOR".into()),
+                base_rev: Some("HEAD^".into()),
+                stats: Some("s.json".into()),
+                root: Some("r".into()),
+                ..Args::default()
+            })
+        );
+        assert_eq!(parse(&[]), Ok(Args::default()));
+        for (args, want) in [
+            (&["--flor", "verus/FLOOR", "."][..], "unknown option --flor"),
+            (&["-l", "."][..], "unknown option -l"),
+            (&["verus/FLOOR", "."][..], "a second ROOT ."),
+            (&["--floor"][..], "--floor needs a value"),
+        ] {
+            let got = parse(args).unwrap_err();
+            assert!(
+                got.contains(want),
+                "{args:?}: got = {got:?}, wanted = {want:?}"
+            );
+        }
     }
 
     #[test]

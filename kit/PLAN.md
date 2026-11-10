@@ -104,8 +104,8 @@ kit/
   templates/                 FLOOR, RLIMIT, REACH, MINTS, SEAMS, THEOREMS, the verus
                              README's headings, theorem and Kani record skeletons,
                              ABI-nnn ledger, AGENTS and CONTRIBUTING outlines (step 1)
+  count/                     one counter: config-driven crates, both ledger back ends
   verus/
-    count/                   one counter: config-driven crates, both ledger back ends
     seams/                   ledger generator and checker (Go)
     lint/                    unsafe/assume lint, guard-test helper crate
   abi/
@@ -211,26 +211,36 @@ is deleted in that PR.
    variants. No port changes. Exit: no row in section 1 says local only.
 1. **Templates** (verus README, THEOREMS, SEAMS, TODO, FLOOR and RLIMIT
    headers, theorem and Kani record skeletons, the `ABI-nnn` entry
-   format). pcre3: the rule text in `verus/FLOOR` and `verus/RLIMIT`
-   headers, `verus/README.md`, `docs/abi-changes.md` "Entry format" and
-   the record format of `verus/seams/kani-*.md` is replaced by a pointer
-   to the kit template at the pinned version; the figures and rows stay.
-   challoc: the same for `verus/README.md` and `verus/RESULTS.md`;
-   `verus/FLOOR` waits for step 2, because challoc's counter reads
+   format). A port keeps each header's full text as written in its own
+   file: the checks, the reviewer and agents read the port's copy, and
+   this repository is internal. Each header gains one line naming the
+   kit version it came from (`# kit: proved-port kit/v{KIT_VERSION}`),
+   and a later lint diffs the port's header against the template at that
+   version, so a copy cannot drift unseen; a kit bump that changes a
+   header moves the port's copy and its version line together. What the
+   port drops are restatements elsewhere: `AGENTS.md`, `CONTRIBUTING.md`,
+   `verus/README.md` and the check files point at the header instead.
+   pcre3: `verus/FLOOR`, `verus/RLIMIT`, `verus/REACH` and `verus/MINTS`
+   take the version line; `docs/abi-changes.md` "Entry format" and the
+   Kani records keep their text and follow the templates. challoc: the
+   same for `verus/README.md` and `verus/RESULTS.md`; `verus/FLOOR`
+   waits for step 2, because challoc's counter reads
    `combined-functions` and `combined-lines` where the template names
    the kit counter's `checked-*`. The FLOOR template's raise rule is a
-   per-port choice (`{RAISE_RULE}`): pcre3's pointer keeps the same-PR
-   rule and challoc's keeps its own-PR rule; the counter passes a share
-   above its figure either way. Exit: neither port restates a rule a
-   template states.
+   per-port choice (`{RAISE_RULE}`): pcre3's copy keeps the same-PR rule
+   and challoc's keeps its own-PR rule; the counter passes a share above
+   its figure either way. Exit: neither port restates a header's rule
+   outside the header, and each header names its kit version.
    **Status:** the kit side is done: `kit/templates/` (FLOOR, RLIMIT,
    REACH, MINTS, SEAMS.md, THEOREMS.md, a headings-only verus
    README.md with the five sections the headers cite, the theorem and
    Kani record skeletons, the `ABI-nnn` ledger, AGENTS.md and
    CONTRIBUTING.md outlines; `kit/templates/README.md` says how to apply
    them). The verus README's prose and the TODO skeleton are not
-   templated yet. The pcre3 and challoc PRs that replace their rule text
-   with pointers are to come, after the kit pin (section 4) exists.
+   templated yet. pcre3's restatements point at its headers
+   (wolfi-dev/pcre3#1073). The version lines, and the lint that diffs
+   a header against its template, come with the first kit release
+   (section 4), since there is no `kit/vX.Y.Z` to name before it.
 2. **Counter, unsafe/assume lint and Kani runner.**
    - pcre3: delete `verus/count/` and `verus/kani/run.sh`; add
      `verus/count.toml` (the four crates, the `test-util` feature, the
