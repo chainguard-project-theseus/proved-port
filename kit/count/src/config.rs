@@ -1,7 +1,10 @@
 //! The port's configuration, `verus/count.toml` (kit/count/README.md):
 //! which crates to read and which ship, which `cfg`s are test-only, and
 //! where each table the checks read lives. A check whose section is
-//! missing does not run; every path is relative to the repository root.
+//! missing does not run, and with `--base-rev` a change that removes or
+//! narrows one the base revision's copy has fails
+//! ([`Config::narrowed_from`]); every path is relative to the repository
+//! root.
 //!
 //! Unknown keys are an error, so a misspelled section or key fails the
 //! run rather than turning a check off.
@@ -102,6 +105,10 @@ pub(crate) struct Floor {
     /// test takes `checked` alone.
     #[serde(default)]
     pub(crate) renamed_from: Option<String>,
+    /// Whether the configuration has a `[floor]` table: a base revision
+    /// whose copy has one must hold the FLOOR file it names.
+    #[serde(skip_deserializing, default = "present")]
+    pub(crate) declared: bool,
 }
 
 impl Default for Floor {
@@ -110,6 +117,7 @@ impl Default for Floor {
             path: default_floor(),
             checked: default_checked(),
             renamed_from: None,
+            declared: false,
         }
     }
 }
@@ -120,12 +128,17 @@ pub(crate) struct Rlimit {
     /// The RLIMIT file `--rlimit` holds the statistics to.
     #[serde(default = "default_rlimit")]
     pub(crate) path: String,
+    /// Whether the configuration has an `[rlimit]` table, as
+    /// [`Floor::declared`].
+    #[serde(skip_deserializing, default = "present")]
+    pub(crate) declared: bool,
 }
 
 impl Default for Rlimit {
     fn default() -> Self {
         Rlimit {
             path: default_rlimit(),
+            declared: false,
         }
     }
 }
@@ -191,7 +204,7 @@ pub(crate) struct Inputs {
 
 /// A root of the compile-inputs walk: the free function or method `name`
 /// (of `owner`, when given) in a file whose path ends in `file`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Root {
     pub(crate) file: String,
@@ -226,6 +239,10 @@ fn default_checked() -> String {
 
 fn default_rlimit() -> String {
     "verus/RLIMIT".into()
+}
+
+fn present() -> bool {
+    true
 }
 
 impl Config {
@@ -329,6 +346,114 @@ impl Config {
     pub(crate) fn stand_in(&self, text: &str) -> String {
         stand_in(&self.crates.stand_ins, text)
     }
+
+    /// How this configuration turns off or narrows a gate that `base`, the
+    /// base revision's, runs: one line per change. A gate whose section is
+    /// left out does not run and prints nothing, so deleting its section
+    /// would pass every check it makes; the run fails instead, as FLOOR
+    /// and RLIMIT fail a loosened figure. The changes are a `[recursion]`,
+    /// `[reach]`, `[inputs]` or `[mints]` section removed; a `[reach]`
+    /// exports macro, function-pointer macro or conversion removed or
+    /// renamed (each adds entry points); an `[inputs]` crate or root
+    /// removed, or `lazy` turned off (each narrows the walk); a `[crates]`
+    /// `dir` removed or changed, a member removed, or a crate's `ships`
+    /// changed to anything but `true` (each can take a crate out of the
+    /// shipped tally and the walks); a `test_cfgs` or `verus_features`
+    /// name added (each takes the items under it out of the shipped
+    /// tally). Renaming a table, a mint, or the FLOOR, RLIMIT or REACH
+    /// file is not a narrowing: the gate still runs, on the files and
+    /// names the change gives it, and the base's copy of each file is read
+    /// at the path the base's configuration gives it.
+    pub(crate) fn narrowed_from(&self, base: &Config) -> Vec<String> {
+        let mut out = Vec::new();
+        let (h, b) = (&self.crates, &base.crates);
+        if let Some(d) = &b.dir
+            && h.dir.as_ref() != Some(d)
+        {
+            out.push(format!(
+                "[crates] dir is no longer {d:?}, so the crates under it may no longer be read"
+            ));
+        }
+        let ships = |s: Option<bool>| s.map_or("unset".to_owned(), |s| s.to_string());
+        for m in &b.members {
+            match h.members.iter().find(|n| n.name == m.name) {
+                None => out.push(format!(
+                    "[crates] members drops {:?}, so it is no longer read",
+                    m.name
+                )),
+                Some(n) if n.ships != m.ships && n.ships != Some(true) => out.push(format!(
+                    "[crates] member {:?} changes ships from {} to {}, so it may no longer count as shipped",
+                    m.name,
+                    ships(m.ships),
+                    ships(n.ships)
+                )),
+                Some(_) => {}
+            }
+        }
+        for (key, here, there) in [
+            ("test_cfgs", &h.test_cfgs, &b.test_cfgs),
+            ("verus_features", &h.verus_features, &b.verus_features),
+        ] {
+            for n in here.iter().filter(|n| !there.contains(n)) {
+                out.push(format!(
+                    "[crates] {key} adds {n:?}, so the items under it leave the shipped tally"
+                ));
+            }
+        }
+        for (section, here, there) in [
+            (
+                "recursion",
+                self.recursion.is_some(),
+                base.recursion.is_some(),
+            ),
+            ("reach", self.reach.is_some(), base.reach.is_some()),
+            ("inputs", self.inputs.is_some(), base.inputs.is_some()),
+            ("mints", self.mints.is_some(), base.mints.is_some()),
+        ] {
+            if there && !here {
+                out.push(format!(
+                    "the [{section}] section is gone, so its gate no longer runs"
+                ));
+            }
+        }
+        if let (Some(h), Some(b)) = (&self.reach, &base.reach) {
+            for (key, here, there) in [
+                ("exports_macro", &h.exports_macro, &b.exports_macro),
+                ("fn_ptr_macro", &h.fn_ptr_macro, &b.fn_ptr_macro),
+                ("conversion", &h.conversion, &b.conversion),
+            ] {
+                match (there, here) {
+                    (Some(_), None) => out.push(format!(
+                        "[reach] {key} is gone, so the entry points it named are no longer walked"
+                    )),
+                    (Some(t), Some(n)) if t != n => out.push(format!(
+                        "[reach] {key} changes from {t:?} to {n:?}, so the entry points {t:?} named are no longer walked"
+                    )),
+                    _ => {}
+                }
+            }
+        }
+        if let (Some(h), Some(b)) = (&self.inputs, &base.inputs) {
+            for k in b.crates.iter().filter(|k| !h.crates.contains(k)) {
+                out.push(format!(
+                    "[inputs] crates drops {k:?}, so the walk no longer follows calls through it"
+                ));
+            }
+            for r in b.roots.iter().filter(|r| !h.roots.contains(r)) {
+                let owner = r.owner.as_ref().map_or(String::new(), |o| format!("{o}::"));
+                out.push(format!(
+                    "[inputs] roots drops {owner}{} in {}, so the walk no longer starts there",
+                    r.name, r.file
+                ));
+            }
+            if b.lazy && !h.lazy {
+                out.push(
+                    "[inputs] lazy is turned off, so the lazy builders are no longer roots".into(),
+                );
+            }
+        }
+        out
+    }
 }
 
 /// Whether replacing `from` with `to` can change an occurrence of `name`:
@@ -391,6 +516,8 @@ mod tests {
         assert_eq!(c.floor.checked, "checked");
         assert_eq!(c.floor.renamed_from, None);
         assert_eq!(c.rlimit.path, "verus/RLIMIT");
+        // `[floor]` is given, with every key defaulted; `[rlimit]` is not.
+        assert!(c.floor.declared && !c.rlimit.declared);
         assert_eq!(c.test_atoms(), ["test", "kani"]);
         assert!(c.recursion.is_none() && c.reach.is_none());
         assert!(c.inputs.is_none() && c.mints.is_none() && c.ledger.is_none());
@@ -481,6 +608,181 @@ mod tests {
                     "{bad}: got = {e}, wanted = rewrites `{name}`"
                 ),
             }
+        }
+    }
+
+    /// pcre3's configuration, which every gate section has, with a member
+    /// and a Verus feature so that every `[crates]` key it holds is set.
+    const FULL: &str = r#"
+[crates]
+dir = "crates"
+members = [{ name = "extra", path = "extra", ships = true }]
+test_cfgs = ["test", "kani"]
+verus_features = ["verus"]
+[recursion]
+table = "verus/theorems/RN1.md"
+[reach]
+path = "verus/REACH"
+exports_macro = "exports"
+fn_ptr_macro = "fn_ptr"
+conversion = "from_c"
+[inputs]
+table = "verus/theorems/CD1.md"
+crates = ["pcre3", "pcre3-syntax", "pcre3-unicode"]
+roots = [
+  { file = "crates/pcre3/src/regex.rs", owner = "Regex", name = "new" },
+  { file = "crates/pcre3/src/serialize.rs", name = "encode_as" },
+]
+lazy = true
+describe = "Regex::new"
+[mints]
+path = "verus/MINTS"
+mint = "c_mint"
+token_trait = "CToken"
+home = "crates/pcre3-capi/src/object.rs"
+"#;
+
+    /// A configuration that keeps every gate, or widens or renames one,
+    /// is not narrowed. Negative: removing each gate section, a `[reach]`
+    /// key, an `[inputs]` crate or root, or `lazy`, renaming a `[reach]`
+    /// key's macro or conversion, removing or changing `[crates] dir`,
+    /// dropping a member or turning its `ships` off, and adding a
+    /// `test_cfgs` or `verus_features` name, each names what it turned
+    /// off.
+    #[test]
+    fn a_gate_removed_or_narrowed_since_the_base_fails() {
+        let base = Config::parse(FULL).expect("parses");
+        let edit = |from: &str, to: &str| {
+            assert!(FULL.contains(from), "{from:?} is not in the fixture");
+            Config::parse(&FULL.replacen(from, to, 1)).expect("parses")
+        };
+        for (from, to) in [
+            ("", ""),
+            ("\"pcre3-unicode\"]", "\"pcre3-unicode\", \"pcre3-capi\"]"),
+            ("verus/theorems/RN1.md", "verus/theorems/RN2.md"),
+            ("mint = \"c_mint\"", "mint = \"c_make\""),
+            ("path = \"verus/REACH\"", "path = \"verus/reach/REACH\""),
+            (
+                "[recursion]",
+                "[floor]\npath = \"verus/SHARES\"\n[rlimit]\npath = \"verus/HEADROOM\"\n[recursion]",
+            ),
+            (
+                "ships = true }]",
+                "ships = true }, { name = \"more\", path = \"more\" }]",
+            ),
+            ("\"test\", \"kani\"]", "\"test\"]"),
+            ("verus_features = [\"verus\"]\n", ""),
+        ] {
+            let got = edit(from, to).narrowed_from(&base);
+            assert!(got.is_empty(), "{to:?}: got = {got:?}, wanted = none");
+        }
+        let section = |name: &str| {
+            let start = FULL.find(&format!("[{name}]")).expect("section");
+            let end = FULL[start + 1..]
+                .find("\n[")
+                .map_or(FULL.len(), |e| start + 1 + e + 1);
+            FULL[start..end].to_owned()
+        };
+        // No base gate: nothing to narrow.
+        let bare = Config::parse(&section("crates")).expect("parses");
+        assert!(base.narrowed_from(&bare).is_empty());
+        for name in ["recursion", "reach", "inputs", "mints"] {
+            let got = edit(&section(name), "").narrowed_from(&base);
+            let want = format!("the [{name}] section is gone, so its gate no longer runs");
+            assert_eq!(
+                got,
+                std::slice::from_ref(&want),
+                "[{name}]: got = {got:?}, wanted = {want:?}"
+            );
+        }
+        for (from, to, want) in [
+            (
+                "exports_macro = \"exports\"\n",
+                "",
+                "[reach] exports_macro is gone",
+            ),
+            (
+                "fn_ptr_macro = \"fn_ptr\"\n",
+                "",
+                "[reach] fn_ptr_macro is gone",
+            ),
+            (
+                "conversion = \"from_c\"\n",
+                "",
+                "[reach] conversion is gone",
+            ),
+            (
+                "exports_macro = \"exports\"",
+                "exports_macro = \"exportz\"",
+                "[reach] exports_macro changes from \"exports\" to \"exportz\"",
+            ),
+            (
+                "fn_ptr_macro = \"fn_ptr\"",
+                "fn_ptr_macro = \"fn_ptx\"",
+                "[reach] fn_ptr_macro changes from \"fn_ptr\" to \"fn_ptx\"",
+            ),
+            (
+                "conversion = \"from_c\"",
+                "conversion = \"from_x\"",
+                "[reach] conversion changes from \"from_c\" to \"from_x\"",
+            ),
+            (
+                ", \"pcre3-unicode\"",
+                "",
+                "[inputs] crates drops \"pcre3-unicode\"",
+            ),
+            (
+                "  { file = \"crates/pcre3/src/serialize.rs\", name = \"encode_as\" },\n",
+                "",
+                "[inputs] roots drops encode_as in crates/pcre3/src/serialize.rs",
+            ),
+            (
+                "owner = \"Regex\", ",
+                "",
+                "[inputs] roots drops Regex::new in crates/pcre3/src/regex.rs",
+            ),
+            ("lazy = true\n", "", "[inputs] lazy is turned off"),
+            (
+                "dir = \"crates\"\n",
+                "",
+                "[crates] dir is no longer \"crates\"",
+            ),
+            (
+                "dir = \"crates\"",
+                "dir = \"vendor\"",
+                "[crates] dir is no longer \"crates\"",
+            ),
+            (
+                "{ name = \"extra\", path = \"extra\", ships = true }",
+                "",
+                "[crates] members drops \"extra\"",
+            ),
+            (
+                "ships = true",
+                "ships = false",
+                "[crates] member \"extra\" changes ships from true to false",
+            ),
+            (
+                ", ships = true",
+                "",
+                "[crates] member \"extra\" changes ships from true to unset",
+            ),
+            (
+                "\"kani\"]",
+                "\"kani\", \"unix\"]",
+                "[crates] test_cfgs adds \"unix\"",
+            ),
+            (
+                "[\"verus\"]",
+                "[\"verus\", \"fast\"]",
+                "[crates] verus_features adds \"fast\"",
+            ),
+        ] {
+            let got = edit(from, to).narrowed_from(&base);
+            assert!(
+                got.len() == 1 && got[0].starts_with(want),
+                "{from:?} to {to:?}: got = {got:?}, wanted = [{want}..]"
+            );
         }
     }
 

@@ -19,8 +19,9 @@ verus-count [--config FILE] [--list] [--floor FILE [--base-rev REV]] [--rlimit S
 ROOT is the repository root (default `.`) and FILE the configuration
 (default `ROOT/verus/count.toml`). `--list` prints one line per
 executable function; `--floor` holds the `shipped` row to the FLOOR
-file; `--base-rev` also holds FLOOR (and REACH and RLIMIT) to that
-revision's copies, and fails when the revision does not resolve;
+file; `--base-rev` also holds FLOOR (and REACH, RLIMIT and the
+configuration) to that revision's copies, and fails when the revision
+does not resolve;
 `--rlimit` reads the statistics `cargo verus ... -- --time-expanded
 --output-json` printed. `--version` prints the counter's version. An
 unknown option or a second ROOT fails the run (exit 2), so a misspelt
@@ -29,7 +30,34 @@ unknown option or a second ROOT fails the run (exit 2), so a misspelt
 ## Configuration
 
 `verus/count.toml`, every path relative to the root. Unknown keys are
-an error. A check whose section is left out does not run.
+an error. A check whose section is left out does not run, and prints
+nothing. So with `--base-rev REV` the run fails (exit 1) when the
+configuration turns off or narrows a gate `REV`'s copy runs: a
+`[recursion]`, `[reach]`, `[inputs]` or `[mints]` section removed; a
+`[reach]` `exports_macro`, `fn_ptr_macro` or `conversion` removed or
+renamed; an `[inputs]` crate or root removed or `lazy` turned off; a
+`[crates]` `dir` removed or changed, a member removed or its `ships`
+changed to anything but `true`; or a `test_cfgs` or `verus_features`
+name added. Renaming a table or a mint is not a narrowing. The base's
+copy is read at the configuration's path under ROOT, as the repository
+names it (`verus/count.toml` when `--config` names a file outside ROOT);
+a base with none, the change that adopts the counter, prints `ok
+configuration: REV has no ... to compare with`, and one that does not
+parse fails the run (exit 2). A configuration under ROOT reached through
+a symlink, the file or a directory above it, fails the run (exit 2),
+since the base would be read at the link's path while the head is read
+through it. An in-ROOT `--config` at a path the base lacks still has
+nothing to compare: that is a Makefile edit, the same file that carries
+`--base-rev`.
+
+The base's FLOOR, RLIMIT and REACH are read at the paths the base's
+configuration gives them (`[floor] path`, `[rlimit] path`, `[reach]
+path`), so moving one of those files, or pointing its key at a path the
+base lacks, still compares the head's file with the base's. A file
+whose section the base's configuration has, but the base lacks, fails
+the run (exit 2 for FLOOR and RLIMIT, 1 for REACH). With no base
+configuration, or no `[reach]` in it, the head's path is read, and a
+base without the file prints `ok ...: REV has no ... to compare with`.
 [configs/pcre3.toml](configs/pcre3.toml) and
 [configs/challoc.toml](configs/challoc.toml) are complete examples.
 
@@ -75,7 +103,13 @@ dir = "crates"
 Verus's attribute form (`#[verus_verify]`, `#[verus_spec(..)]`, alone
 or under a `cfg_attr`) counts as code inside `verus!`, for a port whose
 MSRV keeps vstd optional (the skill's proofs.md, "When vstd cannot be a
-dependency of every build").
+dependency of every build"). Under a `cfg_attr` it counts only when
+Verus's build is sure to meet the predicate: a configured
+`verus_features` feature or `verus_keep_ghost`, or a predicate those
+settle. A platform or any other name the counter cannot settle
+(`target_os = "windows"`, or `all(feature = "verus", unix)`) may leave
+the attribute off where Verus runs, and the function unchecked, so it
+counts as outside.
 
 ## Parity
 
@@ -111,8 +145,12 @@ Where the counters still differ, on inputs neither port has today:
 - The kit refuses a stand-in that would rewrite a name it classes code
   by, and a compile-inputs root that matches no function of the
   configured crates; it credits Verus's attribute form under a
-  `cfg_attr` only when Verus's build meets the predicate. Neither port
-  has a stand-in, root or attribute these refuse.
+  `cfg_attr` only when Verus's build is sure to meet the predicate.
+  Neither port has a stand-in, root or attribute these refuse.
+- With `--base-rev`, the kit also compares `verus/count.toml` with the
+  base revision's (Configuration, above), which neither port's counter
+  had, and prints one `ok configuration` line first. The rest of the
+  output is unchanged.
 
 - challoc's counter takes a missing `combined-*` figure in the FLOOR
   under test as 0.0; the kit's requires all four (a base revision's

@@ -7,7 +7,8 @@
 //!
 //! A function is *verified* when it sits inside `verus! { ... }`, or
 //! carries Verus's attribute form (`#[verus_verify]` or `#[verus_spec]`,
-//! directly or under a `cfg_attr` whose predicate Verus's build meets),
+//! directly or under a `cfg_attr` whose predicate Verus's build is sure
+//! to meet),
 //! is not `#[verifier::external_body]`,
 //! `#[verifier::external]` or `verus_verify(external_body)`, and its body
 //! calls none of `assume`, `admit` and `Tracked::assume_new` (which mints
@@ -45,7 +46,9 @@
 //! without a new `lowered` line for it, and fails when REV does not
 //! resolve. With `[floor] renamed_from`, REV's copy may give the checked
 //! figures under that older prefix, so the change that renames them
-//! compares with its base.
+//! compares with its base. It also fails when the configuration removes
+//! or narrows a gate `REV`'s copy of it runs ([`check_config`]), since a
+//! gate whose section is gone does not run at all.
 //!
 //! With `[recursion]`, it checks recursion (verus/theorems/RN1.md): it fails on a
 //! cycle of direct calls, within one file, through a function of a shipped
@@ -779,10 +782,14 @@ fn is_external(attrs: &[Attribute]) -> bool {
 /// `cfg_attr` applies (`#[cfg_attr(feature = "verus", verus_spec(..))]`,
 /// the form a port whose MSRV is below vstd's uses). Such a function is
 /// classed as one inside `verus!` is ([`classify`]). A `cfg_attr` counts
-/// only when Verus's build can meet its predicate (by [`cfg_eval`]): one
-/// no build meets (`any()`) or only a test build meets (`test`) never
-/// applies the attribute to the code Verus checks. A predicate it cannot
-/// read is an error.
+/// only when Verus's build is sure to meet its predicate (by
+/// [`cfg_eval`]: it can be true there and cannot be false), as a
+/// configured Verus-only feature or `verus_keep_ghost` is. One no build
+/// meets (`any()`) or only a test build meets (`test`) never applies the
+/// attribute to the code Verus checks, and one that names a platform or
+/// any other name the counter cannot settle (`target_os = "windows"`)
+/// may not apply it on the host Verus runs on, which would leave the
+/// function unchecked. A predicate it cannot read is an error.
 fn verus_attribute(attrs: &[Attribute], atoms: &Atoms) -> Result<bool, String> {
     const NAMES: [&str; 2] = ["verus_verify", "verus_spec"];
     for a in attrs {
@@ -817,7 +824,8 @@ fn verus_attribute(attrs: &[Attribute], atoms: &Atoms) -> Result<bool, String> {
             continue;
         }
         let predicate: TokenStream = toks[..comma].iter().cloned().collect();
-        if cfg_eval(&predicate.to_string(), true, atoms)?.t {
+        let can = cfg_eval(&predicate.to_string(), true, atoms)?;
+        if can.t && !can.f {
             return Ok(true);
         }
     }
@@ -1666,6 +1674,10 @@ fn main() {
     let root = root.unwrap_or_else(|| PathBuf::from("."));
     let config_file = config_file.unwrap_or_else(|| root.join("verus/count.toml"));
     let cfg = Config::read(&config_file).unwrap_or_else(|e| usage(e));
+    let base = base_rev.map(|rev| Base {
+        cfg: check_config(&root, &config_file, &cfg, &rev),
+        rev,
+    });
     let crates = crate_dirs(&root, &cfg).unwrap_or_else(|e| usage(e));
     let mut unshipped = Vec::new();
     let mut c = Counter {
@@ -1805,7 +1817,7 @@ fn main() {
             &c,
             &unshipped,
             (&seams, &tables_named),
-            base_rev.as_deref(),
+            base.as_ref(),
         )
     {
         std::process::exit(1);
@@ -1840,10 +1852,10 @@ fn main() {
         }
         let (mut ok, report) = fig.check(&shipped, &head.floor);
         print!("{report}");
-        if let Some(rev) = &base_rev {
-            let path = &cfg.floor.path;
-            match base_file(&root, rev, path) {
-                Ok(Some(text)) => {
+        if let Some(b) = &base {
+            let rev = &b.rev;
+            match b.copy(&root, &cfg.floor.path, GateFile::Floor) {
+                Ok((path, Some(text))) => {
                     let base = fig
                         .for_base(cfg.floor.renamed_from.as_deref())
                         .read(&text, &format!("{rev}:{path}"));
@@ -1851,7 +1863,9 @@ fn main() {
                     print!("{report}");
                     ok &= lowering_ok;
                 }
-                Ok(None) => println!("ok coverage floor: {rev} has no {path} to compare with"),
+                Ok((path, None)) => {
+                    println!("ok coverage floor: {rev} has no {path} to compare with")
+                }
                 Err(e) => {
                     eprintln!("FAIL coverage floor: {e}");
                     std::process::exit(2);
@@ -1868,18 +1882,123 @@ fn main() {
             .filter(|(_, t)| t.ghost + t.fns.iter().sum::<usize>() > t.fns[Class::Outside as usize])
             .map(|(k, _)| k.replace('-', "_"))
             .collect();
-        failed |= !check_rlimit(
-            &root,
-            &cfg,
-            &crates,
-            &s,
-            &verus_crates,
-            &c,
-            base_rev.as_deref(),
-        );
+        failed |= !check_rlimit(&root, &cfg, &crates, &s, &verus_crates, &c, base.as_ref());
     }
     if failed {
         std::process::exit(1);
+    }
+}
+
+/// Holds the configuration to `rev`'s copy ([`Config::narrowed_from`]):
+/// exits 1 when it removes or narrows a gate the base runs, and 2 when
+/// the base's copy does not parse. The base's copy is read at the
+/// configuration's path under `root`, as the repository names it, or at
+/// `verus/count.toml` when the configuration lies outside `root`. A
+/// configuration under `root` reached through a symlink exits 2: the
+/// base would be read at the link's path while the head is read through
+/// it, and once a link merged, the base's copy would be the link's text.
+/// A base with no copy, the change that adopts the counter, has nothing
+/// to compare. The base's copy, when there is one, for [`Base::copy`].
+fn check_config(root: &Path, file: &Path, cfg: &Config, rev: &str) -> Option<Config> {
+    let under = std::path::absolute(file)
+        .ok()
+        .zip(std::path::absolute(root).ok())
+        .and_then(|(f, r)| f.strip_prefix(r).ok().map(Path::to_path_buf));
+    if let Some(link) = under.as_deref().and_then(|u| symlink_in(root, u)) {
+        eprintln!(
+            "FAIL configuration: {} is a symlink, so {rev}'s copy cannot be compared with the head's: give the configuration as a file",
+            link.display()
+        );
+        std::process::exit(2);
+    }
+    let rel = under.unwrap_or_else(|| PathBuf::from("verus/count.toml"));
+    let rel = rel.to_string_lossy();
+    let text = match base_file(root, rev, &rel) {
+        Ok(Some(text)) => text,
+        Ok(None) => {
+            println!("ok configuration: {rev} has no {rel} to compare with");
+            return None;
+        }
+        Err(e) => {
+            eprintln!("FAIL configuration: {e}");
+            std::process::exit(2);
+        }
+    };
+    let base = Config::parse(&text).unwrap_or_else(|e| {
+        eprintln!("FAIL configuration: {rev}:{rel}: {e}");
+        std::process::exit(2);
+    });
+    let narrowed = cfg.narrowed_from(&base);
+    for n in &narrowed {
+        eprintln!("FAIL configuration: {rel}: {n}, where {rev}:{rel} runs it: restore it");
+    }
+    if !narrowed.is_empty() {
+        std::process::exit(1);
+    }
+    println!("ok configuration: {rel} keeps every gate {rev}:{rel} runs");
+    Some(base)
+}
+
+/// The first of `rel`'s paths under `root` (`verus`, then
+/// `verus/count.toml`) that is a symlink.
+fn symlink_in(root: &Path, rel: &Path) -> Option<PathBuf> {
+    let mut at = PathBuf::new();
+    rel.components().find_map(|c| {
+        at.push(c);
+        fs::symlink_metadata(root.join(&at))
+            .is_ok_and(|m| m.file_type().is_symlink())
+            .then(|| at.clone())
+    })
+}
+
+/// The revision `--base-rev` names, and its copy of the configuration
+/// when it has one ([`check_config`]).
+struct Base {
+    rev: String,
+    cfg: Option<Config>,
+}
+
+/// A file a gate holds to its base revision's copy.
+#[derive(Clone, Copy, Debug)]
+enum GateFile {
+    Floor,
+    Rlimit,
+    Reach,
+}
+
+impl Base {
+    /// `rev`'s copy of `file`, and the path it was read at: the path
+    /// `rev`'s configuration gives the file (`[floor] path`, which
+    /// defaults, `[rlimit] path`, likewise, or `[reach] path`). So a
+    /// change that moves FLOOR, RLIMIT or REACH, or points the key at a
+    /// path the base lacks, is still compared with the base's copy. With
+    /// no base configuration, or no `[reach]` in it, the path is `head`,
+    /// the head's. A file whose section the base's configuration has but
+    /// `rev` lacks is an error; any other absence is `None`, nothing to
+    /// compare.
+    fn copy(
+        &self,
+        root: &Path,
+        head: &str,
+        file: GateFile,
+    ) -> Result<(String, Option<String>), String> {
+        let rev = &self.rev;
+        let (path, declared) = self
+            .cfg
+            .as_ref()
+            .and_then(|c| match file {
+                GateFile::Floor => Some((c.floor.path.as_str(), c.floor.declared)),
+                GateFile::Rlimit => Some((c.rlimit.path.as_str(), c.rlimit.declared)),
+                GateFile::Reach => c.reach.as_ref().map(|r| (r.path.as_str(), true)),
+            })
+            .unwrap_or((head, false));
+        let text = base_file(root, rev, path)?;
+        if text.is_none() && declared {
+            return Err(format!(
+                "{rev}'s configuration names {path}, but {rev} has no {path}, so there is no base copy to compare with"
+            ));
+        }
+        Ok((path.to_owned(), text))
     }
 }
 
@@ -2052,9 +2171,10 @@ fn print_combined_row(name: &str, t: &Tally, c: &ledger::Checked) {
 
 /// The headroom check ([`rlimit`]): reads Verus's statistics from
 /// `stats` and the RLIMIT file under `root`, prints each crate's results and
-/// the report, and, with `base_rev`, holds the RLIMIT file to that revision's
-/// copy. A crate of `crates` (those with `verus!` code) that the statistics
-/// leave out fails the run with `base_rev` ([`rlimit::check_covered`]).
+/// the report, and, with `base`, holds the RLIMIT file to that revision's
+/// copy ([`Base::copy`]). A crate of `crates` (those with `verus!` code)
+/// that the statistics leave out fails the run with `base`
+/// ([`rlimit::check_covered`]).
 /// `dirs` are the crates' directories, whose base sources [`base_limits`]
 /// reads; `c` holds the head's limits and every function Verus checks
 /// ([`Counter::verus_fns`]). Whether it passes.
@@ -2065,7 +2185,7 @@ fn check_rlimit(
     stats: &Path,
     crates: &[String],
     c: &Counter,
-    base_rev: Option<&str>,
+    base: Option<&Base>,
 ) -> bool {
     let limits = &c.limits;
     let list = cfg.rlimit.path.as_str();
@@ -2085,24 +2205,25 @@ fn check_rlimit(
     for (k, s) in stats.iter().filter(|(k, _)| crates.contains(k)) {
         println!("{k}: {} verified, {} errors", s.verified, s.errors);
     }
-    let (covered, report) = rlimit::check_covered(crates, &stats, base_rev.is_some());
+    let (covered, report) = rlimit::check_covered(crates, &stats, base.is_some());
     print!("{report}");
     let shares = rlimit::shares(&stats, crates, limits).unwrap_or_else(|e| fail(e));
     let (mut ok, report) = rlimit::check(&shares, &head, 15, list);
     ok &= covered;
     print!("{report}");
-    if let Some(rev) = base_rev {
-        let base = match base_file(root, rev, list) {
-            Ok(Some(text)) => {
+    if let Some(b) = base {
+        let rev = b.rev.as_str();
+        let base = match b.copy(root, list, GateFile::Rlimit) {
+            Ok((path, Some(text))) => {
                 let base = rlimit::parse_rlimit_file(&text)
-                    .unwrap_or_else(|e| fail(format!("{rev}:{list}: {e}")));
+                    .unwrap_or_else(|e| fail(format!("{rev}:{path}: {e}")));
                 let (kept, report) = rlimit::check_ratchet(&head, &base, list);
                 print!("{report}");
                 ok &= kept;
                 base
             }
-            Ok(None) => {
-                println!("ok rlimit headroom: {rev} has no {list} to compare with");
+            Ok((path, None)) => {
+                println!("ok rlimit headroom: {rev} has no {path} to compare with");
                 rlimit::RlimitFile::default()
             }
             Err(e) => fail(e),
@@ -2864,8 +2985,8 @@ fn unmatched_exports(
 /// every function of a shipped crate reachable from a C entry point is
 /// verified, discharged, or listed in REACH with a reason, and every row
 /// of REACH is such a function, citing seams of `seams` (their IDs, and
-/// the tables as the report names them); with `base_rev`, a row that
-/// revision's REACH does not have is marked `new`
+/// the tables as the report names them); with `base`, a row that
+/// revision's REACH ([`Base::copy`]) does not have is marked `new`
 /// ([`reach::check_added`]). Prints what it finds; `false` when it fails.
 fn entry_reach(
     root: &Path,
@@ -2874,7 +2995,7 @@ fn entry_reach(
     c: &Counter,
     unshipped: &[String],
     seams: (&std::collections::BTreeSet<String>, &str),
-    base_rev: Option<&str>,
+    base: Option<&Base>,
 ) -> bool {
     let (fns, traits, aliases) = (&c.fns, &c.traits, &c.aliases);
     let list = r.path.as_str();
@@ -2945,14 +3066,15 @@ fn entry_reach(
     report
         .failures
         .extend(reach::check_seams(&head, seams.0, list, seams.1));
-    if let Some(rev) = base_rev {
-        match base_file(root, rev, list) {
-            Ok(Some(base)) => {
+    if let Some(b) = base {
+        let rev = b.rev.as_str();
+        match b.copy(root, list, GateFile::Reach) {
+            Ok((_, Some(base))) => {
                 report
                     .failures
                     .extend(reach::check_added(&head, &reach::rows(&base), rev, list))
             }
-            Ok(None) => println!("ok entry reach: {rev} has no {list} to compare with"),
+            Ok((path, None)) => println!("ok entry reach: {rev} has no {path} to compare with"),
             Err(e) => report.failures.push(e),
         }
     }
@@ -4431,6 +4553,123 @@ fn uncalled() {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// `--base-rev`'s copy of FLOOR, RLIMIT and REACH is read at the path
+    /// the base's configuration gives it, so a head that points
+    /// `[floor] path`, `[rlimit] path` or `[reach] path` at a file the
+    /// base lacks is still compared with the base's file. Negative: a
+    /// file whose section the base's configuration has, but the base
+    /// lacks, is an error. A `[reach]` the base leaves out, or no base
+    /// configuration, keeps the head's path, and an absent file there or
+    /// at an undeclared default is nothing to compare.
+    #[test]
+    fn the_base_copy_is_read_at_the_base_configurations_path() {
+        use GateFile::{Floor, Reach, Rlimit};
+        let dir = std::env::temp_dir().join(format!("verus-count-copy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("verus")).expect("mkdir");
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(ok, "git {args:?}: got = failure, wanted = success");
+        };
+        git(&["init", "-q"]);
+        fs::write(dir.join("a"), "a").expect("write");
+        git(&["add", "a"]);
+        git(&["commit", "-q", "-m", "no gate files"]);
+        for f in ["FLOOR", "RLIMIT", "REACH"] {
+            fs::write(dir.join("verus").join(f), f).expect("write");
+        }
+        git(&["add", "verus"]);
+        git(&["commit", "-q", "-m", "gate files"]);
+        let declared = || {
+            Config::parse(
+                "[crates]\ndir = \"crates\"\n[floor]\npath = \"verus/FLOOR\"\n[rlimit]\npath = \"verus/RLIMIT\"\n[reach]\npath = \"verus/REACH\"\n",
+            )
+            .expect("parses")
+        };
+        let bare = || Config::parse("[crates]\ndir = \"crates\"\n").expect("parses");
+        let base = |rev: &str, cfg: Option<Config>| Base {
+            rev: rev.into(),
+            cfg,
+        };
+        let copy = |b: &Base, head: &str, at: GateFile| b.copy(&dir, head, at);
+        // The head points each path at a file the base lacks: the base's
+        // own file is read, with or without the section for FLOOR and
+        // RLIMIT, whose default path the base then reads.
+        for cfg in [declared, bare] {
+            for (head, at, want) in [
+                ("verus/FLOOR.old", Floor, "FLOOR"),
+                ("verus/RLIMIT.old", Rlimit, "RLIMIT"),
+            ] {
+                let got = copy(&base("HEAD", Some(cfg())), head, at);
+                let path = format!("verus/{want}");
+                assert_eq!(
+                    got,
+                    Ok((path.clone(), Some(want.into()))),
+                    "{head}: got = {got:?}, wanted = {path}"
+                );
+            }
+        }
+        let got = copy(&base("HEAD", Some(declared())), "verus/REACH.old", Reach);
+        assert_eq!(
+            got,
+            Ok(("verus/REACH".into(), Some("REACH".into()))),
+            "[reach] path: got = {got:?}, wanted = verus/REACH"
+        );
+        // The base's configuration has the section, but the base not the
+        // file.
+        for (at, path) in [
+            (Floor, "verus/FLOOR"),
+            (Rlimit, "verus/RLIMIT"),
+            (Reach, "verus/REACH"),
+        ] {
+            let got = copy(&base("HEAD^", Some(declared())), path, at);
+            assert!(
+                got.as_ref()
+                    .is_err_and(|e| e.contains(&format!("HEAD^ has no {path}"))),
+                "{path}: got = {got:?}, wanted = an error"
+            );
+        }
+        // Nothing the base declares: an absent file is nothing to compare.
+        for (head, at, want) in [
+            ("verus/FLOOR.new", Floor, "verus/FLOOR"),
+            ("verus/RLIMIT.new", Rlimit, "verus/RLIMIT"),
+            ("verus/REACH.new", Reach, "verus/REACH.new"),
+        ] {
+            let got = copy(&base("HEAD^", Some(bare())), head, at);
+            assert_eq!(
+                got,
+                Ok((want.into(), None)),
+                "{head}: got = {got:?}, wanted = none at {want}"
+            );
+        }
+        // No base configuration: the head's path.
+        for (head, want) in [
+            ("verus/FLOOR", Some("FLOOR".to_owned())),
+            ("verus/FLOOR.old", None),
+        ] {
+            let got = copy(&base("HEAD", None), head, Floor);
+            assert_eq!(
+                got,
+                Ok((head.into(), want.clone())),
+                "{head}: got = {got:?}, wanted = {want:?}"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_floor_fails_below_and_names_a_rise() {
         let want = Floor([Some(84), Some(105), Some(200), Some(300)]);
@@ -4683,7 +4922,8 @@ fn outside() {}
     /// Negative: a `cfg_attr` of another attribute, a path that only
     /// passes through a `verus_spec` module, or a `cfg_attr` whose
     /// predicate Verus's build never meets (`any()`, `test`, a predicate
-    /// with a test atom, the negated Verus feature), is not the attribute
+    /// with a test atom, the negated Verus feature) or may not meet (a
+    /// platform, alone or beside the Verus feature), is not the attribute
     /// form.
     #[test]
     fn the_attribute_form_counts_as_verus_code() {
@@ -4714,6 +4954,12 @@ fn in_tests() {}
 fn with_a_test_atom() {}
 #[cfg_attr(not(feature = "verus"), verus_spec(ensures true))]
 fn not_for_verus() {}
+#[cfg_attr(target_os = "windows", vstd::prelude::verus_verify)]
+fn on_one_platform() {}
+#[cfg_attr(all(feature = "verus", unix), verus_verify)]
+fn with_a_platform() {}
+#[cfg_attr(any(feature = "verus", unix), verus_verify)]
+fn either() {}
 fn plain() {}
 #[cfg(feature = "verus")]
 verus! {
@@ -4723,12 +4969,14 @@ verus! {
 "#;
         let (t, errors) = count(src);
         assert_eq!(errors, 0, "errors: got = {errors}, wanted = 0");
-        // spec_attr, direct, by_path verified; trusted_attr and assumes
-        // trusted; other_attr, through_a_module, never, in_tests,
-        // with_a_test_atom, not_for_verus and plain outside. The
-        // `verus!` block is built only for Verus (`feature = "verus"`), so
-        // its exec function and its spec function leave the tally.
-        let want = [3, 2, 7, 0];
+        // spec_attr, direct, by_path and either (the Verus feature
+        // settles the `any`) verified; trusted_attr and assumes trusted;
+        // other_attr, through_a_module, never, in_tests, with_a_test_atom,
+        // not_for_verus, on_one_platform, with_a_platform and plain
+        // outside. The `verus!` block is built only for Verus
+        // (`feature = "verus"`), so its exec function and its spec
+        // function leave the tally.
+        let want = [4, 2, 9, 0];
         assert_eq!(t.fns, want, "fns: got = {:?}, wanted = {want:?}", t.fns);
         assert_eq!(t.ghost, 0, "ghost: got = {}, wanted = 0", t.ghost);
         // With `verus_only_ghost`, the Verus-only spec function joins the

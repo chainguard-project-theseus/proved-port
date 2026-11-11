@@ -4,9 +4,10 @@
 # {CAPI_CRATE} makes each C caller's argument token through one trusted
 # function, `{MINT_FN}`, which makes a token of any kind that implements
 # `{TOKEN_TRAIT}`. Each kind stands for a premise, the C caller's
-# contract its mint's `# Safety` states, and each function that calls
-# `{MINT_FN}` is a kind's mint, verified over it. So each kind and each
-# mint is a row here:
+# contract its mint's `# Safety` states, written for Verus as the kind's
+# `minted` body (trusted too; {MINTED_SEAM}), and each function that
+# calls `{MINT_FN}` is a kind's mint, verified over it. So each kind and
+# each mint is a row here:
 #
 #   kind FILE KIND SEAM     an `impl {TOKEN_TRAIT} for KIND` in FILE, and
 #                           the seam whose row states its premise
