@@ -61,8 +61,8 @@ the workstation (chainz: `make <target>` via scripts/develop-run.sh)}.
 - {BUILD CMD}            e.g. cargo build --locked --release
 - {TEST CMD, scoped}     e.g. cargo test -p {CRATE} -- {FILTER}
 - {LINT CMD}             e.g. cargo fmt --check; cargo clippy -D warnings
-- {VERUS CMD}            e.g. make verus (full) or cargo verus focus -p {CRATE}
-- {COUNTER CMD}          e.g. verus/count --floor ../FLOOR: report figures
+- {VERUS CMD}            e.g. make verus VERUS_BASE=none (full, local; a run with no VERUS_BASE fails) or cargo verus focus -p {CRATE}
+- {COUNTER CMD}          e.g. make verus-count VERUS_BASE=none: report figures
 - {MUTANT CMD}           the mutants you ran and that each failed
 
 COMMIT AND SIGN

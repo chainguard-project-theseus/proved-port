@@ -35,7 +35,7 @@ it does.
 
 ## Checks
 
-- `make verus`: {CRATE}'s results line, and the counter's `shipped`
+- `make verus VERUS_BASE=none` (or the verus check): {CRATE}'s results line, and the counter's `shipped`
   row before and after ({COUNTS: N of M functions, P%}).
 - {Release asm or codegen of the changed functions, when the change
   rewrote shipped code to verify it: instruction counts and panic sites

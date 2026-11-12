@@ -40,9 +40,27 @@ a change cites. The checks below are what a change must not get wrong.
   trusted seam and needs its row in the seams table
   (`verus/SEAMS.md`, "Seams"). `verus/FLOOR` falls only with a new
   `lowered` line, and `verus/RLIMIT` rises only with an `rlimit-raised`
-  line, each as its header says; anything else is Blocking.
-  `verus/count/` is the kit counter's vendored copy and changes only by
-  proved-port's `kit/sync.sh`: a hand edit there is Blocking.
+  line, each as its header says; anything else is Blocking. FLOOR and the
+  README badge rise in a pull request of their own, to the figures the
+  check names (FLOOR's header): a raise in a pull request that changes
+  anything else is a Question citing that header, unless it is the first
+  proof pull request, which brings the counter.
+- The vendored kit (`verus/count/`, the counter, and `verus/make/`, the
+  make targets, Kani runner and header lint with their templates).
+  Every file in either comes from `kit/sync.sh` in wolfi-dev/proved-port,
+  at the commit `verus/count/KIT` names, and `kit/sync.sh --check`
+  covers both. A change to a file in either must also move `KIT` to a
+  new proved-port commit. `kit/sync.sh` rewrites `KIT` on every run, so
+  a re-sync moves `KIT` (its `commit` line, or its `tag` line once that
+  commit is tagged) whether or not another file there changes; a
+  `KIT`-only diff is such a re-sync and is fine. The body of a pull
+  request that changes `KIT` names the commit `KIT` records and says
+  `kit/sync.sh --check` passed on this head: the checks here cannot
+  reach proved-port, so that line is the evidence the copies match. An
+  edit under `verus/count/` or `verus/make/` with `KIT` unchanged is
+  Blocking, and so is a `KIT` change whose body names no commit, names
+  one other than `KIT`'s `commit` line, or does not say
+  `kit/sync.sh --check` passed.
 - Kani harnesses. Never order-compare bools (`<`, `<=`, `>`, `>=`): CBMC
   ignores the relations Kani emits, so the harness passes vacuously. Such
   a comparison is Blocking. A Kani-discharged seam has its record under
@@ -172,21 +190,21 @@ briefly:
 
 ## Evidence
 
-- {CI_RULE: keep one of these and delete the other. Results: the
-  `Chainguard Checks (presubmit)` check, which the `chainguard` app
-  publishes, runs the checks in `.chainguard/ci/` and fails whenever any
-  of them fails. When every run under that name at the head completed
-  with success, treat the build, tests, ABI checks, conformance and proofs
-  as verified, and do not ask the body for them. A pull request that
-  changes `.chainguard/ci/`, the `Makefile` or a script under `ci/`
+- CI settles results you cannot run. The `Chainguard Checks (presubmit)`
+  check, which the `chainguard` app publishes, runs the checks in
+  `.chainguard/ci/` that run on every pull request: rustfmt, clippy,
+  source-rules and shellcheck (lint), test and msrv, conformance,
+  known-citations, verus, kani, and miri where the port runs it. It fails
+  whenever any of them fails. When every run under that name at the head completed with
+  success, treat the build, tests, ABI checks, conformance results and
+  proofs as verified, and do not ask the body for them. A pull request
+  that changes `.chainguard/ci/`, the `Makefile` or a script under `ci/`
   changes how the checks run, so its results settle nothing: judge those
-  from the diff. The on-request fuzz and consumer checks are not part of
-  it. | Ignore CI: do not call `list_checks`, and do not cite or ask about
-  check runs, statuses or presubmit results, passed or failed, in a
-  finding or the summary.}
-- Your verdict is an independent judgement of the diff and the code at
-  the head: a green check does not stand in for a test that would catch a
-  broken behaviour.
+  from the diff. The on-request checks (fuzz, the consumers, the
+  differential run, each on its `ci/run:` label) are not part of it.
+- Your verdict is still an independent judgement of the diff and the code
+  at the head: a green check does not stand in for a test that would
+  catch a broken behaviour.
 - Evidence is a file and a line at the head, never a guess from a name.
   Read the callers and callees needed to judge a change, not only the
   diff. For a behaviour claim about {LIBRARY}, cite upstream's own test or

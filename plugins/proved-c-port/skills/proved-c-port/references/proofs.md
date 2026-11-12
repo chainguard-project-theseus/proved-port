@@ -175,21 +175,24 @@ fails when:
 Rules:
 
 - The check passes a share above its figure and names the figure to
-  record. When to record it is the port's choice, stated in its FLOOR
-  header (the kit template's `{RAISE_RULE}`): pcre3 raises FLOOR in the
-  same PR, and when two PRs both raise it, the second to merge
-  re-measures on the new base, never picking a side of the conflict;
-  challoc raises it in its own PRs between merges, so parallel PRs never
-  conflict there. Follow the port's header, and never raise FLOOR in a
-  feature PR of a port with the own-PR rule, except the first proof PR
-  that brings the counter (`references/lifecycle.md`, phase 4).
+  record. Every port records it the same way, as the kit's FLOOR header
+  states: FLOOR, and the README badge that shows it, rise in a PR of
+  their own, to the figures the check names on main, never in the PR
+  that earns them, so parallel PRs never conflict there (pcre3's
+  same-PR raises once cost #689 four updates from main;
+  `references/pitfalls.md`). The one exception is the first proof PR,
+  which brings the counter (`references/lifecycle.md`, phase 4).
 - The README's Verus badge carries FLOOR's `functions` and `lines`
   figures in its text, since shields.io cannot read a private
   repository. With `[badge]` in `verus/count.toml` the counter fails
   `--floor` unless the README holds exactly the badge line FLOOR gives,
-  so a PR that raises FLOOR replaces the badge with what
-  `verus-count --badge .` prints, in the same PR. Never keep the badge
+  so the PR that raises FLOOR replaces the badge with what
+  `verus-count --badge .` prints, in that same PR. Never keep the badge
   by hand or fix it in a follow-up: the check refuses the drift.
+- Every verus run compares FLOOR with a base: the PR's base on
+  presubmit, `HEAD^` on main. Where FLOOR exists, a run with no base
+  fails; a wrapper that prints SKIP and passes lets main lower FLOOR
+  unseen. A local run says so: `make verus VERUS_BASE=none`.
 - A drop is closed by verifying more code, in the PR or in a small PR
   that lands first. A `lowered` line is the last resort, and its reason
   names exactly which functions or lines became trusted or outside, with

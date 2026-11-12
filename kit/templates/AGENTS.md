@@ -94,8 +94,10 @@ issue or PR.
 ## Proofs
 
 - After changing code inside `verus!`, or code its contracts describe,
-  run `make verus` and keep `verus/THEOREMS.md`, the theorem's
-  `verus/theorems/<ID>.md` and `verus/SEAMS.md` true.
+  run `make verus VERUS_BASE=none` and keep `verus/THEOREMS.md`, the
+  theorem's `verus/theorems/<ID>.md` and `verus/SEAMS.md` true. A run
+  with no `VERUS_BASE` fails: `none` is for a local run, and the verus
+  checks pass the base revision themselves.
 - **FLOOR and rlimit headroom.** The `verus` check holds the shipped
   crates to verus/FLOOR and verus/RLIMIT, and the header of each file is
   its rule: when a figure rises, when a `lowered` or `rlimit-raised` line

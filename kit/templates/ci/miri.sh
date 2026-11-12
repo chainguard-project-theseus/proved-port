@@ -33,7 +33,7 @@
 # Miri, or runs fewer rounds there, says so with cfg(miri). `flags` holds
 # the flags the crate needs on every run, each with its reason; MIRIFLAGS
 # adds flags to every run.
-# kit: proved-port kit/v{KIT_VERSION}
+# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 set -eu
 
 nightly="{MIRI_NIGHTLY}"

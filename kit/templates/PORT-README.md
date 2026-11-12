@@ -12,9 +12,10 @@ a drop-in replacement for its C ABI.
 The badge above gives verus/FLOOR's `functions` and `lines` figures,
 the shares of the shipped crates' executable functions and of their
 lines that Verus checks (verus/README.md, "Coverage"). The verus check
-fails when the badge disagrees with verus/FLOOR, so a change that
-raises FLOOR replaces the line with the one `verus-count --badge .`
-(the counter verus/count builds) prints, in the same pull request.
+fails when the badge disagrees with verus/FLOOR, so the pull request
+that raises FLOOR, which does nothing else (verus/FLOOR's header),
+replaces the line with the one `verus-count --badge .` (the counter
+verus/count builds) prints.
 
 ## Building and testing
 

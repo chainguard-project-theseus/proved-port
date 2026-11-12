@@ -164,8 +164,9 @@ Wrong: a branch-update merge commit, a computed push target, or a reply
 posted before the fix is pushed.
 
 The port's own `AGENTS.md` and `CONTRIBUTING.md` win on any convention
-they state (the issue line, who merges, sign-off, the raise rule); this
-skill fills in what they leave out.
+they state (the issue line, who merges, sign-off); this skill fills in
+what they leave out. The Verus rules the kit's templates carry (the
+FLOOR raise rule among them) are the same in every port.
 
 ## References
 

@@ -23,7 +23,11 @@
 #
 # The port's `# kit: proved-port VERSION` line must name the commit
 # verus/count/KIT records (in full or a prefix of 7 or more characters),
-# or its tag: the headers are the kit's text at that version.
+# or its tag: the headers are the kit's text at that version. VERSION is
+# one word, or the templates' `vX.Y.Z (SHA)` form, where SHA names that
+# commit as above and vX.Y.Z is its tag; when the commit has no tag (a
+# copy taken between releases) vX.Y.Z is the release before it, which
+# KIT does not record, so any vX.Y.Z passes.
 #
 # Exit 0: every header matches; 1: one drifted or a file is missing; 2:
 # usage.
@@ -49,21 +53,32 @@ header() {
   awk '!/^#/ { exit } { print } /^# kit:/ { found = 1; exit } END { exit !found }' "$1"
 }
 
-# version LINE: the VERSION of a `# kit: proved-port VERSION` line.
+# version LINE: the VERSION of a `# kit: proved-port VERSION` line, with
+# the `vX.Y.Z (SHA)` form printed as `vX.Y.Z SHA`.
 version() {
-  echo "$1" | sed -n 's/^# kit: proved-port \([^ ]*\) *$/\1/p'
+  echo "$1" | sed -n \
+    -e 's/^# kit: proved-port \(v[0-9][0-9.]*\) (\([0-9a-f]*\)) *$/\1 \2/p' \
+    -e 's/^# kit: proved-port \([^ ]*\) *$/\1/p'
+}
+
+# commit SHA: whether SHA is the commit KIT records, in full or a prefix
+# of 7 or more characters.
+commit() {
+  [ ${#1} -ge 7 ] || return 1
+  case $sha in "$1"*) return 0 ;; esac
+  return 1
 }
 
 # known VERSION: whether VERSION names the commit or tag KIT records.
 known() {
   [ -n "$1" ] || return 1
   case $1 in
-    "$sha" | "$tag") [ "$1" != none ] ;;
-    *)
-      [ ${#1} -ge 7 ] || return 1
-      case $sha in "$1"*) return 0 ;; esac
-      return 1
+    *' '*)
+      commit "${1#* }" || return 1
+      [ "$tag" = none ] || [ "${1%% *}" = "$tag" ]
       ;;
+    "$sha" | "$tag") [ "$1" != none ] ;;
+    *) commit "$1" ;;
   esac
 }
 
