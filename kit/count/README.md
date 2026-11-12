@@ -13,7 +13,7 @@ end added; `src/main.rs`'s module documentation states every rule.
 
 ```sh
 cargo build --locked --release
-verus-count [--config FILE] [--list] [--floor FILE [--base-rev REV]] [--rlimit STATS] ROOT
+verus-count [--config FILE] [--list] [--floor FILE [--base-rev REV | --no-base]] [--rlimit STATS] ROOT
 ```
 
 ROOT is the repository root (default `.`) and FILE the configuration
@@ -22,7 +22,12 @@ executable function before the table, and changes nothing else: every
 check the other options name still runs; `--floor` holds the `shipped` row to the FLOOR
 file; `--base-rev` also holds FLOOR (and REACH, RLIMIT and the
 configuration) to that revision's copies, and fails when the revision
-does not resolve;
+does not resolve. `--floor` needs one of the two base flags: with
+neither the run fails (exit 1), so a CI run that loses its base fails
+rather than skip every base comparison. `--no-base` says there is no
+base to compare with: a local or development run, or the proof PR that
+adds the port's first FLOOR. It is never a CI run's flag once FLOOR is
+on the base, and giving it with `--base-rev` fails the run (exit 2);
 `--rlimit` reads the statistics `cargo verus ... -- --time-expanded
 --output-json` printed. `--version` prints the counter's version. An
 unknown option or a second ROOT fails the run (exit 2), so a misspelt
@@ -97,8 +102,8 @@ run (exit 1), and one with no reason does not parse (exit 2).
 
 There is no line for a base copy the counter cannot read: a kit release
 that drops or renames a key makes the port's re-sync exit 2 against
-every base that still has it. Such a change runs without `--base-rev`,
-and then with no base comparison at all, for the configuration, FLOOR,
+every base that still has it. Such a change runs with `--no-base` in
+place of `--base-rev`, and then with no base comparison at all, for the configuration, FLOOR,
 RLIMIT or REACH, so it needs a maintainer's review in their place.
 
 The base's FLOOR, RLIMIT and REACH are read at the paths the base's
@@ -249,7 +254,9 @@ proof PR (the skill's lifecycle.md, phase 4):
 1. Vendor the counter ("Adopting: vendoring", below), add
    `verus/count.toml` (the two-line form above is enough to start)
    and run the counter in the verus check:
-   `verus-count --floor verus/FLOOR --base-rev "$BASE" .`.
+   `verus-count --floor verus/FLOOR --base-rev "$BASE" .`. A base with
+   no FLOOR prints `ok coverage floor: ... has no verus/FLOOR to compare
+   with`; this PR may instead pass `--no-base`, which no later PR may.
 2. Copy `kit/templates/verus/FLOOR`, whose figures are all 0.0.
 3. On the PR's base the counter names 0.0 for every figure; on the PR it
    names the figures the proof reaches. Record those in FLOOR in the

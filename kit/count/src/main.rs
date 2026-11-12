@@ -34,7 +34,7 @@
 //! its closing brace.
 //!
 //! Usage: `verus-count [--config FILE] [--list] [--floor FILE [--base-rev
-//! REV]] [--rlimit STATS] ROOT`, with ROOT the repository root (default
+//! REV | --no-base]] [--rlimit STATS] ROOT`, with ROOT the repository root (default
 //! `.`) and FILE the configuration (default `ROOT/verus/count.toml`);
 //! `--version` prints the counter's version.
 //! `--list` prints one line per executable function: crate, class, lines,
@@ -51,7 +51,12 @@
 //! them compares with its base. It also fails when the configuration
 //! removes or narrows a gate `REV`'s copy of it runs with no new
 //! `[[narrowed]]` line naming the change ([`check_config`]), since a gate
-//! whose section is gone does not run at all.
+//! whose section is gone does not run at all. `--floor` with neither
+//! `--base-rev` nor `--no-base` fails the run (exit 1), so a run that
+//! should compare with a base cannot pass by leaving the base off;
+//! `--no-base` says there is none to compare with (a local run, or the
+//! change that adds the first FLOOR), and with `--base-rev` it is an error
+//! (exit 2).
 //!
 //! With `[recursion]`, it checks recursion (verus/theorems/RN1.md): it fails on a
 //! cycle of direct calls, within one file, through a function of a shipped
@@ -1700,6 +1705,7 @@ struct Args {
     version: bool,
     floor: Option<PathBuf>,
     base_rev: Option<String>,
+    no_base: bool,
     stats: Option<PathBuf>,
     config_file: Option<PathBuf>,
     root: Option<PathBuf>,
@@ -1715,6 +1721,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         match a.as_str() {
             "--list" => out.list = true,
             "--version" => out.version = true,
+            "--no-base" => out.no_base = true,
             "--floor" | "--base-rev" | "--rlimit" | "--config" => {
                 let v = args.next().ok_or_else(|| format!("{a} needs a value"))?;
                 match a.as_str() {
@@ -1731,6 +1738,9 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             _ => out.root = Some(PathBuf::from(a)),
         }
     }
+    if out.no_base && out.base_rev.is_some() {
+        return Err("--no-base with --base-rev: give one".to_owned());
+    }
     Ok(out)
 }
 
@@ -1740,6 +1750,7 @@ fn main() {
         version,
         floor,
         base_rev,
+        no_base,
         stats,
         config_file,
         root,
@@ -1747,6 +1758,14 @@ fn main() {
     if version {
         println!("verus-count {}", env!("CARGO_PKG_VERSION"));
         return;
+    }
+    // A FLOOR held with no base would pass a lowered figure, a dropped
+    // gate or a loosened RLIMIT, so leaving the base off takes a flag.
+    if floor.is_some() && base_rev.is_none() && !no_base {
+        eprintln!(
+            "FAIL coverage floor: --floor with no --base-rev, so a lowered figure or a dropped gate would pass: give --base-rev REV, or --no-base for a local run or the change that adds the first FLOOR"
+        );
+        std::process::exit(1);
     }
     let root = root.unwrap_or_else(|| PathBuf::from("."));
     let config_file = config_file.unwrap_or_else(|| root.join("verus/count.toml"));
@@ -3905,7 +3924,19 @@ mod tests {
             })
         );
         assert_eq!(parse(&[]), Ok(Args::default()));
+        assert_eq!(
+            parse(&["--floor", "verus/FLOOR", "--no-base"]),
+            Ok(Args {
+                floor: Some("verus/FLOOR".into()),
+                no_base: true,
+                ..Args::default()
+            })
+        );
         for (args, want) in [
+            (
+                &["--no-base", "--base-rev", "HEAD^"][..],
+                "--no-base with --base-rev",
+            ),
             (&["--flor", "verus/FLOOR", "."][..], "unknown option --flor"),
             (&["-l", "."][..], "unknown option -l"),
             (&["verus/FLOOR", "."][..], "a second ROOT ."),

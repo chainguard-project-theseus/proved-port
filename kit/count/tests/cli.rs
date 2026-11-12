@@ -235,6 +235,71 @@ fn the_floor_file_is_the_configured_one_and_held_to_the_base() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A run that holds a FLOOR fails without a base (exit 1, naming
+/// `--no-base`), so leaving `--base-rev` off cannot skip the base's
+/// comparisons; it passes with `--base-rev` and with `--no-base`, and
+/// giving both is a usage error (exit 2).
+#[test]
+fn a_floor_without_a_base_fails_unless_no_base_says_so() {
+    let dir = std::env::temp_dir().join(format!("verus-count-cli-no-base-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("crates/a/src")).expect("mkdir");
+    fs::create_dir_all(dir.join("verus")).expect("mkdir");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(
+        dir.join("crates/a/src/lib.rs"),
+        "verus! {\npub fn v() {}\n}\npub fn o() {}\n",
+    )
+    .expect("write");
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}[floor]\npath = \"verus/FLOOR\"\n"),
+    )
+    .expect("write");
+    fs::write(
+        dir.join("verus/FLOOR"),
+        "functions 50.0\nlines 50.0\nchecked-functions 50.0\nchecked-lines 50.0\n",
+    )
+    .expect("write");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "crates", "verus"]);
+    git(&dir, &["commit", "-q", "-m", "floor"]);
+    let floor = dir.join("verus/FLOOR").to_string_lossy().into_owned();
+    for (args, code, want) in [
+        (
+            &["--floor", &floor][..],
+            1,
+            "FAIL coverage floor: --floor with no --base-rev, so a lowered figure or a dropped gate would pass: give --base-rev REV, or --no-base",
+        ),
+        (
+            &["--floor", &floor, "--no-base"][..],
+            0,
+            "ok coverage floor: functions verified 50.0%, at the floor",
+        ),
+        (
+            &["--floor", &floor, "--base-rev", "HEAD"][..],
+            0,
+            "ok coverage floor: functions verified 50.0%, at the floor",
+        ),
+        (
+            &["--floor", &floor, "--no-base", "--base-rev", "HEAD"][..],
+            2,
+            "--no-base with --base-rev: give one",
+        ),
+    ] {
+        let (got, out, err) = count(&dir, args);
+        assert!(
+            got == code && (out.contains(want) || err.contains(want)),
+            "{args:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A crate whose own Cargo.toml gains `publish = false` leaves the shipped
 /// tally, so with `--base-rev` it is a narrowing: it fails without a
 /// `[[narrowed]]` line and passes with one, for a `dir` crate and for a
