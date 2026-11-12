@@ -18,7 +18,8 @@ verus-count [--config FILE] [--list] [--floor FILE [--base-rev REV]] [--rlimit S
 
 ROOT is the repository root (default `.`) and FILE the configuration
 (default `ROOT/verus/count.toml`). `--list` prints one line per
-executable function; `--floor` holds the `shipped` row to the FLOOR
+executable function before the table, and changes nothing else: every
+check the other options name still runs; `--floor` holds the `shipped` row to the FLOOR
 file; `--base-rev` also holds FLOOR (and REACH, RLIMIT and the
 configuration) to that revision's copies, and fails when the revision
 does not resolve;

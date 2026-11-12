@@ -38,7 +38,8 @@
 //! `.`) and FILE the configuration (default `ROOT/verus/count.toml`);
 //! `--version` prints the counter's version.
 //! `--list` prints one line per executable function: crate, class, lines,
-//! file:line and name. `--floor FILE` fails the run when the `shipped`
+//! file:line and name, before the table; every check runs as without it.
+//! `--floor FILE` fails the run when the `shipped`
 //! row's verified share of functions or of lines, or its verified and
 //! discharged share, is below the figure FILE records (verus/FLOOR), and
 //! names the figure to record when the share has risen past it; FILE must
@@ -1911,10 +1912,6 @@ fn main() {
         if !token_mints(&root, names, &crates, &seams) {
             std::process::exit(1);
         }
-    }
-    if list {
-        fail_on_errors(c.errors);
-        return;
     }
     let shipped = report(&root, &cfg, &c, &unshipped, &tests);
     let mut failed = false;

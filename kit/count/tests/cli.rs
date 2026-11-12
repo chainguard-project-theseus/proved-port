@@ -636,3 +636,231 @@ fn a_symlinked_configuration_fails_the_run() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// One verified function `a::v` and one outside `verus!`, so every share is
+/// 50%: the sources, configuration, FLOOR and RLIMIT a ratchet case starts
+/// from, and the base it is compared with.
+const RATCHET_LIB: &str = "verus! {\npub fn v() {}\n}\npub fn o() {}\n";
+const RATCHET_CONFIG: &str = "[crates]\ndir = \"crates\"\n[floor]\npath = \"verus/FLOOR\"\n[rlimit]\npath = \"verus/RLIMIT\"\n";
+const RATCHET_FLOOR: &str =
+    "functions 50.0\nlines 50.0\nchecked-functions 50.0\nchecked-lines 50.0\n";
+const RATCHET_RLIMIT: &str = "max-share 65\n";
+
+/// Verus's `--time-expanded --output-json` statistics for crate `a`, with
+/// `a::v` using `used` of its rlimit count (30,000,000 at the default 10).
+fn ratchet_stats(used: u64) -> String {
+    format!(
+        r#"{{"times-ms":{{"smt":{{"smt-run-module-times":[{{"module":"m","rlimit":0,"function-breakdown":[{{"function":"a::v","rlimit":{used}}}]}}]}}}},"verification-results":{{"success":true,"verified":1,"errors":0}}}}"#
+    )
+}
+
+/// The ratchets a port's verus check runs, through the command line it
+/// runs them with (`--floor verus/FLOOR --rlimit STATS --base-rev REV`):
+/// a coverage figure lowered with and without a `lowered` line
+/// (`Figures::lowering`), a function over its headroom (`rlimit::check`),
+/// an RLIMIT file loosened (`rlimit::check_ratchet`), an rlimit attribute
+/// raised with and without an `rlimit-raised` line (`rlimit::check_raised`),
+/// and an `[rlimit] path` moved to a loosened file, which is still held to
+/// the base's. `--list` adds its rows and every check still runs.
+#[test]
+fn the_ratchets_hold_through_the_command_line() {
+    let dir = std::env::temp_dir().join(format!("verus-count-cli-ratchet-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("crates/a/src")).expect("mkdir");
+    fs::create_dir_all(dir.join("verus")).expect("mkdir");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    let lib = dir.join("crates/a/src/lib.rs");
+    let base = |dir: &Path| {
+        fs::write(&lib, RATCHET_LIB).expect("write");
+        fs::write(dir.join("verus/count.toml"), RATCHET_CONFIG).expect("write");
+        fs::write(dir.join("verus/FLOOR"), RATCHET_FLOOR).expect("write");
+        fs::write(dir.join("verus/RLIMIT"), RATCHET_RLIMIT).expect("write");
+        let _ = fs::remove_file(dir.join("verus/RLIMIT2"));
+    };
+    base(&dir);
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "crates", "verus"]);
+    git(&dir, &["commit", "-q", "-m", "base"]);
+    let stats = dir.join("stats.json");
+    let raised = "verus! {\n#[verifier::rlimit(20)]\npub fn v() {}\n}\npub fn o() {}\n";
+    let moved = RATCHET_CONFIG.replace("verus/RLIMIT", "verus/RLIMIT2");
+    let row = "a\tVerified\t1\tcrates/a/src/lib.rs:2\tv";
+    for (case, edits, used, list, code, wants) in [
+        (
+            "as committed",
+            &[][..],
+            1_000_000,
+            false,
+            0,
+            &[
+                "ok coverage floor: functions verified 50.0%, at the floor",
+                "ok rlimit headroom: 1 functions, max-share 65.0%",
+            ][..],
+        ),
+        (
+            "a figure lowered with no lowered line",
+            &[(
+                "verus/FLOOR",
+                RATCHET_FLOOR.replace("functions 50.0\nlines", "functions 40.0\nlines"),
+            )][..],
+            1_000_000,
+            false,
+            1,
+            &[
+                "FAIL coverage floor: verus/FLOOR lowers functions from 50.0% to 40.0% with no `lowered functions 40.0 <reason>` line",
+            ][..],
+        ),
+        (
+            "a figure lowered with a lowered line",
+            &[(
+                "verus/FLOOR",
+                RATCHET_FLOOR.replace("functions 50.0\nlines", "functions 40.0\nlines")
+                    + "lowered functions 40.0 o left verus! for a reason\n",
+            )][..],
+            1_000_000,
+            false,
+            0,
+            &["ok coverage floor: functions lowered from 50.0% to 40.0%, with a reason"][..],
+        ),
+        (
+            "a function over its headroom",
+            &[][..],
+            30_000_000,
+            false,
+            1,
+            &[
+                "FAIL rlimit headroom: a::v uses 100.0% of its rlimit (30000000 of 30000000), above 65.0% (verus/RLIMIT's max-share)",
+            ][..],
+        ),
+        (
+            "max-share raised",
+            &[("verus/RLIMIT", "max-share 70\n".to_owned())][..],
+            1_000_000,
+            false,
+            1,
+            &["FAIL rlimit headroom: verus/RLIMIT raises max-share from 65.0% to 70.0%"][..],
+        ),
+        (
+            "an allow line added",
+            &[("verus/RLIMIT", "max-share 65\nallow a::v 90\n".to_owned())][..],
+            24_000_000,
+            false,
+            1,
+            &[
+                "FAIL rlimit headroom: verus/RLIMIT allows a::v, which the base does not; restore its headroom instead",
+            ][..],
+        ),
+        (
+            "max-share lowered",
+            &[("verus/RLIMIT", "max-share 60\n".to_owned())][..],
+            1_000_000,
+            false,
+            0,
+            &["ok rlimit headroom: 1 functions, max-share 60.0%"][..],
+        ),
+        (
+            "an rlimit raised with no rlimit-raised line",
+            &[("crates/a/src/lib.rs", raised.to_owned())][..],
+            1_000_000,
+            false,
+            1,
+            &[
+                "FAIL rlimit headroom: crates/a/src/lib.rs:3 raises a::v's rlimit from 10 to 20 with no new `rlimit-raised a::v 20 <reason>` line in verus/RLIMIT",
+            ][..],
+        ),
+        (
+            "an rlimit raised with an rlimit-raised line",
+            &[
+                ("crates/a/src/lib.rs", raised.to_owned()),
+                (
+                    "verus/RLIMIT",
+                    "max-share 65\nrlimit-raised a::v 20 it uses 40M on its own prover\n"
+                        .to_owned(),
+                ),
+            ][..],
+            1_000_000,
+            false,
+            0,
+            &[
+                "ok rlimit headroom: crates/a/src/lib.rs:3 raises a::v's rlimit from 10 to 20, with a reason",
+            ][..],
+        ),
+        (
+            "[rlimit] path moved to a file that raises max-share",
+            &[
+                ("verus/count.toml", moved.clone()),
+                ("verus/RLIMIT2", "max-share 70\n".to_owned()),
+            ][..],
+            1_000_000,
+            false,
+            1,
+            &["FAIL rlimit headroom: verus/RLIMIT2 raises max-share from 65.0% to 70.0%"][..],
+        ),
+        (
+            "--list over a function over its headroom",
+            &[][..],
+            30_000_000,
+            true,
+            1,
+            &[row, "FAIL rlimit headroom: a::v uses 100.0% of its rlimit"][..],
+        ),
+        (
+            "--list over a figure lowered with no lowered line",
+            &[(
+                "verus/FLOOR",
+                RATCHET_FLOOR.replace("functions 50.0\nlines", "functions 40.0\nlines"),
+            )][..],
+            1_000_000,
+            true,
+            1,
+            &[
+                row,
+                "FAIL coverage floor: verus/FLOOR lowers functions from 50.0%",
+            ][..],
+        ),
+        (
+            "--list as committed",
+            &[][..],
+            1_000_000,
+            true,
+            0,
+            &[
+                row,
+                "ok coverage floor: functions verified 50.0%",
+                "ok rlimit headroom: 1 functions",
+            ][..],
+        ),
+    ] {
+        base(&dir);
+        for (path, text) in edits {
+            fs::write(dir.join(path), text).expect("write");
+        }
+        fs::write(&stats, ratchet_stats(used)).expect("write");
+        let mut args = vec![
+            "--floor".to_owned(),
+            dir.join("verus/FLOOR").to_string_lossy().into_owned(),
+            "--rlimit".to_owned(),
+            stats.to_string_lossy().into_owned(),
+            "--base-rev".to_owned(),
+            "HEAD".to_owned(),
+        ];
+        if list {
+            args.insert(0, "--list".to_owned());
+        }
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (got, out, err) = count(&dir, &args);
+        let missing: Vec<&&str> = wants
+            .iter()
+            .filter(|w| !out.contains(*w) && !err.contains(*w))
+            .collect();
+        assert!(
+            got == code && missing.is_empty(),
+            "{case}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, with {missing:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
