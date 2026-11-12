@@ -41,14 +41,16 @@
 //! file:line and name. `--floor FILE` fails the run when the `shipped`
 //! row's verified share of functions or of lines, or its verified and
 //! discharged share, is below the figure FILE records (verus/FLOOR), and
-//! names the figure to record when the share has risen past it.
-//! `--base-rev REV` also fails a figure FILE sets below `REV:verus/FLOOR`'s
-//! without a new `lowered` line for it, and fails when REV does not
-//! resolve. With `[floor] renamed_from`, REV's copy may give the checked
-//! figures under that older prefix, so the change that renames them
-//! compares with its base. It also fails when the configuration removes
-//! or narrows a gate `REV`'s copy of it runs ([`check_config`]), since a
-//! gate whose section is gone does not run at all.
+//! names the figure to record when the share has risen past it; FILE must
+//! be the configuration's `[floor] path`. `--base-rev REV` also fails a
+//! figure FILE sets below the figure in REV's FLOOR (at REV's `[floor]
+//! path`) without a new `lowered` line for it, and fails when REV does
+//! not resolve. With `[floor] renamed_from`, REV's copy may give the
+//! checked figures under that older prefix, so the change that renames
+//! them compares with its base. It also fails when the configuration
+//! removes or narrows a gate `REV`'s copy of it runs with no new
+//! `[[narrowed]]` line naming the change ([`check_config`]), since a gate
+//! whose section is gone does not run at all.
 //!
 //! With `[recursion]`, it checks recursion (verus/theorems/RN1.md): it fails on a
 //! cycle of direct calls, within one file, through a function of a shipped
@@ -1531,24 +1533,64 @@ fn shown(t: u32) -> String {
 /// Whether a crate ships: every crate but one whose Cargo.toml says
 /// `publish = false` (pcre3-testdata, the conformance harness's reader).
 fn ships(krate: &Path) -> bool {
-    fs::read_to_string(krate.join("Cargo.toml")).map_or(true, |t| {
-        !t.lines()
-            .any(|l| l.split_whitespace().collect::<String>() == "publish=false")
-    })
+    fs::read_to_string(krate.join("Cargo.toml")).map_or(true, |t| !unpublished(&t))
+}
+
+/// Whether the Cargo.toml `text` says `publish = false`.
+fn unpublished(text: &str) -> bool {
+    text.lines()
+        .any(|l| l.split_whitespace().collect::<String>() == "publish=false")
 }
 
 /// A crate the counter reads: its name, its directory (holding `src/`),
-/// and whether it ships ([`ships`], or the configuration's `ships`).
+/// whether it ships ([`ships`], or the configuration's `ships`), and
+/// whether its Cargo.toml decides that (`by_rule`: a `dir` crate, or a
+/// member without `ships`).
 struct Krate {
     name: String,
     dir: PathBuf,
     ships: bool,
+    by_rule: bool,
 }
 
 /// The crates `c` names under `root`, in reading order: each
 /// subdirectory of `[crates] dir` with a `src/`, in path order, named for
 /// the subdirectory, then each of `[crates] members`.
 fn crate_dirs(root: &Path, c: &Config) -> Result<Vec<Krate>, String> {
+    // `--base-rev` compares crates by their configured paths
+    // (`Config::narrowed_from`), so two spellings of one directory, through
+    // `..`, a symlink or a path from `/`, would let a crate the base read
+    // pass as a new one.
+    for p in c
+        .crates
+        .dir
+        .iter()
+        .chain(c.crates.members.iter().map(|m| &m.path))
+    {
+        let path = Path::new(p);
+        if path.has_root() {
+            return Err(format!(
+                "[crates] path {p} is not relative: give each crate's directory as one path under {}",
+                root.display()
+            ));
+        }
+        if path
+            .components()
+            .any(|k| k == std::path::Component::ParentDir)
+        {
+            return Err(format!(
+                "[crates] path {p} has a `..`: give each crate's directory as one path under {}",
+                root.display()
+            ));
+        }
+        if let Some(link) = symlink_in(root, path) {
+            return Err(format!(
+                "[crates] path {p} passes through {}, a symlink: give each crate's directory as one path under {}",
+                link.display(),
+                root.display()
+            ));
+        }
+    }
     let mut out = Vec::new();
     if let Some(d) = &c.crates.dir {
         let Ok(rd) = fs::read_dir(root.join(d)) else {
@@ -1567,6 +1609,7 @@ fn crate_dirs(root: &Path, c: &Config) -> Result<Vec<Krate>, String> {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default(),
                 ships: ships(&p),
+                by_rule: true,
                 dir: p,
             }
         }));
@@ -1579,8 +1622,41 @@ fn crate_dirs(root: &Path, c: &Config) -> Result<Vec<Krate>, String> {
         out.push(Krate {
             name: m.name.clone(),
             ships: m.ships.unwrap_or_else(|| ships(&p)),
+            by_rule: m.ships.is_none(),
             dir: p,
         });
+    }
+    // A crate of `dir` that is a link, or sources reached through one,
+    // would read another crate's code under a new name, as a configured
+    // path through a symlink would.
+    for k in &out {
+        let rel = k.dir.strip_prefix(root).unwrap_or(&k.dir);
+        if let Some(link) = symlink_in(root, rel).or_else(|| symlink_below(root, &rel.join("src")))
+        {
+            return Err(format!(
+                "[crates] crate {} reads {}, a symlink: give each crate's directory and sources as files under {}",
+                k.name,
+                link.display(),
+                root.display()
+            ));
+        }
+    }
+    // The tally and the shipped row go by crate name, so a name read
+    // twice would let one `ships = false` take both out, and a directory
+    // read twice would count its crate twice.
+    for (i, k) in out.iter().enumerate() {
+        let dir = fs::canonicalize(&k.dir).unwrap_or_else(|_| k.dir.clone());
+        if let Some(j) = out[..i].iter().find(|j| {
+            j.name == k.name || fs::canonicalize(&j.dir).unwrap_or_else(|_| j.dir.clone()) == dir
+        }) {
+            return Err(format!(
+                "[crates] reads crate {} ({}) and crate {} ({}): give each crate one name and one directory",
+                j.name,
+                j.dir.display(),
+                k.name,
+                k.dir.display()
+            ));
+        }
     }
     Ok(out)
 }
@@ -1714,6 +1790,7 @@ fn main() {
         name,
         dir: k,
         ships,
+        ..
     } in &crates
     {
         c.krate = name.clone();
@@ -1847,6 +1924,32 @@ fn main() {
             &fs::read_to_string(&f).unwrap_or_else(|e| usage(format!("{}: {e}", f.display()))),
             &f.display().to_string(),
         );
+        // The base's FLOOR is read at the base configuration's `[floor]
+        // path`, so that path must be the file a head run reads: else one
+        // change could point it at a file no run holds, and every later
+        // run would compare with that file, or with none. Nor may the path
+        // pass through a symlink, as the configuration may not
+        // (`check_config`): once a link merged, the base's copy would be
+        // the link's text.
+        if let Some(link) = symlink_in(&root, Path::new(&cfg.floor.path)) {
+            usage(format!(
+                "FAIL coverage floor: [floor] path {} passes through {}, a symlink, so a later base's copy would be the link's text: give `path` the file itself",
+                cfg.floor.path,
+                link.display()
+            ));
+        }
+        match (
+            fs::canonicalize(&f),
+            fs::canonicalize(root.join(&cfg.floor.path)),
+        ) {
+            (Ok(a), Ok(b)) if a == b => {}
+            _ => usage(format!(
+                "FAIL coverage floor: --floor {} is not {}'s [floor] path {}: give `path` the file the run holds",
+                f.display(),
+                root.display(),
+                cfg.floor.path
+            )),
+        }
         if let Some(name) = fig.missing(&head.floor) {
             usage(format!("{}: want a {name} figure", f.display()));
         }
@@ -1889,9 +1992,13 @@ fn main() {
     }
 }
 
-/// Holds the configuration to `rev`'s copy ([`Config::narrowed_from`]):
-/// exits 1 when it removes or narrows a gate the base runs, and 2 when
-/// the base's copy does not parse. The base's copy is read at the
+/// Holds the configuration to `rev`'s copy ([`Config::explain`]): exits 1
+/// when it removes or narrows a gate the base runs with no new
+/// `[[narrowed]]` line naming that change, or has a new line that names
+/// no narrowing, and 2 when the base's copy does not parse. A crate whose
+/// Cargo.toml gained `publish = false` ([`newly_unpublished`]) is such a
+/// narrowing too. Each named
+/// narrowing is printed with its reason, so review sees it. The base's copy is read at the
 /// configuration's path under `root`, as the repository names it, or at
 /// `verus/count.toml` when the configuration lies outside `root`. A
 /// configuration under `root` reached through a symlink exits 2: the
@@ -1928,19 +2035,183 @@ fn check_config(root: &Path, file: &Path, cfg: &Config, rev: &str) -> Option<Con
         eprintln!("FAIL configuration: {rev}:{rel}: {e}");
         std::process::exit(2);
     });
-    let narrowed = cfg.narrowed_from(&base);
-    for n in &narrowed {
-        eprintln!("FAIL configuration: {rel}: {n}, where {rev}:{rel} runs it: restore it");
+    let crate_changes = base_dir_narrowed(root, cfg, &base, rev)
+        .and_then(|mut v| {
+            v.extend(newly_unpublished(root, cfg, &base, rev)?);
+            Ok(v)
+        })
+        .unwrap_or_else(|e| {
+            eprintln!("FAIL configuration: {e}");
+            std::process::exit(2);
+        });
+    let explained = cfg.explain(&base, crate_changes);
+    for (n, reason) in &explained.named {
+        println!("ok configuration: {rel}: {n}, with a reason: {reason}");
     }
-    if !narrowed.is_empty() {
+    for n in &explained.unnamed {
+        eprintln!(
+            "FAIL configuration: {rel}: {n}, where {rev}:{rel} runs it: restore it, or give it a new [[narrowed]] line with change = {:?} and a reason",
+            n.change
+        );
+    }
+    for change in &explained.stale {
+        eprintln!(
+            "FAIL configuration: {rel}: the [[narrowed]] line for {change:?} names no change from {rev}:{rel}: remove it, or name the change as this run prints it"
+        );
+    }
+    if !explained.unnamed.is_empty() || !explained.stale.is_empty() {
         std::process::exit(1);
     }
-    println!("ok configuration: {rel} keeps every gate {rev}:{rel} runs");
+    if explained.named.is_empty() {
+        println!("ok configuration: {rel} keeps every gate {rev}:{rel} runs");
+    } else {
+        println!("ok configuration: {rel} keeps every other gate {rev}:{rel} runs");
+    }
     Some(base)
 }
 
+/// The crates that leave the shipped tally because their own Cargo.toml
+/// gained `publish = false` since `rev`: each crate the head reads whose
+/// Cargo.toml decides that it ships and says it does not, where `base`
+/// read the same crate by that rule too, at the same directory or under
+/// the same name (a member moved, or a crate of `dir` made a member), and
+/// `rev`'s Cargo.toml there does not say so. The configuration compares
+/// the rest: a crate the head no longer reads, or whose `ships` it sets,
+/// is a narrowing of [`Config::narrowed_from`]'s or [`base_dir_narrowed`]'s.
+/// A crate `rev` lacks under its name and at its directory is new, with
+/// nothing to compare. Each is a narrowing the `[[narrowed]]` lines name.
+fn newly_unpublished(
+    root: &Path,
+    cfg: &Config,
+    base: &Config,
+    rev: &str,
+) -> Result<Vec<config::Narrowing>, String> {
+    // A head whose crates do not read fails the run later, with the reason.
+    let Ok(crates) = crate_dirs(root, cfg) else {
+        return Ok(Vec::new());
+    };
+    let in_base_dir = match &base.crates.dir {
+        Some(d) => base_dir_crates(root, rev, d)?,
+        None => Vec::new(),
+    };
+    let mut out = Vec::new();
+    for k in crates.iter().filter(|k| k.by_rule && !k.ships) {
+        let rel = crate_path(root, k);
+        // Where the base read this crate by the rule: at its directory, or
+        // under its name.
+        let mut at = Vec::new();
+        if base.reads_by_rule(&rel) {
+            at.push(rel.clone());
+        }
+        match base.crates.members.iter().find(|m| m.name == k.name) {
+            Some(m) if m.ships.is_none() => at.push(m.path.clone()),
+            Some(_) => {}
+            None => {
+                if let Some(d) = &base.crates.dir
+                    && in_base_dir.contains(&k.name)
+                {
+                    at.push(format!("{d}/{}", k.name));
+                }
+            }
+        }
+        for p in at {
+            let manifest = config::normal(&p).join("Cargo.toml");
+            if let Some(text) = base_file(root, rev, &manifest.to_string_lossy())?
+                && !unpublished(&text)
+            {
+                out.push(config::Narrowing {
+                    change: format!(
+                        "[crates] crate {:?} at {rel:?} gains publish = false",
+                        k.name
+                    ),
+                    effect: "so it no longer counts as shipped".into(),
+                });
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The crates `rev` read through its `[crates] dir` that the head no
+/// longer reads as it did: with the same `dir`, a crate the head reads
+/// neither under its name nor at its directory (`is no longer read`, as a
+/// member dropped is), or reads under its name somewhere else (`moves`, as
+/// a member moved does); and, whatever the head's `dir`, one the head reads
+/// under its name as a member with `ships` set to anything but `true`
+/// where the configuration compares nothing (a member at a path `base`
+/// neither names nor reads through `dir`). The configuration alone cannot
+/// see these: it names `dir`, not the crates in it. So a `dir` crate
+/// renamed is the old crate no longer read and a new one, as a member
+/// renamed to a new path is.
+fn base_dir_narrowed(
+    root: &Path,
+    cfg: &Config,
+    base: &Config,
+    rev: &str,
+) -> Result<Vec<config::Narrowing>, String> {
+    let Some(d) = &base.crates.dir else {
+        return Ok(Vec::new());
+    };
+    let Ok(crates) = crate_dirs(root, cfg) else {
+        return Ok(Vec::new());
+    };
+    let same_dir = cfg.crates.dir.as_ref().map(|h| config::normal(h)) == Some(config::normal(d));
+    let mut out = Vec::new();
+    for name in base_dir_crates(root, rev, d)? {
+        let was = config::normal(d).join(&name);
+        let was = was.to_string_lossy();
+        if crates.iter().any(|k| crate_path(root, k) == was) {
+            continue;
+        }
+        let Some(k) = crates.iter().find(|k| k.name == name) else {
+            if same_dir {
+                out.push(config::Narrowing {
+                    change: format!("[crates] crate {name:?} at {was:?} is no longer read"),
+                    effect: "so it is no longer read".into(),
+                });
+            }
+            continue;
+        };
+        let now = crate_path(root, k);
+        if same_dir {
+            out.push(config::Narrowing {
+                change: format!("[crates] crate {name:?} moves from {was:?} to {now:?}"),
+                effect: "so the crate it read may no longer be read".into(),
+            });
+        }
+        let compared = base
+            .crates
+            .members
+            .iter()
+            .any(|m| config::normal(&m.path) == config::normal(&now))
+            || base.reads_by_rule(&now);
+        if !k.by_rule && !k.ships && !compared {
+            out.push(config::Narrowing {
+                change: format!(
+                    "[crates] member {name:?} at {now:?} changes ships from unset to false"
+                ),
+                effect: "so the crate the base read there may no longer count as shipped".into(),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// `k`'s directory relative to `root`, as the narrowings name it: `.` for
+/// the root.
+fn crate_path(root: &Path, k: &Krate) -> String {
+    let rel = k.dir.strip_prefix(root).unwrap_or(&k.dir);
+    let rel = config::normal(&rel.to_string_lossy());
+    if rel.as_os_str().is_empty() {
+        ".".into()
+    } else {
+        rel.to_string_lossy().into_owned()
+    }
+}
+
 /// The first of `rel`'s paths under `root` (`verus`, then
-/// `verus/count.toml`) that is a symlink.
+/// `verus/count.toml` or `verus/FLOOR`) that is a symlink.
 fn symlink_in(root: &Path, rel: &Path) -> Option<PathBuf> {
     let mut at = PathBuf::new();
     rel.components().find_map(|c| {
@@ -1949,6 +2220,25 @@ fn symlink_in(root: &Path, rel: &Path) -> Option<PathBuf> {
             .is_ok_and(|m| m.file_type().is_symlink())
             .then(|| at.clone())
     })
+}
+
+/// The first path at or below `rel` under `root`, in path order, that is
+/// a symlink: `rel` itself, or a file or directory under it.
+fn symlink_below(root: &Path, rel: &Path) -> Option<PathBuf> {
+    let meta = fs::symlink_metadata(root.join(rel)).ok()?;
+    if meta.file_type().is_symlink() {
+        return Some(rel.to_path_buf());
+    }
+    if !meta.is_dir() {
+        return None;
+    }
+    let mut entries: Vec<PathBuf> = fs::read_dir(root.join(rel))
+        .ok()?
+        .flatten()
+        .map(|e| rel.join(e.file_name()))
+        .collect();
+    entries.sort();
+    entries.iter().find_map(|e| symlink_below(root, e))
 }
 
 /// The revision `--base-rev` names, and its copy of the configuration
@@ -2373,32 +2663,12 @@ fn print_row(name: &str, t: &Tally) {
 /// uid's checkout git refuses, an empty name) is an error, and only a
 /// resolved commit without the file is `None`.
 fn base_file(root: &Path, rev: &str, file: &str) -> Result<Option<String>, String> {
-    let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(["-c", "safe.directory=*"])
-            .args(args)
-            .output()
-            .map_err(|e| format!("git: {e}"))
-    };
-    let commit = git(&[
-        "rev-parse",
-        "--verify",
-        "--quiet",
-        &format!("{rev}^{{commit}}"),
-    ])?;
-    if !commit.status.success() {
-        return Err(format!(
-            "base revision {rev:?} does not resolve to a commit, so {file} cannot be compared with it"
-        ));
-    }
-    let commit = String::from_utf8_lossy(&commit.stdout).trim().to_owned();
+    let commit = base_commit(root, rev, file)?;
     let path = format!("{commit}:{file}");
-    if !git(&["cat-file", "-e", &path])?.status.success() {
+    if !git_in(root, &["cat-file", "-e", &path])?.status.success() {
         return Ok(None);
     }
-    let shown = git(&["show", &path])?;
+    let shown = git_in(root, &["show", &path])?;
     if !shown.status.success() {
         return Err(format!(
             "git show {path}: {}",
@@ -2406,6 +2676,75 @@ fn base_file(root: &Path, rev: &str, file: &str) -> Result<Option<String>, Strin
         ));
     }
     Ok(Some(String::from_utf8_lossy(&shown.stdout).into_owned()))
+}
+
+/// The crates `rev`'s tree holds under `dir`, as [`crate_dirs`] reads a
+/// `dir` at the head: each subdirectory with a `src/` directory, by name,
+/// in path order. A `dir` the tree lacks holds none.
+fn base_dir_crates(root: &Path, rev: &str, dir: &str) -> Result<Vec<String>, String> {
+    let commit = base_commit(root, rev, dir)?;
+    let dir = config::normal(dir).to_string_lossy().into_owned();
+    let tree = format!("{commit}:{dir}");
+    if !git_in(root, &["cat-file", "-e", &tree])?.status.success() {
+        return Ok(Vec::new());
+    }
+    let listed = git_in(root, &["ls-tree", "-z", "-d", "--name-only", &tree])?;
+    if !listed.status.success() {
+        return Err(format!(
+            "git ls-tree {tree}: {}",
+            String::from_utf8_lossy(&listed.stderr).trim()
+        ));
+    }
+    let mut out = Vec::new();
+    for name in String::from_utf8_lossy(&listed.stdout)
+        .split('\0')
+        .filter(|n| !n.is_empty())
+    {
+        let src = Path::new(&dir).join(name).join("src");
+        let kind = git_in(
+            root,
+            &[
+                "cat-file",
+                "-t",
+                &format!("{commit}:{}", src.to_string_lossy()),
+            ],
+        )?;
+        if kind.status.success() && String::from_utf8_lossy(&kind.stdout).trim() == "tree" {
+            out.push(name.to_owned());
+        }
+    }
+    Ok(out)
+}
+
+/// The commit `rev` names under `root`'s repository, failing closed as
+/// [`base_file`] does, for reading `what` there.
+fn base_commit(root: &Path, rev: &str, what: &str) -> Result<String, String> {
+    let commit = git_in(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{rev}^{{commit}}"),
+        ],
+    )?;
+    if !commit.status.success() {
+        return Err(format!(
+            "base revision {rev:?} does not resolve to a commit, so {what} cannot be compared with it"
+        ));
+    }
+    Ok(String::from_utf8_lossy(&commit.stdout).trim().to_owned())
+}
+
+/// `git ARGS` in `root`'s repository, whoever owns the checkout.
+fn git_in(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["-c", "safe.directory=*"])
+        .args(args)
+        .output()
+        .map_err(|e| format!("git: {e}"))
 }
 
 /// The figures the FLOOR file holds, and the file: the verified share of
@@ -2999,7 +3338,17 @@ fn entry_reach(
 ) -> bool {
     let (fns, traits, aliases) = (&c.fns, &c.traits, &c.aliases);
     let list = r.path.as_str();
-    let text = fs::read_to_string(root.join(list)).unwrap_or_default();
+    // A base revision's REACH is read at its `[reach] path`, so the file
+    // must exist wherever the section names it, rows or none.
+    let text = match fs::read_to_string(root.join(list)) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                "FAIL entry reach: {list}: {e}: [reach] names it, so it must exist, if only with no rows"
+            );
+            return false;
+        }
+    };
     let funcs = funcs(fns);
     let shipped: std::collections::BTreeSet<&str> = fns
         .iter()
@@ -5105,6 +5454,17 @@ verus! {
         )
         .unwrap();
         fs::write(root.join("Cargo.toml"), "[package]\npublish = false\n").unwrap();
+        std::os::unix::fs::symlink("crates/a", root.join("alias")).unwrap();
+        std::os::unix::fs::symlink("crates", root.join("linked")).unwrap();
+        // Links a configured path does not name: a crate of a `dir` that is
+        // one, a `src` that is one, and a source file that is one.
+        for d in ["more/real/src", "other", "deep/src"] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        std::os::unix::fs::symlink("../crates/a", root.join("more/alias")).unwrap();
+        std::os::unix::fs::symlink("../crates/a/src", root.join("other/src")).unwrap();
+        std::os::unix::fs::symlink("../../crates/a/src/lib.rs", root.join("deep/src/lib.rs"))
+            .unwrap();
         let read = |text: &str| -> Vec<(String, bool)> {
             crate_dirs(&root, &Config::parse(text).expect("parses"))
                 .expect("reads")
@@ -5135,6 +5495,82 @@ verus! {
         );
         let got = crate_dirs(&root, &Config::parse("[crates]\ndir = \"gone\"\n").unwrap());
         assert!(got.is_err(), "a missing dir: got = Ok, wanted = an error");
+        // A crate read twice, under one name or from one directory, is
+        // refused: the tally goes by name, so `ships = false` on the second
+        // would take the first out of the shipped row too.
+        for (text, want) in [
+            (
+                "[crates]\ndir = \"crates\"\nmembers = [{ name = \"a\", path = \"crates/a\", ships = false }]\n",
+                "reads crate a (",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"a\", path = \"crates/a\" }, { name = \"a\", path = \"crates/b\" }]\n",
+                "reads crate a (",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"x\", path = \"crates/a\" }, { name = \"y\", path = \"crates/a\" }]\n",
+                "reads crate x (",
+            ),
+            // Nor is a path that spells a directory another way, through
+            // `..` or a symlink, which the base comparison would take for
+            // a new crate.
+            (
+                "[crates]\nmembers = [{ name = \"r\", path = \"crates/../crates/a\" }]\n",
+                "[crates] path crates/../crates/a has a `..`",
+            ),
+            (
+                "[crates]\ndir = \"crates/..\"\n",
+                "[crates] path crates/.. has a `..`",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"r\", path = \"alias\" }]\n",
+                "[crates] path alias passes through alias, a symlink",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"r\", path = \"linked/a\" }]\n",
+                "[crates] path linked/a passes through linked, a symlink",
+            ),
+            (
+                "[crates]\ndir = \"linked\"\n",
+                "[crates] path linked passes through linked, a symlink",
+            ),
+            (
+                "[crates]\ndir = \"more\"\n",
+                "[crates] crate alias reads more/alias, a symlink",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"o\", path = \"other\" }]\n",
+                "[crates] crate o reads other/src, a symlink",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"d\", path = \"deep\" }]\n",
+                "[crates] crate d reads deep/src/lib.rs, a symlink",
+            ),
+        ] {
+            let got = crate_dirs(&root, &Config::parse(text).expect("parses"));
+            assert!(
+                got.as_ref().is_err_and(|e| e.contains(want)),
+                "{text:?}: got = {:?}, wanted = an error with {want:?}",
+                got.map(|k| k.into_iter().map(|k| k.name).collect::<Vec<_>>())
+            );
+        }
+        // A path from `/`, even to a crate under the root, is refused:
+        // `root.join` would read it while it compares unequal to the base's
+        // relative path.
+        let abs = root.join("crates/a").to_string_lossy().into_owned();
+        let got = crate_dirs(
+            &root,
+            &Config::parse(&format!(
+                "[crates]\nmembers = [{{ name = \"r\", path = {abs:?} }}]\n"
+            ))
+            .expect("parses"),
+        );
+        let want = format!("[crates] path {abs} is not relative");
+        assert!(
+            got.as_ref().is_err_and(|e| e.contains(&want)),
+            "an absolute member path: got = {:?}, wanted = an error with {want:?}",
+            got.map(|k| k.into_iter().map(|k| k.name).collect::<Vec<_>>())
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }

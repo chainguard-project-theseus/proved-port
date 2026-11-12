@@ -36,9 +36,29 @@ configuration turns off or narrows a gate `REV`'s copy runs: a
 `[recursion]`, `[reach]`, `[inputs]` or `[mints]` section removed; a
 `[reach]` `exports_macro`, `fn_ptr_macro` or `conversion` removed or
 renamed; an `[inputs]` crate or root removed or `lazy` turned off; a
-`[crates]` `dir` removed or changed, a member removed or its `ships`
-changed to anything but `true`; or a `test_cfgs` or `verus_features`
-name added. Renaming a table or a mint is not a narrowing. The base's
+`[crates]` `dir` removed or changed, a member removed, moved to another
+`path`, or its `ships` changed to anything but `true` (each compared on
+its own, so a member that moves and unships makes two narrowings, and
+also by path: whatever the head reads at a crate the base read, a
+member under any name or a `dir` it sits in, which reads it with
+`ships` unset, so a rename, a member moved onto a crate of the base's
+`dir`, and a crate handed between `dir` and members are each compared);
+a crate of the base's `dir` (each subdirectory of it with a `src/` in
+the base's tree) that the head, with the same `dir`, reads neither at
+its directory nor under its name, as a member removed is, or reads under
+its name somewhere else, as a member moved is, or reads as a member
+with `ships` set to anything but `true` at a path the base's
+configuration does not compare;
+a `test_cfgs`, `test_features`
+or `verus_features` name added; a `stand_ins` pair added; or a crate
+whose own Cargo.toml gains `publish = false`, where the base read it
+with its Cargo.toml deciding whether it ships (a `dir` crate, or a
+member without `ships`), at the same directory or under the same name,
+and the base's Cargo.toml there does not say so. A crate the base read
+under no name and at no directory is new, with nothing to compare: so a
+`dir` crate whose directory is renamed is the old crate no longer read
+and a new crate, as a member renamed to a new path is. Renaming a table
+or a mint is not a narrowing. The base's
 copy is read at the configuration's path under ROOT, as the repository
 names it (`verus/count.toml` when `--config` names a file outside ROOT);
 a base with none, the change that adopts the counter, prints `ok
@@ -50,14 +70,57 @@ through it. An in-ROOT `--config` at a path the base lacks still has
 nothing to compare: that is a Makefile edit, the same file that carries
 `--base-rev`.
 
+A narrowing made on purpose (a root that moves with its function, a
+crate directory renamed, a gate a port retires) is named the way FLOOR
+names a lowered figure: a `[[narrowed]]` line whose `change` is the
+narrowing as the failing run prints it, before `, so ...`, and whose
+`reason` says why.
+
+```toml
+[[narrowed]]
+change = "[inputs] roots drops Regex::new in crates/pcre3/src/regex.rs"
+reason = "Regex::new moved to builder.rs, which the new root names"
+```
+
+The run then prints `ok configuration: ...: <the narrowing>, with a
+reason: <reason>`, so review sees it. As with FLOOR's `lowered` lines, a
+line the base already has covers nothing new, so a later narrowing of
+the same kind needs its own; such a line stays as history and is not
+checked. A narrowing made again with the same text (a test cfg dropped
+and added back, a section restored and retired again) takes one more
+line with that `change` than the base has; a history line reworded is
+still history. FLOOR does not count its lines: a figure lowered again to
+a value a base `lowered` line already names has no new line to give, so
+lowering it there takes an earlier change that removes the old line. A new line that names no narrowing of the base fails the
+run (exit 1), and one with no reason does not parse (exit 2).
+
+There is no line for a base copy the counter cannot read: a kit release
+that drops or renames a key makes the port's re-sync exit 2 against
+every base that still has it. Such a change runs without `--base-rev`,
+and then with no base comparison at all, for the configuration, FLOOR,
+RLIMIT or REACH, so it needs a maintainer's review in their place.
+
 The base's FLOOR, RLIMIT and REACH are read at the paths the base's
 configuration gives them (`[floor] path`, `[rlimit] path`, `[reach]
 path`), so moving one of those files, or pointing its key at a path the
-base lacks, still compares the head's file with the base's. A file
-whose section the base's configuration has, but the base lacks, fails
-the run (exit 2 for FLOOR and RLIMIT, 1 for REACH). With no base
-configuration, or no `[reach]` in it, the head's path is read, and a
-base without the file prints `ok ...: REV has no ... to compare with`.
+base lacks, still compares the head's file with the base's. So that a
+base path is always a file some run read: `--floor FILE` must be ROOT's
+`[floor] path` (exit 2 otherwise, compared after resolving both), a
+`[floor] path` through a symlink fails the run (exit 2), as a
+configuration through one does, and a
+`[reach]` whose file is missing fails the run (exit 1; the file may
+hold no rows). A file whose section the base's configuration has, but
+the base lacks, fails the run (exit 2 for FLOOR and RLIMIT, 1 for
+REACH). With no base configuration, or no `[reach]` in it, the head's
+path is read, and a base without the file prints `ok ...: REV has no
+... to compare with`. A crate read twice, under one name or from one
+directory, fails the run (exit 2): the tally goes by name. So does a
+`[crates]` `dir` or member `path` that is not relative, has a `..` or
+passes through a symlink, and a crate whose directory, `src/`, or any
+file or directory under `src/` is a symlink (exit 2), since the base
+comparison matches crates by path and another spelling of a directory,
+or another crate's sources reached through a link, would pass for a new
+crate.
 [configs/pcre3.toml](configs/pcre3.toml) and
 [configs/challoc.toml](configs/challoc.toml) are complete examples.
 
@@ -68,7 +131,7 @@ base without the file prints `ok ...: REV has no ... to compare with`.
 | | `test_cfgs` | `cfg` names only test builds set (default `test`, `kani`) |
 | | `test_features` | features only tests enable; a workspace build that enables one fails the run (`cargo tree`) |
 | | `verus_features` | features only Verus's build enables, as `verus_keep_ghost` |
-| | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords; one that would rewrite a name the counter classes code by (`external_body`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, a test cfg, a configured macro or mint, ...) is refused |
+| | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords; one that would rewrite a name the counter classes code by (`external_body`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, `unsafe`, a test cfg, a configured macro or mint, ...) is refused |
 | | `verus_only_ghost` | count the ghost functions of Verus-only code in the ghost column |
 | `[floor]` | `path`, `checked`, `renamed_from` | the FLOOR file (default `verus/FLOOR`); the prefix of the two verified-or-discharged figures (default `checked`); an older prefix the base revision's copy may still give them under, for the change that renames them (challoc's `combined`) |
 | `[rlimit]` | `path` | the RLIMIT file (default `verus/RLIMIT`) |
@@ -79,6 +142,7 @@ base without the file prints `ok ...: REV has no ... to compare with`.
 | `[inputs]` | `table`, `crates`, `roots`, `lazy`, `describe` | turns the compile-inputs check on; a root that matches no function of `crates` fails it |
 | `[mints]` | `path`, `mint`, `token_trait`, `home` | turns the token-mint gate on |
 | `[ledger]` | `dir`, `isla`, `kani` | discharges from a generated seam ledger instead of the Kani marker; the premise files an Isla or Kani status may cite |
+| `[[narrowed]]` | `change`, `reason` | a narrowing of the base's configuration made on purpose, named as the run prints it, and why |
 
 A minimal configuration is two lines:
 

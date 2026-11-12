@@ -3,13 +3,14 @@
 //! where each table the checks read lives. A check whose section is
 //! missing does not run, and with `--base-rev` a change that removes or
 //! narrows one the base revision's copy has fails
-//! ([`Config::narrowed_from`]); every path is relative to the repository
-//! root.
+//! ([`Config::narrowed_from`]) unless a `[[narrowed]]` line names it with
+//! a reason ([`Config::explain`]); every path is relative to the
+//! repository root.
 //!
 //! Unknown keys are an error, so a misspelled section or key fails the
 //! run rather than turning a check off.
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -37,6 +38,10 @@ pub(crate) struct Config {
     /// The generated seam ledger ([`crate::ledger`]): when present, it and
     /// not the Kani marker says which trusted functions are discharged.
     pub(crate) ledger: Option<crate::ledger::Config>,
+    /// The narrowings of the base revision's copy made on purpose, each
+    /// with its reason ([`Config::explain`]).
+    #[serde(default)]
+    pub(crate) narrowed: Vec<Narrowed>,
 }
 
 /// The crates the counter reads.
@@ -258,6 +263,17 @@ impl Config {
         if c.crates.dir.is_none() && c.crates.members.is_empty() {
             return Err("[crates] names no crate: give `dir`, `members`, or both".into());
         }
+        for n in &c.narrowed {
+            if n.change.trim().is_empty() {
+                return Err("a [[narrowed]] line needs a change".into());
+            }
+            if n.reason.trim().is_empty() {
+                return Err(format!(
+                    "the [[narrowed]] line for {:?} needs a reason",
+                    n.change
+                ));
+            }
+        }
         let read = c.read_names();
         for [from, to] in &c.crates.stand_ins {
             if let Some(name) = read.iter().find(|n| rewrites(from, to, n)) {
@@ -273,12 +289,13 @@ impl Config {
     /// which no stand-in may rewrite: a stand-in that turned
     /// `external_body` or `assume` into other text would class a trusted
     /// function verified, one that rewrote `cfg` or a test cfg would move
-    /// code in or out of the shipped tally, and one that rewrote `fn`
-    /// would drop functions from it. Verus reads the original text, so it
+    /// code in or out of the shipped tally, one that rewrote `fn` would
+    /// drop functions from it, and one that rewrote `unsafe` would hide
+    /// each `#[unsafe(no_mangle)]` export from the entry points. Verus reads the original text, so it
     /// still passes. The configured macro, conversion and mint names are
     /// among them.
     fn read_names(&self) -> Vec<String> {
-        const FIXED: [&str; 24] = [
+        const FIXED: [&str; 25] = [
             "external_body",
             "external",
             "assume",
@@ -299,6 +316,7 @@ impl Config {
             "spec",
             "axiom",
             "fn",
+            "unsafe",
             "no_mangle",
             "export_name",
             "thread_local",
@@ -356,48 +374,147 @@ impl Config {
     /// exports macro, function-pointer macro or conversion removed or
     /// renamed (each adds entry points); an `[inputs]` crate or root
     /// removed, or `lazy` turned off (each narrows the walk); a `[crates]`
-    /// `dir` removed or changed, a member removed, or a crate's `ships`
-    /// changed to anything but `true` (each can take a crate out of the
-    /// shipped tally and the walks); a `test_cfgs` or `verus_features`
-    /// name added (each takes the items under it out of the shipped
-    /// tally). Renaming a table, a mint, or the FLOOR, RLIMIT or REACH
-    /// file is not a narrowing: the gate still runs, on the files and
-    /// names the change gives it, and the base's copy of each file is read
-    /// at the path the base's configuration gives it.
-    pub(crate) fn narrowed_from(&self, base: &Config) -> Vec<String> {
+    /// `dir` removed or changed, a member removed or its `path` changed,
+    /// or a crate's `ships` changed to anything but `true`, compared by
+    /// member name and by path, with whatever reads a crate the base read
+    /// (a member under any name, or a `dir`, which reads with `ships`
+    /// unset), so a rename, a move onto a crate of the base's `dir` and a
+    /// crate handed between `dir` and members are held (each can take a crate out
+    /// of the shipped tally and the walks; a member that both moves and
+    /// changes `ships` makes two narrowings); a `test_cfgs`,
+    /// `test_features` or `verus_features` name added (each takes the
+    /// items under it out of the shipped tally); a `stand_ins` pair added
+    /// (it changes what the counter reads). Renaming a table, a mint,
+    /// or the FLOOR, RLIMIT or REACH file is not a narrowing: the gate
+    /// still runs, on the files and names the change gives it, and the
+    /// base's copy of each file is read at the path the base's
+    /// configuration gives it.
+    pub(crate) fn narrowed_from(&self, base: &Config) -> Vec<Narrowing> {
         let mut out = Vec::new();
+        let mut push = |change: String, effect: &str| {
+            out.push(Narrowing {
+                change,
+                effect: effect.into(),
+            })
+        };
         let (h, b) = (&self.crates, &base.crates);
         if let Some(d) = &b.dir
             && h.dir.as_ref() != Some(d)
         {
-            out.push(format!(
-                "[crates] dir is no longer {d:?}, so the crates under it may no longer be read"
-            ));
+            push(
+                format!("[crates] dir is no longer {d:?}"),
+                "so the crates under it may no longer be read",
+            );
         }
         let ships = |s: Option<bool>| s.map_or("unset".to_owned(), |s| s.to_string());
+        let unshipped = |was: Option<bool>, now: Option<bool>| was != now && now != Some(true);
         for m in &b.members {
-            match h.members.iter().find(|n| n.name == m.name) {
-                None => out.push(format!(
-                    "[crates] members drops {:?}, so it is no longer read",
-                    m.name
-                )),
-                Some(n) if n.ships != m.ships && n.ships != Some(true) => out.push(format!(
-                    "[crates] member {:?} changes ships from {} to {}, so it may no longer count as shipped",
-                    m.name,
-                    ships(m.ships),
-                    ships(n.ships)
-                )),
-                Some(_) => {}
+            let Some(n) = h.members.iter().find(|n| n.name == m.name) else {
+                push(
+                    format!("[crates] members drops {:?}", m.name),
+                    "so it is no longer read",
+                );
+                continue;
+            };
+            if n.path != m.path {
+                push(
+                    format!(
+                        "[crates] member {:?} moves from {:?} to {:?}",
+                        m.name, m.path, n.path
+                    ),
+                    "so the crate it read may no longer be read",
+                );
             }
+            if unshipped(m.ships, n.ships) {
+                push(
+                    format!(
+                        "[crates] member {:?} changes ships from {} to {}",
+                        m.name,
+                        ships(m.ships),
+                        ships(n.ships)
+                    ),
+                    "so it may no longer count as shipped",
+                );
+            }
+        }
+        // A crate is also compared by its path, with whatever reads it now
+        // under any name: a member there, or a `dir` it sits in, which
+        // reads it with `ships` unset. So a rename, a member moved onto a
+        // crate of the base's `dir`, and a crate handed between `dir` and
+        // members each have their `ships` change named. (crate_dirs
+        // refuses a `..` or a symlink on a path, so paths that compare
+        // unequal here name different directories.)
+        let in_dir = |dir: &Option<String>, at: &Path| {
+            dir.as_ref()
+                .is_some_and(|d| at.parent() == Some(normal(d).as_path()))
+        };
+        let effect = "so the crate the base read there may no longer count as shipped";
+        for m in &b.members {
+            let at = normal(&m.path);
+            // The member under its own name at its own path is compared
+            // above.
+            if h.members
+                .iter()
+                .any(|n| n.name == m.name && normal(&n.path) == at)
+            {
+                continue;
+            }
+            let (who, now) = match h.members.iter().find(|n| normal(&n.path) == at) {
+                Some(n) => (format!("member {:?} at {:?}", n.name, n.path), n.ships),
+                None if in_dir(&h.dir, &at) => (
+                    format!(
+                        "crate at {:?} through dir {:?}",
+                        m.path,
+                        h.dir.as_deref().unwrap_or_default()
+                    ),
+                    None,
+                ),
+                None => continue,
+            };
+            if unshipped(m.ships, now) {
+                push(
+                    format!(
+                        "[crates] {who} changes ships from {} to {}",
+                        ships(m.ships),
+                        ships(now)
+                    ),
+                    effect,
+                );
+            }
+        }
+        for n in &h.members {
+            let at = normal(&n.path);
+            if b.members.iter().any(|m| normal(&m.path) == at) || !in_dir(&b.dir, &at) {
+                continue;
+            }
+            if unshipped(None, n.ships) {
+                push(
+                    format!(
+                        "[crates] member {:?} at {:?} changes ships from unset to {}",
+                        n.name,
+                        n.path,
+                        ships(n.ships)
+                    ),
+                    effect,
+                );
+            }
+        }
+        for pair in h.stand_ins.iter().filter(|p| !b.stand_ins.contains(p)) {
+            push(
+                format!("[crates] stand_ins adds {pair:?}"),
+                "so the text it rewrites is no longer read as written",
+            );
         }
         for (key, here, there) in [
             ("test_cfgs", &h.test_cfgs, &b.test_cfgs),
+            ("test_features", &h.test_features, &b.test_features),
             ("verus_features", &h.verus_features, &b.verus_features),
         ] {
             for n in here.iter().filter(|n| !there.contains(n)) {
-                out.push(format!(
-                    "[crates] {key} adds {n:?}, so the items under it leave the shipped tally"
-                ));
+                push(
+                    format!("[crates] {key} adds {n:?}"),
+                    "so the items under it leave the shipped tally",
+                );
             }
         }
         for (section, here, there) in [
@@ -411,9 +528,10 @@ impl Config {
             ("mints", self.mints.is_some(), base.mints.is_some()),
         ] {
             if there && !here {
-                out.push(format!(
-                    "the [{section}] section is gone, so its gate no longer runs"
-                ));
+                push(
+                    format!("the [{section}] section is gone"),
+                    "so its gate no longer runs",
+                );
             }
         }
         if let (Some(h), Some(b)) = (&self.reach, &base.reach) {
@@ -423,37 +541,134 @@ impl Config {
                 ("conversion", &h.conversion, &b.conversion),
             ] {
                 match (there, here) {
-                    (Some(_), None) => out.push(format!(
-                        "[reach] {key} is gone, so the entry points it named are no longer walked"
-                    )),
-                    (Some(t), Some(n)) if t != n => out.push(format!(
-                        "[reach] {key} changes from {t:?} to {n:?}, so the entry points {t:?} named are no longer walked"
-                    )),
+                    (Some(_), None) => push(
+                        format!("[reach] {key} is gone"),
+                        "so the entry points it named are no longer walked",
+                    ),
+                    (Some(t), Some(n)) if t != n => push(
+                        format!("[reach] {key} changes from {t:?} to {n:?}"),
+                        "so the entry points the old name named are no longer walked",
+                    ),
                     _ => {}
                 }
             }
         }
         if let (Some(h), Some(b)) = (&self.inputs, &base.inputs) {
             for k in b.crates.iter().filter(|k| !h.crates.contains(k)) {
-                out.push(format!(
-                    "[inputs] crates drops {k:?}, so the walk no longer follows calls through it"
-                ));
+                push(
+                    format!("[inputs] crates drops {k:?}"),
+                    "so the walk no longer follows calls through it",
+                );
             }
             for r in b.roots.iter().filter(|r| !h.roots.contains(r)) {
                 let owner = r.owner.as_ref().map_or(String::new(), |o| format!("{o}::"));
-                out.push(format!(
-                    "[inputs] roots drops {owner}{} in {}, so the walk no longer starts there",
-                    r.name, r.file
-                ));
+                push(
+                    format!("[inputs] roots drops {owner}{} in {}", r.name, r.file),
+                    "so the walk no longer starts there",
+                );
             }
             if b.lazy && !h.lazy {
-                out.push(
-                    "[inputs] lazy is turned off, so the lazy builders are no longer roots".into(),
+                push(
+                    "[inputs] lazy is turned off".into(),
+                    "so the lazy builders are no longer roots",
                 );
             }
         }
         out
     }
+
+    /// This configuration's narrowings of `base` ([`Config::narrowed_from`])
+    /// held to its `[[narrowed]]` lines, as FLOOR's figures are held to its
+    /// `lowered` lines: a narrowing passes when a new line names its
+    /// change, so a narrowing is never silent and an old reason never
+    /// covers a new one. Each of `base`'s lines is history and holds one
+    /// head line with its change, the one with its reason when there is
+    /// one, so a reworded history line is still history; the head's lines
+    /// beyond those are new. A narrowing made again after an earlier line
+    /// named it (a test cfg dropped and added back, a section restored and
+    /// retired again) is named by one more line with the same change. A
+    /// new line that names no narrowing fails, so no reason stands for a
+    /// change that was not made. `more` are narrowings found outside the
+    /// configuration (a crate's Cargo.toml gaining `publish = false`),
+    /// held to the lines the same way.
+    pub(crate) fn explain(&self, base: &Config, more: Vec<Narrowing>) -> Explained {
+        let mut new: Vec<&Narrowed> = self.narrowed.iter().collect();
+        let mut history: Vec<&Narrowed> = Vec::new();
+        for b in &base.narrowed {
+            match new
+                .iter()
+                .position(|n| n.change == b.change && n.reason == b.reason)
+            {
+                Some(k) => {
+                    new.remove(k);
+                }
+                None => history.push(b),
+            }
+        }
+        for b in history {
+            if let Some(k) = new.iter().position(|n| n.change == b.change) {
+                new.remove(k);
+            }
+        }
+        let mut out = Explained::default();
+        for n in self.narrowed_from(base).into_iter().chain(more) {
+            match new.iter().position(|l| l.change == n.change) {
+                Some(k) => out.named.push((n, new.remove(k).reason.clone())),
+                None => out.unnamed.push(n),
+            }
+        }
+        out.stale = new.into_iter().map(|l| l.change.clone()).collect();
+        out
+    }
+
+    /// Whether this configuration reads the crate at `path` (relative to
+    /// the root) and leaves whether it ships to its Cargo.toml: a crate of
+    /// `dir`, or a member there without `ships`.
+    pub(crate) fn reads_by_rule(&self, path: &str) -> bool {
+        let at = normal(path);
+        match self.crates.members.iter().find(|m| normal(&m.path) == at) {
+            Some(m) => m.ships.is_none(),
+            None => self
+                .crates
+                .dir
+                .as_ref()
+                .is_some_and(|d| at.parent() == Some(normal(d).as_path())),
+        }
+    }
+}
+
+/// One way a configuration narrows its base's ([`Config::narrowed_from`]):
+/// the change, which a `[[narrowed]]` line names exactly, and what it turns
+/// off.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Narrowing {
+    pub(crate) change: String,
+    pub(crate) effect: String,
+}
+
+impl std::fmt::Display for Narrowing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}, {}", self.change, self.effect)
+    }
+}
+
+/// A `[[narrowed]]` line: a narrowing the configuration makes on purpose,
+/// named by its change as the run prints it, and why.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Narrowed {
+    pub(crate) change: String,
+    pub(crate) reason: String,
+}
+
+/// [`Config::explain`]'s answer: each narrowing a new `[[narrowed]]` line
+/// names, with its reason; each one no such line names; and the change
+/// of each new line that names no narrowing.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Explained {
+    pub(crate) named: Vec<(Narrowing, String)>,
+    pub(crate) unnamed: Vec<Narrowing>,
+    pub(crate) stale: Vec<String>,
 }
 
 /// Whether replacing `from` with `to` can change an occurrence of `name`:
@@ -495,6 +710,15 @@ fn rewrites(from: &str, to: &str, name: &str) -> bool {
                 at < 0 || at >= f_len || f[at as usize] == *ch
             })
     })
+}
+
+/// `path` as [`Path`] compares it, without `.` components, so `./crates/a`
+/// and `crates/a/` name the directory `crates/a` does.
+pub(crate) fn normal(path: &str) -> PathBuf {
+    Path::new(path)
+        .components()
+        .filter(|c| *c != Component::CurDir)
+        .collect()
 }
 
 /// `text` with each of `pairs`' first strings replaced by its second.
@@ -594,6 +818,7 @@ mod tests {
             (r#"["(test)", "(tesx)"]"#, "", "test"),
             (r#"["\"test-util\"", "\"test-utix\""]"#, "", "test-util"),
             (r#"["fn ", "fx "]"#, "", "fn"),
+            (r#"["unsafe(", "unsafx("]"#, "", "unsafe"),
             (r#"["", "x"]"#, "", "external_body"),
             (
                 r#"["c_mint(", "c_minx("]"#,
@@ -618,7 +843,9 @@ mod tests {
 dir = "crates"
 members = [{ name = "extra", path = "extra", ships = true }]
 test_cfgs = ["test", "kani"]
+test_features = ["test-util"]
 verus_features = ["verus"]
+stand_ins = [["assert::", "assrtx::"]]
 [recursion]
 table = "verus/theorems/RN1.md"
 [reach]
@@ -646,11 +873,14 @@ home = "crates/pcre3-capi/src/object.rs"
     /// is not narrowed. Negative: removing each gate section, a `[reach]`
     /// key, an `[inputs]` crate or root, or `lazy`, renaming a `[reach]`
     /// key's macro or conversion, removing or changing `[crates] dir`,
-    /// dropping a member or turning its `ships` off, and adding a
-    /// `test_cfgs` or `verus_features` name, each names what it turned
-    /// off.
+    /// dropping a member, moving it or turning its `ships` off (also both
+    /// at once, under a new name at its path, or for a crate of the base's
+    /// `dir`), and adding a `test_cfgs`, `test_features` or
+    /// `verus_features` name or a `stand_ins` pair, each names what it
+    /// turned off.
     #[test]
     fn a_gate_removed_or_narrowed_since_the_base_fails() {
+        let shown = |n: &[Narrowing]| n.iter().map(ToString::to_string).collect::<Vec<_>>();
         let base = Config::parse(FULL).expect("parses");
         let edit = |from: &str, to: &str| {
             assert!(FULL.contains(from), "{from:?} is not in the fixture");
@@ -670,7 +900,19 @@ home = "crates/pcre3-capi/src/object.rs"
                 "ships = true }]",
                 "ships = true }, { name = \"more\", path = \"more\" }]",
             ),
+            // A new crate the base does not read may start unshipped, and
+            // a crate of the base's `dir` may become a member as it was.
+            (
+                "ships = true }]",
+                "ships = true }, { name = \"more\", path = \"more\", ships = false }]",
+            ),
+            (
+                "dir = \"crates\"\nmembers = [",
+                "dir = \"crates\"\nmembers = [{ name = \"b\", path = \"vendor/b\", ships = false }, ",
+            ),
+            ("stand_ins = [[\"assert::\", \"assrtx::\"]]\n", ""),
             ("\"test\", \"kani\"]", "\"test\"]"),
+            ("test_features = [\"test-util\"]\n", ""),
             ("verus_features = [\"verus\"]\n", ""),
         ] {
             let got = edit(from, to).narrowed_from(&base);
@@ -687,7 +929,7 @@ home = "crates/pcre3-capi/src/object.rs"
         let bare = Config::parse(&section("crates")).expect("parses");
         assert!(base.narrowed_from(&bare).is_empty());
         for name in ["recursion", "reach", "inputs", "mints"] {
-            let got = edit(&section(name), "").narrowed_from(&base);
+            let got = shown(&edit(&section(name), "").narrowed_from(&base));
             let want = format!("the [{name}] section is gone, so its gate no longer runs");
             assert_eq!(
                 got,
@@ -777,12 +1019,289 @@ home = "crates/pcre3-capi/src/object.rs"
                 "[\"verus\", \"fast\"]",
                 "[crates] verus_features adds \"fast\"",
             ),
+            (
+                "[\"test-util\"]",
+                "[\"test-util\", \"hardened\"]",
+                "[crates] test_features adds \"hardened\"",
+            ),
+            (
+                "path = \"extra\"",
+                "path = \"crates/pcre3\"",
+                "[crates] member \"extra\" moves from \"extra\" to \"crates/pcre3\"",
+            ),
+            // A rename that keeps the crate shipped, and a directory given
+            // way to a member with `ships` unset, as the base read it,
+            // change only what is read.
+            (
+                "name = \"extra\", path",
+                "name = \"renamed\", path",
+                "[crates] members drops \"extra\"",
+            ),
+            (
+                "dir = \"crates\"\nmembers = [",
+                "members = [{ name = \"a\", path = \"crates/a\" }, ",
+                "[crates] dir is no longer \"crates\"",
+            ),
+            (
+                "[[\"assert::\", \"assrtx::\"]]",
+                "[[\"assert::\", \"assrtx::\"], [\"xyzzy::\", \"xyzzz::\"]]",
+                "[crates] stand_ins adds [\"xyzzy::\", \"xyzzz::\"]",
+            ),
         ] {
-            let got = edit(from, to).narrowed_from(&base);
+            let got = shown(&edit(from, to).narrowed_from(&base));
             assert!(
                 got.len() == 1 && got[0].starts_with(want),
                 "{from:?} to {to:?}: got = {got:?}, wanted = [{want}..]"
             );
+        }
+        // A member's `path` and `ships` are each compared, so a move that
+        // also unships it makes two narrowings. A member under a new name
+        // at a base member's path, or in the base's `dir`, is the crate
+        // the base read there: turning its `ships` off is a narrowing of
+        // its own, beside the drop or the directory change.
+        for (from, to, want) in [
+            (
+                "{ name = \"extra\", path = \"extra\", ships = true }",
+                "{ name = \"extra\", path = \"moved\", ships = false }",
+                &[
+                    "[crates] member \"extra\" moves from \"extra\" to \"moved\"",
+                    "[crates] member \"extra\" changes ships from true to false",
+                ][..],
+            ),
+            (
+                "{ name = \"extra\", path = \"extra\", ships = true }",
+                "{ name = \"renamed\", path = \"./extra/\", ships = false }",
+                &[
+                    "[crates] members drops \"extra\"",
+                    "[crates] member \"renamed\" at \"./extra/\" changes ships from true to false",
+                ][..],
+            ),
+            (
+                "{ name = \"extra\", path = \"extra\", ships = true }",
+                "{ name = \"renamed\", path = \"extra\" }",
+                &[
+                    "[crates] members drops \"extra\"",
+                    "[crates] member \"renamed\" at \"extra\" changes ships from true to unset",
+                ][..],
+            ),
+            (
+                "dir = \"crates\"\nmembers = [",
+                "members = [{ name = \"a\", path = \"crates/a\", ships = false }, ",
+                &[
+                    "[crates] dir is no longer \"crates\"",
+                    "[crates] member \"a\" at \"crates/a\" changes ships from unset to false",
+                ][..],
+            ),
+        ] {
+            let got = shown(&edit(from, to).narrowed_from(&base));
+            let changes: Vec<&str> = got
+                .iter()
+                .map(|g| g.split(", so ").next().unwrap_or_default())
+                .collect();
+            assert_eq!(
+                changes, want,
+                "{from:?} to {to:?}: got = {got:?}, wanted = {want:?}"
+            );
+        }
+        // The path comparison holds under any name, both ways between `dir`
+        // and members: a base member (here unshipped) moved onto a crate of
+        // the base's `dir` that shipped by its Cargo.toml (tcnghia), and a
+        // member with `ships = true` handed to a `dir` that reads it with
+        // `ships` unset. Negative: a member handed to a `dir` with `ships`
+        // unset before and after is only the drop.
+        let crates = |text: &str| Config::parse(&format!("[crates]\n{text}")).expect("parses");
+        for (base, head, want) in [
+            (
+                "dir = \"crates\"\nmembers = [{ name = \"extra\", path = \"extra\", ships = false }]\n",
+                "members = [{ name = \"extra\", path = \"crates/a\", ships = false }]\n",
+                &[
+                    "[crates] dir is no longer \"crates\"",
+                    "[crates] member \"extra\" moves from \"extra\" to \"crates/a\"",
+                    "[crates] member \"extra\" at \"crates/a\" changes ships from unset to false",
+                ][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"crates/a\", ships = true }]\n",
+                "dir = \"crates\"\n",
+                &[
+                    "[crates] members drops \"a\"",
+                    "[crates] crate at \"crates/a\" through dir \"crates\" changes ships from true to unset",
+                ][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"crates/a\" }]\n",
+                "dir = \"crates\"\n",
+                &["[crates] members drops \"a\""][..],
+            ),
+            // A member under a name the base has, taking over another base
+            // member's path, is compared with the crate the base read there.
+            (
+                "members = [{ name = \"a\", path = \"a\", ships = true }, { name = \"extra\", path = \"extra\" }]\n",
+                "members = [{ name = \"extra\", path = \"a\", ships = false }]\n",
+                &[
+                    "[crates] members drops \"a\"",
+                    "[crates] member \"extra\" moves from \"extra\" to \"a\"",
+                    "[crates] member \"extra\" changes ships from unset to false",
+                    "[crates] member \"extra\" at \"a\" changes ships from true to false",
+                ][..],
+            ),
+        ] {
+            let got = shown(&crates(head).narrowed_from(&crates(base)));
+            let changes: Vec<&str> = got
+                .iter()
+                .map(|g| g.split(", so ").next().unwrap_or_default())
+                .collect();
+            assert_eq!(
+                changes, want,
+                "{base:?} to {head:?}: got = {got:?}, wanted = {want:?}"
+            );
+        }
+    }
+
+    /// A narrowing passes when a new `[[narrowed]]` line names its change,
+    /// as a lowered FLOOR figure passes with a `lowered` line the base does
+    /// not have; a narrowing made again is named by one more line than the
+    /// base has with its change. Negative: no line, a line naming another
+    /// change, and a line the base already has, as written or reworded (an
+    /// old reason never covers a new narrowing), each leave it unnamed; a
+    /// new line that names no narrowing, or a second for one narrowing, is
+    /// stale; a line carried from the base with nothing narrowed is
+    /// history, as FLOOR keeps its `lowered` lines.
+    #[test]
+    fn a_narrowing_passes_only_with_a_new_reason_line() {
+        let mints = "the [mints] section is gone";
+        let line = |change: &str| {
+            format!("[[narrowed]]\nchange = {change:?}\nreason = \"the C API keeps no tokens\"\n")
+        };
+        let start = FULL.find("[mints]").expect("section");
+        let without = &FULL[..start];
+        let cfg = |text: &str| Config::parse(text).expect("parses");
+        let base = cfg(FULL);
+        let got = cfg(&format!("{without}{}", line(mints))).explain(&base, Vec::new());
+        assert_eq!(
+            (got.named.len(), got.unnamed.len(), got.stale.len()),
+            (1, 0, 0),
+            "named: got = {got:?}"
+        );
+        assert_eq!(got.named[0].0.change, mints);
+        assert_eq!(got.named[0].1, "the C API keeps no tokens");
+        let reach = "the [reach] section is gone";
+        for (text, base, unnamed, stale) in [
+            (without.to_owned(), FULL.to_owned(), vec![mints], vec![]),
+            (
+                format!("{without}{}", line(reach)),
+                FULL.to_owned(),
+                vec![mints],
+                vec![reach],
+            ),
+            (
+                format!("{FULL}{}", line(mints)),
+                FULL.to_owned(),
+                vec![],
+                vec![mints],
+            ),
+            (
+                format!("{without}{}", line(mints)),
+                format!("{FULL}{}", line(mints)),
+                vec![mints],
+                vec![],
+            ),
+            (
+                format!("{FULL}{}", line(mints)),
+                format!("{FULL}{}", line(mints)),
+                vec![],
+                vec![],
+            ),
+        ] {
+            let got = cfg(&text).explain(&cfg(&base), Vec::new());
+            let got_unnamed: Vec<&str> = got.unnamed.iter().map(|n| n.change.as_str()).collect();
+            assert!(
+                got.named.is_empty() && got_unnamed == unnamed && got.stale == stale,
+                "{text:?} against {base:?}: got = {got:?}, wanted = unnamed {unnamed:?}, stale {stale:?}"
+            );
+        }
+        // A narrowing made again after a base line named it (the section
+        // restored, then retired again) is named by one more line with that
+        // change, whichever order the two lines take, and the run prints the
+        // new reason; the history line alone, or reworded, still names
+        // nothing new. Two new lines for one narrowing leave one stale.
+        let again =
+            |reason: &str| format!("[[narrowed]]\nchange = {mints:?}\nreason = {reason:?}\n");
+        let history = cfg(&format!("{FULL}{}", line(mints)));
+        for (text, named, unnamed, stale) in [
+            (
+                format!("{without}{}{}", line(mints), again("retired again")),
+                Some("retired again"),
+                0,
+                0,
+            ),
+            (
+                format!("{without}{}{}", again("retired again"), line(mints)),
+                Some("retired again"),
+                0,
+                0,
+            ),
+            (format!("{without}{}", line(mints)), None, 1, 0),
+            (format!("{without}{}", again("reworded")), None, 1, 0),
+            (
+                format!(
+                    "{without}{}{}{}",
+                    line(mints),
+                    again("retired again"),
+                    again("twice")
+                ),
+                Some("retired again"),
+                0,
+                1,
+            ),
+        ] {
+            let got = cfg(&text).explain(&history, Vec::new());
+            let got_named = got.named.first().map(|(_, r)| r.as_str());
+            assert!(
+                got_named == named && got.unnamed.len() == unnamed && got.stale.len() == stale,
+                "{text:?}: got = {got:?}, wanted = named {named:?}, {unnamed} unnamed, {stale} stale"
+            );
+        }
+        // tcnghia's renamed member: a line for the drop leaves the shipping
+        // change unnamed.
+        let renamed = FULL.replacen(
+            "{ name = \"extra\", path = \"extra\", ships = true }",
+            "{ name = \"renamed\", path = \"extra\", ships = false }",
+            1,
+        );
+        let got = cfg(&format!(
+            "{renamed}{}",
+            line("[crates] members drops \"extra\"")
+        ))
+        .explain(&base, Vec::new());
+        let got_unnamed: Vec<&str> = got.unnamed.iter().map(|n| n.change.as_str()).collect();
+        assert!(
+            got.named.len() == 1
+                && got_unnamed
+                    == [
+                        "[crates] member \"renamed\" at \"extra\" changes ships from true to false"
+                    ],
+            "a rename that unships: got = {got:?}, wanted = the drop named, the shipping change unnamed"
+        );
+        for (text, want) in [
+            (
+                "[[narrowed]]\nchange = \"x\"\nreason = \" \"\n",
+                "needs a reason",
+            ),
+            (
+                "[[narrowed]]\nchange = \"\"\nreason = \"why\"\n",
+                "needs a change",
+            ),
+            ("[[narrowed]]\nchange = \"x\"\n", "missing field `reason`"),
+            (
+                "[[narrowed]]\nchange = \"x\"\nreason = \"why\"\nwhen = \"now\"\n",
+                "unknown field",
+            ),
+        ] {
+            let got = Config::parse(&format!("{without}{text}"))
+                .map(|_| ())
+                .unwrap_err();
+            assert!(got.contains(want), "{text:?}: got = {got}, wanted = {want}");
         }
     }
 
