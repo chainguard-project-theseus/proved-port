@@ -929,3 +929,167 @@ fn the_ratchets_hold_through_the_command_line() {
     }
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// The badge FLOOR's 50.0 figures give, as `--badge` prints it.
+const BADGE: &str = "[![Verus: 50.0% of functions, 50.0% of lines](https://img.shields.io/badge/Verus-50.0%25%20of%20functions%2C%2050.0%25%20of%20lines-blue)](verus/README.md#coverage)";
+
+/// With `[badge]`, `--floor` holds the file's one Verus badge to FLOOR's
+/// `functions` and `lines` figures, and `--badge` prints the line to
+/// write. With `--base-rev`, `[badge]` removed or its `path` moved is a
+/// narrowing, which passes with a `[[narrowed]]` line. Negative: a badge
+/// that drifted from FLOOR, none, two, a missing file, and a `path`
+/// through a symlink or with `..` each fail; without `--floor` nothing is
+/// checked.
+#[test]
+fn the_badge_is_held_to_the_floor() {
+    let dir = std::env::temp_dir().join(format!("verus-count-cli-badge-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("crates/a/src")).expect("mkdir");
+    fs::create_dir_all(dir.join("verus")).expect("mkdir");
+    fs::create_dir_all(dir.join("docs")).expect("mkdir");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    // One verified function and one outside `verus!`: every share is 50%.
+    fs::write(
+        dir.join("crates/a/src/lib.rs"),
+        "verus! {\npub fn v() {}\n}\npub fn o() {}\n",
+    )
+    .expect("write");
+    let badge = |path: &str| format!("{PLAIN}[floor]\n[badge]\npath = {path:?}\n");
+    let readme = |line: &str| format!("# a\n{line}\n");
+    let stale = BADGE.replace("50.0%25%20of%20functions", "40.0%25%20of%20functions");
+    fs::write(dir.join("verus/count.toml"), badge("README.md")).expect("write");
+    fs::write(
+        dir.join("verus/FLOOR"),
+        "functions 50.0\nlines 50.0\nchecked-functions 50.0\nchecked-lines 50.0\n",
+    )
+    .expect("write");
+    fs::write(dir.join("README.md"), readme(BADGE)).expect("write");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "crates", "verus", "README.md"]);
+    git(&dir, &["commit", "-q", "-m", "badge"]);
+    std::os::unix::fs::symlink("README.md", dir.join("LINK.md")).expect("ln");
+    fs::write(dir.join("docs/README.md"), readme(BADGE)).expect("write");
+    let floor = dir.join("verus/FLOOR").to_string_lossy().into_owned();
+    let held = ["--floor", floor.as_str(), "--no-base"];
+    let based = ["--floor", floor.as_str(), "--base-rev", "HEAD"];
+    let line = |change: &str| {
+        format!("[[narrowed]]\nchange = {change:?}\nreason = \"the badge moved to docs\"\n")
+    };
+    let gone = "the [badge] section is gone";
+    let moved = "[badge] path changes from \"README.md\" to \"docs/README.md\"";
+    for (config, text, args, code, want) in [
+        (
+            badge("README.md"),
+            readme(BADGE),
+            &based[..],
+            0,
+            "ok badge: README.md:2 gives verus/FLOOR's functions and lines figures".to_owned(),
+        ),
+        (
+            badge("README.md"),
+            readme(&stale),
+            &based[..],
+            1,
+            format!(
+                "FAIL badge: README.md:2 is not the badge verus/FLOOR's functions and lines figures give; replace it with this line:\n{BADGE}"
+            ),
+        ),
+        (
+            badge("README.md"),
+            "# a\n".to_owned(),
+            &held[..],
+            1,
+            format!(
+                "FAIL badge: README.md has no Verus badge; add this line, which gives verus/FLOOR's functions and lines figures:\n{BADGE}"
+            ),
+        ),
+        (
+            badge("README.md"),
+            readme(&format!("{BADGE}\n{BADGE}")),
+            &held[..],
+            1,
+            "FAIL badge: README.md has 2 Verus badges (lines 2, 3)".to_owned(),
+        ),
+        (
+            badge("MISSING.md"),
+            readme(BADGE),
+            &held[..],
+            1,
+            "FAIL badge: MISSING.md: ".to_owned(),
+        ),
+        (
+            badge("LINK.md"),
+            readme(BADGE),
+            &held[..],
+            2,
+            "FAIL badge: [badge] path LINK.md passes through LINK.md, a symlink".to_owned(),
+        ),
+        (
+            badge("docs/../README.md"),
+            readme(BADGE),
+            &held[..],
+            2,
+            "FAIL badge: [badge] path docs/../README.md is not a relative path without `..`"
+                .to_owned(),
+        ),
+        // Without `--floor` there are no figures to hold the badge to.
+        (
+            badge("README.md"),
+            readme(&stale),
+            &[][..],
+            0,
+            String::new(),
+        ),
+        (
+            format!("{PLAIN}[floor]\n"),
+            readme(&stale),
+            &based[..],
+            1,
+            format!("FAIL configuration: verus/count.toml: {gone}, so its gate no longer runs"),
+        ),
+        (
+            format!("{PLAIN}[floor]\n{}", line(gone)),
+            readme(&stale),
+            &based[..],
+            0,
+            format!(
+                "ok configuration: verus/count.toml: {gone}, so its gate no longer runs, with a reason: the badge moved to docs"
+            ),
+        ),
+        (
+            badge("docs/README.md"),
+            readme(&stale),
+            &based[..],
+            1,
+            format!(
+                "FAIL configuration: verus/count.toml: {moved}, so the badge the base held to FLOOR is no longer held"
+            ),
+        ),
+        (
+            format!("{}{}", badge("docs/README.md"), line(moved)),
+            readme(&stale),
+            &based[..],
+            0,
+            "ok badge: docs/README.md:2 gives".to_owned(),
+        ),
+    ] {
+        fs::write(dir.join("verus/count.toml"), &config).expect("write");
+        fs::write(dir.join("README.md"), &text).expect("write");
+        let (got, out, err) = count(&dir, args);
+        assert!(
+            got == code && (out.contains(&want) || err.contains(&want)),
+            "{config:?} with {text:?} and {args:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+        );
+    }
+    fs::write(dir.join("verus/count.toml"), badge("README.md")).expect("write");
+    let (got, out, err) = count(&dir, &["--badge"]);
+    assert!(
+        got == 0 && out == format!("{BADGE}\n"),
+        "--badge: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, {BADGE:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -38,6 +38,10 @@ pub(crate) struct Config {
     /// The generated seam ledger ([`crate::ledger`]): when present, it and
     /// not the Kani marker says which trusted functions are discharged.
     pub(crate) ledger: Option<crate::ledger::Config>,
+    /// The coverage badge gate (`crate::check_badge`), on when present: with
+    /// `--floor`, the file must give FLOOR's `functions` and `lines`
+    /// figures in the one canonical badge line.
+    pub(crate) badge: Option<Badge>,
     /// The narrowings of the base revision's copy made on purpose, each
     /// with its reason ([`Config::explain`]).
     #[serde(default)]
@@ -125,6 +129,14 @@ impl Default for Floor {
             declared: false,
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Badge {
+    /// The file that shows the badge (`README.md`).
+    #[serde(default = "default_badge")]
+    pub(crate) path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -236,6 +248,10 @@ fn default_test_cfgs() -> Vec<String> {
 
 fn default_floor() -> String {
     "verus/FLOOR".into()
+}
+
+fn default_badge() -> String {
+    "README.md".into()
 }
 
 fn default_checked() -> String {
@@ -370,7 +386,7 @@ impl Config {
     /// left out does not run and prints nothing, so deleting its section
     /// would pass every check it makes; the run fails instead, as FLOOR
     /// and RLIMIT fail a loosened figure. The changes are a `[recursion]`,
-    /// `[reach]`, `[inputs]` or `[mints]` section removed; a `[reach]`
+    /// `[reach]`, `[inputs]`, `[mints]` or `[badge]` section removed; a `[reach]`
     /// exports macro, function-pointer macro or conversion removed or
     /// renamed (each adds entry points); an `[inputs]` crate or root
     /// removed, or `lazy` turned off (each narrows the walk); a `[crates]`
@@ -384,7 +400,9 @@ impl Config {
     /// changes `ships` makes two narrowings); a `test_cfgs`,
     /// `test_features` or `verus_features` name added (each takes the
     /// items under it out of the shipped tally); a `stand_ins` pair added
-    /// (it changes what the counter reads). Renaming a table, a mint,
+    /// (it changes what the counter reads); the `[badge]` section removed,
+    /// or its `path` moved, since the badge a reader sees is in the file
+    /// the base held and no base copy of the badge is compared. Renaming a table, a mint,
     /// or the FLOOR, RLIMIT or REACH file is not a narrowing: the gate
     /// still runs, on the files and names the change gives it, and the
     /// base's copy of each file is read at the path the base's
@@ -526,6 +544,7 @@ impl Config {
             ("reach", self.reach.is_some(), base.reach.is_some()),
             ("inputs", self.inputs.is_some(), base.inputs.is_some()),
             ("mints", self.mints.is_some(), base.mints.is_some()),
+            ("badge", self.badge.is_some(), base.badge.is_some()),
         ] {
             if there && !here {
                 push(
@@ -533,6 +552,14 @@ impl Config {
                     "so its gate no longer runs",
                 );
             }
+        }
+        if let (Some(h), Some(b)) = (&self.badge, &base.badge)
+            && normal(&h.path) != normal(&b.path)
+        {
+            push(
+                format!("[badge] path changes from {:?} to {:?}", b.path, h.path),
+                "so the badge the base held to FLOOR is no longer held",
+            );
         }
         if let (Some(h), Some(b)) = (&self.reach, &base.reach) {
             for (key, here, there) in [
@@ -862,6 +889,8 @@ roots = [
 ]
 lazy = true
 describe = "Regex::new"
+[badge]
+path = "README.md"
 [mints]
 path = "verus/MINTS"
 mint = "c_mint"
@@ -914,6 +943,9 @@ home = "crates/pcre3-capi/src/object.rs"
             ("\"test\", \"kani\"]", "\"test\"]"),
             ("test_features = [\"test-util\"]\n", ""),
             ("verus_features = [\"verus\"]\n", ""),
+            // The badge's path spelt another way, or left to its default.
+            ("path = \"README.md\"", "path = \"./README.md\""),
+            ("path = \"README.md\"\n", ""),
         ] {
             let got = edit(from, to).narrowed_from(&base);
             assert!(got.is_empty(), "{to:?}: got = {got:?}, wanted = none");
@@ -928,7 +960,7 @@ home = "crates/pcre3-capi/src/object.rs"
         // No base gate: nothing to narrow.
         let bare = Config::parse(&section("crates")).expect("parses");
         assert!(base.narrowed_from(&bare).is_empty());
-        for name in ["recursion", "reach", "inputs", "mints"] {
+        for name in ["recursion", "reach", "inputs", "mints", "badge"] {
             let got = shown(&edit(&section(name), "").narrowed_from(&base));
             let want = format!("the [{name}] section is gone, so its gate no longer runs");
             assert_eq!(
@@ -984,6 +1016,11 @@ home = "crates/pcre3-capi/src/object.rs"
                 "[inputs] roots drops Regex::new in crates/pcre3/src/regex.rs",
             ),
             ("lazy = true\n", "", "[inputs] lazy is turned off"),
+            (
+                "path = \"README.md\"",
+                "path = \"docs/README.md\"",
+                "[badge] path changes from \"README.md\" to \"docs/README.md\"",
+            ),
             (
                 "dir = \"crates\"\n",
                 "",

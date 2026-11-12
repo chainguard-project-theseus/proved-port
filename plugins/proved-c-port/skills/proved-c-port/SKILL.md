@@ -196,6 +196,8 @@ Before calling a phase done, check:
   ```
   grep -rnE 'assume\(|admit\(|assume_new|assume_specification|external_body|external_(fn|type|trait)_specification|verifier::external\]|axiom fn' --include=*.rs
   ```
+- A FLOOR raise replaces the README's Verus badge in the same PR
+  (`references/proofs.md`, "The FLOOR ratchet").
 - The FLOOR and RLIMIT files against the base revision: a lowered figure
   has a new `lowered` line; a raised rlimit has an `rlimit-raised` line.
 - A new checker over code or data the library produced runs only in

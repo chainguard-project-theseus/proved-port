@@ -14,6 +14,7 @@ end added; `src/main.rs`'s module documentation states every rule.
 ```sh
 cargo build --locked --release
 verus-count [--config FILE] [--list] [--floor FILE [--base-rev REV | --no-base]] [--rlimit STATS] ROOT
+verus-count [--config FILE] --badge ROOT
 ```
 
 ROOT is the repository root (default `.`) and FILE the configuration
@@ -29,7 +30,9 @@ base to compare with: a local or development run, or the proof PR that
 adds the port's first FLOOR. It is never a CI run's flag once FLOOR is
 on the base, and giving it with `--base-rev` fails the run (exit 2);
 `--rlimit` reads the statistics `cargo verus ... -- --time-expanded
---output-json` printed. `--version` prints the counter's version. An
+--output-json` printed. `--version` prints the counter's version.
+`--badge` prints the coverage badge line (The badge, below) for the
+figures in ROOT's `[floor] path`, and takes no checking option. An
 unknown option or a second ROOT fails the run (exit 2), so a misspelt
 `--flor` cannot leave the floor unchecked.
 
@@ -39,7 +42,8 @@ unknown option or a second ROOT fails the run (exit 2), so a misspelt
 an error. A check whose section is left out does not run, and prints
 nothing. So with `--base-rev REV` the run fails (exit 1) when the
 configuration turns off or narrows a gate `REV`'s copy runs: a
-`[recursion]`, `[reach]`, `[inputs]` or `[mints]` section removed; a
+`[recursion]`, `[reach]`, `[inputs]`, `[mints]` or `[badge]` section
+removed; a `[badge]` `path` moved to another file; a
 `[reach]` `exports_macro`, `fn_ptr_macro` or `conversion` removed or
 renamed; an `[inputs]` crate or root removed or `lazy` turned off; a
 `[crates]` `dir` removed or changed, a member removed, moved to another
@@ -147,6 +151,7 @@ crate.
 | `[reach]` | `path`, `exports_macro`, `fn_ptr_macro`, `conversion` | turns REACH on; the port's exports macro, function-pointer macro and argument conversion, each optional |
 | `[inputs]` | `table`, `crates`, `roots`, `lazy`, `describe` | turns the compile-inputs check on; a root that matches no function of `crates` fails it |
 | `[mints]` | `path`, `mint`, `token_trait`, `home` | turns the token-mint gate on |
+| `[badge]` | `path` | turns the badge gate on: with `--floor`, the file (default `README.md`) holds FLOOR's figures in one badge line (The badge, below) |
 | `[ledger]` | `dir`, `isla`, `kani` | discharges from a generated seam ledger instead of the Kani marker; the premise files an Isla or Kani status may cite |
 | `[[narrowed]]` | `change`, `reason` | a narrowing of the base's configuration made on purpose, named as the run prints it, and why |
 
@@ -156,6 +161,53 @@ A minimal configuration is two lines:
 [crates]
 dir = "crates"
 ```
+
+## The badge
+
+A port's README shows its Verus coverage as a shields.io badge. The
+repositories are private, so shields.io cannot read the figures: they
+are written into the line, alt text and URL both, and a badge kept by
+hand drifts from FLOOR. With
+
+```toml
+[badge]
+path = "README.md"
+```
+
+a run with `--floor FILE` also fails (exit 1) unless the file holds
+exactly one Verus badge, and that line is exactly the one FILE's
+`functions` and `lines` figures give, each with one decimal. A Verus
+badge is any rendered line holding `verus` in any case together with
+`shields.io` or a Markdown image (`![`), so a second badge with a
+lowercase label, another shields.io endpoint or an `<img>` tag counts.
+Lines inside fenced code blocks (```` ``` ```` or `~~~`) and the text
+inside HTML comments (`<!--` to `-->`, across lines) do not render, so
+they are neither the badge nor a second one: an example badge in a
+fence is not counted, and the canonical line only inside a comment or
+a fence fails as no badge. The line FILE's figures give is:
+
+```markdown
+[![Verus: 86.3% of functions, 94.4% of lines](https://img.shields.io/badge/Verus-86.3%25%20of%20functions%2C%2094.4%25%20of%20lines-blue)](verus/README.md#coverage)
+```
+
+The failures name the line to write:
+
+```text
+FAIL badge: README.md has no Verus badge; add this line, which gives verus/FLOOR's functions and lines figures:
+FAIL badge: README.md:3 is not the badge verus/FLOOR's functions and lines figures give; replace it with this line:
+FAIL badge: README.md has 2 Verus badges (lines 3, 9); keep one, this line:
+```
+
+each followed by the line, and a pass prints `ok badge: README.md:3
+gives verus/FLOOR's functions and lines figures`. A missing file fails
+too (exit 1), and a `path` that is not relative, has a `..` or passes
+through a symlink exits 2, as a `[floor] path` through one does. The
+badge follows FLOOR, not the counted shares, so it moves only when FLOOR
+does: a change that raises FLOOR updates the badge in the same change,
+pasting what `verus-count --badge .` prints. Without `--floor` the badge
+is not checked. Removing `[badge]` or moving its `path` is a narrowing
+(Configuration, above). The link is `verus/README.md#coverage` wherever
+the file sits, so keep the file at the root.
 
 ## Two ways to discharge a seam
 
@@ -262,6 +314,9 @@ proof PR (the skill's lifecycle.md, phase 4):
    names the figures the proof reaches. Record those in FLOOR in the
    same PR, even where FLOOR's raise rule is "own PR": this first raise
    cannot come before the counter and the proof.
+4. Add `[badge]` to `verus/count.toml` and put the line
+   `verus-count --badge .` prints on the README's third line, under
+   its title (The badge, above).
 
 A port with a `verus/floor/` directory names the FLOOR file something
 else (chainz: `verus/SHARES`), since `verus/FLOOR` and `verus/floor/`

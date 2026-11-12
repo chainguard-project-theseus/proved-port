@@ -120,7 +120,8 @@ or an open bug.
    adds `verus/count.toml` and runs the kit counter
    (`kit/count/README.md`, "Bootstrapping") in the verus check, copies
    the kit's `verus/FLOOR` template, and raises FLOOR from 0.0 to the
-   figures the counter names on that PR. Run the counter on the PR's
+   figures the counter names on that PR, with `[badge]` set and the
+   README's badge line at those figures (`verus-count --badge .`). Run the counter on the PR's
    base too: every figure there is 0.0, which shows the gate measured
    before the proof moved it. This raise is the one exception to an
    own-PR raise rule (`references/proofs.md`, "The FLOOR ratchet"): no
