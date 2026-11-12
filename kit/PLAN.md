@@ -252,9 +252,12 @@ is deleted in that PR.
    CONTRIBUTING.md outlines; `kit/templates/README.md` says how to apply
    them). The verus README's prose and the TODO skeleton are not
    templated yet. pcre3's restatements point at its headers
-   (wolfi-dev/pcre3#1073). The version lines, and the lint that diffs
-   a header against its template, come with the first kit release
-   (section 4), since there is no `kit/vX.Y.Z` to name before it.
+   (wolfi-dev/pcre3#1073). The lint that diffs a header against its
+   template is `kit/make/headers.sh` (`make verus-headers`), vendored
+   with the counter: it reads the templates of the kit commit
+   `verus/count/KIT` records and takes a version line naming that
+   commit, or its `kit/vX.Y.Z` tag once the first release (section 4)
+   gives one.
 2. **Counter, unsafe/assume lint and Kani runner.**
    - pcre3: delete `verus/count/` and `verus/kani/run.sh`; add
      `verus/count.toml` (the four crates, the `test-util` feature, the
@@ -295,8 +298,12 @@ is deleted in that PR.
      a port's `verus/count/` is the copy `kit/sync.sh` makes, so
      "delete `verus/count/`" above means replacing the in-tree counter
      with that copy, and `kit/sync.sh --check` is what shows no other
-     copy is left. `count-sync` tests the sync. Still to come in this
-     step: the unsafe/assume lint and the Kani runner, and the pcre3 and
+     copy is left. `count-sync` tests the sync. The Kani runner is
+     `kit/make/kani.sh` (`make kani`), vendored with the counter into
+     `verus/make/`: pcre3's crate halves, chainz's one harness per
+     instance and challoc's weighted shards with a fail pattern, each
+     as variables (`make-template` tests it with a stub cargo). Still
+     to come in this step: the unsafe/assume lint, and the pcre3 and
      challoc PRs that switch to the vendored kit counter.
 3. **Seam ledger generator** (Go rewrite of challoc's `verus/seams.sh`,
    with `verus/seams-mutants.sh` as its tests). challoc: the Makefile's
@@ -348,7 +355,12 @@ is deleted in that PR.
    delete their own. The `.chainguard/ci/*.yaml` files stay in each port
    (Checks reads them from the repository); the kit ships templates for
    new ports and a lint that a port's checks call the kit's targets.
-   **Status:** the templates are in `kit/templates/.chainguard/` and
+   **Status:** `kit/make/proved-port.mk` is the include, vendored by
+   `kit/sync.sh` to `verus/make/`, with the `verus` (and its
+   `verus-proofs` and `verus-count` halves), `verus-count-test`,
+   `verus-headers`, `kani` and `kani-list` targets; `bench` and
+   `remote` are still to come. The templates are in
+   `kit/templates/.chainguard/` and
    `kit/templates/.github/` (`kit/templates/README.md`, "Repository
    configuration"): the check files in the shape pcre3, challoc, chainz
    and expat-rs share, the default and dev environments, `develop.yaml`,

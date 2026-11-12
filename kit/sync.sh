@@ -1,14 +1,24 @@
 #!/bin/sh
-# kit/sync.sh: vendor the kit counter (kit/count) into a port.
+# kit/sync.sh: vendor the kit counter (kit/count) and the make targets
+# (kit/make) into a port.
 #
 #   kit/sync.sh PORT_ROOT          copy kit/count at this clone's HEAD
-#                                  into PORT_ROOT/verus/count and record
-#                                  the commit in verus/count/KIT
-#   kit/sync.sh --check PORT_ROOT  fail unless PORT_ROOT/verus/count
-#                                  holds the same entries as kit/count at
-#                                  the commit its KIT file records: the
-#                                  same bytes, executable bits, and
-#                                  symlinks with the same targets
+#                                  into PORT_ROOT/verus/count, and
+#                                  kit/make into PORT_ROOT/verus/make,
+#                                  and record the commit in
+#                                  verus/count/KIT
+#   kit/sync.sh --check PORT_ROOT  fail unless PORT_ROOT/verus/count and
+#                                  PORT_ROOT/verus/make hold the same
+#                                  entries as the copies of the commit
+#                                  the KIT file records: the same bytes,
+#                                  executable bits, and symlinks with the
+#                                  same targets
+#
+# verus/make also gets, under templates/, the kit templates its
+# headers.sh holds the port's headers to: each of kit/templates'
+# verus/FLOOR, RLIMIT, REACH and MINTS and .chainguard/ files with a
+# `# kit: proved-port` line. A commit from before kit/make has none, and
+# its copy has no verus/make.
 #
 # The copy comes from `git archive` of the commit, not the working tree,
 # so it is exactly what the recorded commit holds: no target/, no
@@ -34,6 +44,7 @@ port=$1
 
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 dest=$port/verus/count
+make=$port/verus/make
 kit=$dest/KIT
 
 tmp=$(mktemp -d)
@@ -45,8 +56,28 @@ extract() {
   git -C "$repo" archive --format=tar "$1:kit/count" | tar -xf - -C "$2"
 }
 
+# extract_make SHA DIR: kit/make at SHA, and under templates/ the
+# templates headers.sh reads, into DIR; nothing when SHA has no kit/make.
+extract_make() {
+  git -C "$repo" cat-file -e "$1:kit/make" 2>/dev/null || return 0
+  mkdir -p "$2" "$tmp/templates-$1"
+  git -C "$repo" archive --format=tar "$1:kit/make" | tar -xf - -C "$2"
+  git -C "$repo" archive --format=tar "$1:kit/templates" | tar -xf - -C "$tmp/templates-$1"
+  (cd "$tmp/templates-$1" && find verus .chainguard -type f) | LC_ALL=C sort > "$tmp/templates-$1.list"
+  while IFS= read -r f; do
+    case $f in
+      verus/FLOOR | verus/RLIMIT | verus/REACH | verus/MINTS | .chainguard/*) ;;
+      *) continue ;;
+    esac
+    grep -q '^# kit: proved-port' "$tmp/templates-$1/$f" || continue
+    mkdir -p "$2/templates/$(dirname "$f")"
+    cp "$tmp/templates-$1/$f" "$2/templates/$f"
+  done < "$tmp/templates-$1.list"
+}
+
 # files DIR: every file under DIR but KIT and target/, one per line.
 files() {
+  [ -d "$1" ] || return 0
   (cd "$1" && find . \( -path ./target -o -path ./KIT \) -prune -o \
     \( -type f -o -type l \) -print) | LC_ALL=C sort
 }
@@ -84,56 +115,74 @@ if [ -n "$check" ]; then
       exit 1
     }
   fi
-  extract "$sha" "$tmp/kit"
-  files "$tmp/kit" > "$tmp/want"
-  files "$dest" > "$tmp/got"
   drift=
-  if ! cmp -s "$tmp/want" "$tmp/got"; then
-    echo "$0: the file lists differ (< kit/count at $sha, > $dest):" >&2
-    diff "$tmp/want" "$tmp/got" >&2 || true
-    drift=1
-  fi
-  while IFS= read -r f; do
-    want=$(kind "$tmp/kit/$f")
-    got=$(kind "$dest/$f")
-    # A missing entry is already in the file-list diff above.
-    [ "$got" = missing ] && continue
-    if [ "$got" != "$want" ]; then
-      echo "$0: $dest/${f#./} is $got; in kit/count at $sha it is $want" >&2
-      drift=1
-    elif [ ! -L "$dest/$f" ] && ! cmp -s "$tmp/kit/$f" "$dest/$f"; then
-      echo "$0: $dest/${f#./} differs from kit/count at $sha" >&2
+  # compare WANT GOT WHAT: whether directory GOT holds what WANT does,
+  # WANT being WHAT at $sha.
+  compare() {
+    files "$1" > "$tmp/want"
+    files "$2" > "$tmp/got"
+    if ! cmp -s "$tmp/want" "$tmp/got"; then
+      echo "$0: the file lists differ (< $3 at $sha, > $2):" >&2
+      diff "$tmp/want" "$tmp/got" >&2 || true
       drift=1
     fi
-  done < "$tmp/want"
+    while IFS= read -r f; do
+      want=$(kind "$1/$f")
+      got=$(kind "$2/$f")
+      # A missing entry is already in the file-list diff above.
+      [ "$got" = missing ] && continue
+      if [ "$got" != "$want" ]; then
+        echo "$0: $2/${f#./} is $got; in $3 at $sha it is $want" >&2
+        drift=1
+      elif [ ! -L "$2/$f" ] && ! cmp -s "$1/$f" "$2/$f"; then
+        echo "$0: $2/${f#./} differs from $3 at $sha" >&2
+        drift=1
+      fi
+    done < "$tmp/want"
+  }
+  extract "$sha" "$tmp/kit"
+  compare "$tmp/kit" "$dest" kit/count
+  extract_make "$sha" "$tmp/make"
+  compare "$tmp/make" "$make" "kit/make (and its templates)"
   if [ -n "$drift" ]; then
     echo "$0: re-run kit/sync.sh $port to restore it" >&2
     exit 1
   fi
   echo "ok $dest matches kit/count at $sha"
+  if [ -d "$tmp/make" ]; then
+    echo "ok $make matches kit/make at $sha"
+  fi
   exit 0
 fi
 
-if [ -n "$(git -C "$repo" status --porcelain -- kit/count)" ]; then
-  echo "$0: kit/count has uncommitted changes; the copy records a commit, so commit them first" >&2
+if [ -n "$(git -C "$repo" status --porcelain -- kit/count kit/make kit/templates)" ]; then
+  echo "$0: kit/count, kit/make or kit/templates has uncommitted changes; the copy records a commit, so commit them first" >&2
   exit 1
 fi
 # A verus/count with no KIT file is the port's own counter, not a copy
-# this script made; it is the port's to delete.
+# this script made; it is the port's to delete. So is a verus/make
+# beside no KIT file.
 if [ -e "$dest" ] && [ ! -f "$kit" ]; then
   echo "$0: $dest exists and has no KIT file, so it is not a vendored copy; delete it first" >&2
+  exit 1
+fi
+if [ -e "$make" ] && [ ! -f "$kit" ]; then
+  echo "$0: $make exists and $kit does not, so it is not a vendored copy; delete it first" >&2
   exit 1
 fi
 sha=$(git -C "$repo" rev-parse HEAD)
 tag=$(git -C "$repo" describe --tags --exact-match HEAD 2>/dev/null) || tag=none
 
-rm -rf "$dest"
+rm -rf "$dest" "$make"
 extract "$sha" "$dest"
+extract_make "$sha" "$make"
 cat > "$kit" <<EOF
-# kit: verus-count vendored from wolfi-dev/proved-port kit/count by
-# kit/sync.sh. Do not edit this directory: change kit/count there, then
-# re-run kit/sync.sh PORT_ROOT, and check it with kit/sync.sh --check.
+# kit: verus-count and verus/make vendored from wolfi-dev/proved-port
+# kit/count and kit/make by kit/sync.sh. Do not edit either directory:
+# change kit/count or kit/make there, then re-run kit/sync.sh PORT_ROOT,
+# and check both with kit/sync.sh --check.
 commit $sha
 tag $tag
 EOF
 echo "synced $dest to kit/count at $sha (tag $tag)"
+[ ! -d "$make" ] || echo "synced $make to kit/make at $sha"

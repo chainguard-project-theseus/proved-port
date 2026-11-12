@@ -1,8 +1,9 @@
 #!/bin/sh
 # kit/sync-test.sh: tests of kit/sync.sh (the count-sync check). Syncs
 # into a scratch port, then shows --check passes on the copy and fails
-# on each kind of drift, and that a sync removes what the kit does not
-# hold. Run it from the repository root.
+# on each kind of drift, in verus/count and in verus/make, and that a
+# sync removes what the kit does not hold. Run it from the repository
+# root.
 set -eu
 
 # The checkout may belong to another user than the one running the
@@ -76,6 +77,33 @@ sh "$sync" "$port" > /dev/null
 [ ! -e "$count/target" ] || fail "sync left target/"
 echo "ok sync removes target/"
 
+# kit/make lands in verus/make, with the templates headers.sh reads:
+# the four verus/ ratchet files and the .chainguard/ files with a
+# `# kit:` line, and no other.
+make=$port/verus/make
+for f in proved-port.mk kani.sh headers.sh templates/verus/FLOOR \
+  templates/verus/RLIMIT templates/.chainguard/ci/verus.yaml; do
+  [ -f "$make/$f" ] || fail "the copy has no verus/make/$f"
+done
+for f in templates/.chainguard/review-prompt.md templates/verus/README.md \
+  templates/verus/SEAMS.md templates/ci/lib.sh templates/README.md; do
+  [ ! -e "$make/$f" ] || fail "the copy has verus/make/$f, which headers.sh does not read"
+done
+echo "ok sync copies kit/make and the header templates to verus/make"
+
+echo '# drift' >> "$make/proved-port.mk"
+drifted "an edited verus/make file"
+
+rm "$make/templates/verus/FLOOR"
+drifted "a deleted verus/make template"
+
+echo stale > "$make/stale.txt"
+drifted "a file added to verus/make"
+[ ! -e "$make/stale.txt" ] || fail "sync left a file kit/make does not hold"
+
+rm -r "$make"
+drifted "a deleted verus/make"
+
 # A verus/count with no KIT file is the port's own; sync leaves it.
 own=$tmp/own
 mkdir -p "$own/verus/count"
@@ -90,6 +118,16 @@ if sh "$sync" --check "$own" > /dev/null 2>&1; then
   fail "--check passed with no KIT file"
 fi
 echo "ok --check fails with no KIT file"
+
+# A verus/make beside no KIT file is the port's own too.
+own=$tmp/ownmake
+mkdir -p "$own/verus/make"
+echo mine > "$own/verus/make/mine.mk"
+if sh "$sync" "$own" > "$tmp/out" 2>&1; then
+  fail "sync replaced a verus/make with no KIT file"
+fi
+[ -f "$own/verus/make/mine.mk" ] || fail "sync deleted a verus/make with no KIT file"
+echo "ok sync refuses a verus/make with no KIT file"
 
 # kit/count holds no symlink, so a scratch kit repository with one shows
 # --check compares a symlink's target and refuses a file in its place.
@@ -119,5 +157,14 @@ drifted "a file with the target's bytes in place of a symlink"
 rm "$count/link"
 ln -s b.txt "$count/link"
 drifted "a symlink retargeted"
+
+# The scratch kit has no kit/make, as a kit commit from before it had
+# none: its copy has no verus/make, and one there is drift.
+[ ! -e "$port/verus/make" ] || fail "sync from a kit without kit/make made a verus/make"
+echo "ok sync from a kit without kit/make makes no verus/make"
+mkdir -p "$port/verus/make"
+echo stray > "$port/verus/make/proved-port.mk"
+drifted "a verus/make the kit commit does not hold"
+[ ! -e "$port/verus/make" ] || fail "sync left a verus/make the kit commit does not hold"
 
 echo "PASS"
