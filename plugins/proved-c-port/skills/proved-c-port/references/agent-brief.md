@@ -34,6 +34,14 @@ HARD RULES
   external_trait_specification, #[verifier::external], axiom fn, or
   weaker contract to make a proof pass. A seam needs a ledger row and, where
   Kani can check it, a harness and a record in the same change.
+- Prove the producer, not its output: a property of code or data the
+  library produces goes in the producer's ensures. A checker over the
+  output is test-only and never the recommended option. If the producer
+  cannot be proved in this change, a shipped checker is a temporary seam
+  (a seams row and a TODO(#n) toward the proof); say so in the report.
+  Never add an allocation, copy or pass to make something provable when
+  a ghost or spec route exists: take the harder proof. When none exists,
+  report the added cost with a same-run box row.
 - FLOOR: never lower a share if verifying more code can close the gap.
   If impossible, report why; do not add a `lowered` line on your own.
 - rlimit: keep every function under {RLIMIT TARGET} of its rlimit in

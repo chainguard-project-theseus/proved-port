@@ -99,6 +99,31 @@ Wrong: adding a trusted seam to make a proof pass. The spellings are
 `external_type_specification`, `external_trait_specification`,
 `#[verifier::external]` and `axiom fn`.
 
+### Prove the producer, not its output
+
+Correct: when code or data the library produces must have a property (a
+compiled program's shape, an emitted encoding, a table's contents, a
+copy's bytes), the producer's `ensures` establishes it. Restructuring the
+producer so the contract can be stated is fine when behaviour stays
+identical. A checker over the output exists only as a test oracle.
+Proving something adds no runtime cost wherever a ghost or spec route
+exists: take the harder proof. Until the producer is proved, a shipped
+checker is a temporary seam: a seams table row and a `TODO(#n)` naming
+the issue that proves the producer (pcre3 #818 kept its checker on the
+find tier, tracked by #824). The rule covers passes in the shipped
+library over output it produced. An offline generator checked in CI
+costs no run, and checks of state a C caller can corrupt (challoc's
+metadata checks) are input validation; both are outside it.
+
+Wrong: a verified runtime checker over the output as the shipped
+argument, a shipped checker with no tracking issue, or offering one as
+the recommended option. It costs every run (pcre3's JIT checker was 47%
+of a one-pass native build) and only catches a bad output; a proved
+producer never makes one. Equally wrong: an allocation, copy or pass
+added only to make a property provable where a ghost or spec route
+exists. Where none exists, the cost is measured (`references/proofs.md`,
+"Writing verifiable Rust").
+
 ### Fast paths are proved equal, not checked
 
 Correct: the emitter's postcondition carries the safety certificate and
@@ -173,6 +198,11 @@ Before calling a phase done, check:
   ```
 - The FLOOR and RLIMIT files against the base revision: a lowered figure
   has a new `lowered` line; a raised rlimit has an `rlimit-raised` line.
+- A new checker over code or data the library produced runs only in
+  tests, or ships as a temporary seam with a seams row and a `TODO(#n)`
+  toward proving the producer. No allocation, copy
+  or pass exists only to make a proof go through where a ghost or spec
+  route would.
 - The PR body: box numbers name the arms by sha, the run, and all three
   comparisons, with every row.
 - `grep -cE '^#+ ABI-'` in the ledger (ports use `##` or `###`

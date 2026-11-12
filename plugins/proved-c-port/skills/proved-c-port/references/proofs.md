@@ -42,7 +42,13 @@ re-checked on each Verus upgrade:
 | `Display` with `write!` | render into a `String` with verified helpers |
 
 A rewrite made only to get through Verus must behave the same, and the
-crate's tests must pass unchanged.
+crate's tests must pass unchanged. Prefer a ghost or spec route that
+adds no runtime cost, even when the proof is harder (SKILL.md, "Prove
+the producer, not its output"). When none exists and the rewrite adds an
+allocation, a copy or a pass on a shipped path (the `String` rendering
+above, eager construction), the pull request carries a same-run box row
+against the code it replaces and names the cost, as `references/perf.md`
+re-measures after proving.
 
 ### When vstd cannot be a dependency of every build
 
