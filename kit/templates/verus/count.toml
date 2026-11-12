@@ -1,0 +1,21 @@
+# The kit counter's configuration (verus/count, vendored by proved-port's
+# kit/sync.sh; its README.md, "Configuration", gives every key). A check
+# whose section is left out does not run, and with --base-rev removing
+# one the base runs fails unless a [[narrowed]] line names it with a
+# reason.
+#
+# kit: proved-port kit/v{KIT_VERSION}
+
+[crates]
+# Each subdirectory with a src/ is a crate; one whose Cargo.toml says
+# `publish = false` does not ship.
+dir = "crates"
+
+[floor]
+path = "verus/FLOOR"
+
+# With --floor, README.md must hold the one Verus badge line FLOOR's
+# `functions` and `lines` figures give: a change that raises FLOOR pastes
+# what `verus-count --badge .` prints.
+[badge]
+path = "README.md"

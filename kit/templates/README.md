@@ -17,6 +17,8 @@ point at those headers rather than restating them.
 | template | copy to | what it holds |
 |---|---|---|
 | `verus/FLOOR` | `verus/FLOOR` | the coverage ratchet: four figures, `lowered` lines |
+| `verus/count.toml` | `verus/count.toml` | the counter's configuration: `[crates]`, `[floor]` and `[badge]`; add the sections of the checks the port runs (kit/count/README.md, "Configuration") |
+| `PORT-README.md` | `README.md` | the port's README: its title, the Verus badge at FLOOR's figures (0.0 until the first proof), and outline sections |
 | `verus/RLIMIT` | `verus/RLIMIT` | rlimit headroom: `max-share`, `allow`, `rlimit-raised` |
 | `verus/REACH` | `verus/REACH` | functions a C caller reaches that Verus does not check |
 | `verus/MINTS` | `verus/MINTS` | the C caller's token kinds and mints, for a port that mints tokens through one trusted function |
@@ -47,11 +49,15 @@ point at those headers rather than restating them.
    finds none:
 
    ```sh
-   grep -rnE '\{[A-Z][A-Z_]*[}:]|\{[A-Z][a-z]' AGENTS.md CONTRIBUTING.md docs/abi-changes.md verus/
+   grep -rnE '\{[A-Z][A-Z_]*[}:]|\{[A-Z][a-z]' README.md AGENTS.md CONTRIBUTING.md docs/abi-changes.md verus/
    ```
 3. Start FLOOR at the counter's first run: record the figures its
    `shipped` row names, rounded down, as the check prints them. A port
    with no proofs yet starts at `0.0` and rises with its first theorem.
+   README.md's badge line gives FLOOR's `functions` and `lines`, and with
+   `[badge]` the check fails when it does not, so each change that moves
+   those figures replaces the line with what `verus-count --badge .`
+   prints (kit/count/README.md, "The badge").
 4. Delete the sections that do not apply: `verus/MINTS` for a port whose
    C API makes no ghost tokens on trust, `verus/REACH`'s macro-root item
    for a port without an exports macro, the unwinding rule's allocator

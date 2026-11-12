@@ -36,7 +36,9 @@
 //! Usage: `verus-count [--config FILE] [--list] [--floor FILE [--base-rev
 //! REV | --no-base]] [--rlimit STATS] ROOT`, with ROOT the repository root (default
 //! `.`) and FILE the configuration (default `ROOT/verus/count.toml`);
-//! `--version` prints the counter's version.
+//! `--version` prints the counter's version, and `verus-count [--config
+//! FILE] --badge ROOT` the coverage badge line ROOT's FLOOR gives
+//! ([`badge_line`]).
 //! `--list` prints one line per executable function: crate, class, lines,
 //! file:line and name, before the table; every check runs as without it.
 //! `--floor FILE` fails the run when the `shipped`
@@ -57,6 +59,12 @@
 //! `--no-base` says there is none to compare with (a local run, or the
 //! change that adds the first FLOOR), and with `--base-rev` it is an error
 //! (exit 2).
+//!
+//! With `[badge]`, `--floor FILE` also fails unless the badge file
+//! (`README.md`) holds exactly one rendered Verus badge, in any case or
+//! form ([`is_badge`]; fences and HTML comments do not render), and it is
+//! the line `--badge` prints for FILE's `functions` and `lines` figures
+//! ([`check_badge`]), so the badge a reader sees cannot drift from FLOOR.
 //!
 //! With `[recursion]`, it checks recursion (verus/theorems/RN1.md): it fails on a
 //! cycle of direct calls, within one file, through a function of a shipped
@@ -1703,6 +1711,7 @@ fn usage(e: impl std::fmt::Display) -> ! {
 struct Args {
     list: bool,
     version: bool,
+    badge: bool,
     floor: Option<PathBuf>,
     base_rev: Option<String>,
     no_base: bool,
@@ -1714,7 +1723,8 @@ struct Args {
 /// Reads the arguments after the program name. An argument that starts
 /// with `-` and is not an option fails, as does a second ROOT: a
 /// misspelt `--flor FILE` would otherwise be read as ROOT, and the run
-/// would pass with no floor checked.
+/// would pass with no floor checked. `--badge` with a checking option
+/// fails too, since it prints the badge line and checks nothing.
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut out = Args::default();
     while let Some(a) = args.next() {
@@ -1722,6 +1732,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--list" => out.list = true,
             "--version" => out.version = true,
             "--no-base" => out.no_base = true,
+            "--badge" => out.badge = true,
             "--floor" | "--base-rev" | "--rlimit" | "--config" => {
                 let v = args.next().ok_or_else(|| format!("{a} needs a value"))?;
                 match a.as_str() {
@@ -1741,6 +1752,17 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     if out.no_base && out.base_rev.is_some() {
         return Err("--no-base with --base-rev: give one".to_owned());
     }
+    if out.badge
+        && (out.list
+            || out.floor.is_some()
+            || out.base_rev.is_some()
+            || out.no_base
+            || out.stats.is_some())
+    {
+        return Err(
+            "--badge prints the badge line and checks nothing: give it without --list, --floor, --base-rev, --no-base or --rlimit".into(),
+        );
+    }
     Ok(out)
 }
 
@@ -1748,6 +1770,7 @@ fn main() {
     let Args {
         list,
         version,
+        badge,
         floor,
         base_rev,
         no_base,
@@ -1770,6 +1793,15 @@ fn main() {
     let root = root.unwrap_or_else(|| PathBuf::from("."));
     let config_file = config_file.unwrap_or_else(|| root.join("verus/count.toml"));
     let cfg = Config::read(&config_file).unwrap_or_else(|e| usage(e));
+    if badge {
+        let path = root.join(&cfg.floor.path);
+        let text =
+            fs::read_to_string(&path).unwrap_or_else(|e| usage(format!("{}: {e}", path.display())));
+        let head = Figures::new(&cfg.floor.checked, &cfg.floor.path)
+            .read(&text, &path.display().to_string());
+        println!("{}", badge_line(&head.floor));
+        return;
+    }
     let base = base_rev.map(|rev| Base {
         cfg: check_config(&root, &config_file, &cfg, &rev),
         rev,
@@ -1971,6 +2003,9 @@ fn main() {
         }
         let (mut ok, report) = fig.check(&shipped, &head.floor);
         print!("{report}");
+        if let Some(b) = &cfg.badge {
+            ok &= check_badge(&root, &b.path, &cfg.floor.path, &head.floor);
+        }
         if let Some(b) = &base {
             let rev = &b.rev;
             match b.copy(&root, &cfg.floor.path, GateFile::Floor) {
@@ -2989,6 +3024,173 @@ impl Figures {
     }
 }
 
+/// The one coverage badge line FLOOR's `functions` and `lines` figures
+/// give (`[badge]`, `--badge`): the figures with one decimal, in the alt
+/// text and in the shields.io URL, linking to verus/README.md's
+/// "Coverage". The repositories are private, so shields.io cannot read
+/// the figures; they live in the line, and [`check_badge`] holds them to
+/// FLOOR.
+fn badge_line(floor: &Floor) -> String {
+    let [functions, lines, ..] = floor.0.map(|v| shown(v.unwrap_or(0)));
+    format!(
+        "[![Verus: {functions}% of functions, {lines}% of lines](https://img.shields.io/badge/Verus-{functions}%25%20of%20functions%2C%20{lines}%25%20of%20lines-blue)](verus/README.md#coverage)"
+    )
+}
+
+/// Whether `rendered`, the part of a line Markdown renders, holds a Verus
+/// badge in any form: `verus` in any case, with `shields.io` or an image
+/// (`![`). The match is wide on purpose: a line it takes for a badge that
+/// is not one fails the gate, while a second badge it missed would pass.
+fn is_badge(rendered: &str) -> bool {
+    let lower = rendered.to_lowercase();
+    lower.contains("verus") && (lower.contains("shields.io") || lower.contains("!["))
+}
+
+/// The fence a line opens or closes: its character (`` ` `` or `~`) and
+/// how many, after up to three spaces of indent. CommonMark refuses a
+/// backtick fence whose info string holds a backtick, since that line is
+/// inline code.
+fn fence(line: &str) -> Option<(char, usize)> {
+    let rest = line.trim_start_matches(' ');
+    if line.len() - rest.len() > 3 {
+        return None;
+    }
+    let c = rest.chars().next().filter(|c| *c == '`' || *c == '~')?;
+    let n = rest.chars().take_while(|x| *x == c).count();
+    (n >= 3 && !(c == '`' && rest[n..].contains('`'))).then_some((c, n))
+}
+
+/// Each line of `text`, numbered from 1, with the part Markdown renders:
+/// a line inside a fenced code block renders as none, and the spans
+/// inside HTML comments (`<!--` to `-->`, across lines) are dropped. A
+/// badge on a line that does not render is neither the badge nor a second
+/// one.
+fn rendered_lines(text: &str) -> Vec<(usize, &str, String)> {
+    let mut open: Option<(char, usize)> = None;
+    let mut comment = false;
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        if let Some((c, n)) = open {
+            if fence(line)
+                .is_some_and(|(d, m)| d == c && m >= n && line.trim().chars().all(|x| x == c))
+            {
+                open = None;
+            }
+            out.push((i + 1, line, String::new()));
+            continue;
+        }
+        if !comment && let Some(f) = fence(line) {
+            open = Some(f);
+            out.push((i + 1, line, String::new()));
+            continue;
+        }
+        let mut shown = String::new();
+        let mut rest = line;
+        loop {
+            if comment {
+                match rest.find("-->") {
+                    Some(end) => {
+                        comment = false;
+                        rest = &rest[end + 3..];
+                    }
+                    None => break,
+                }
+            } else {
+                match rest.find("<!--") {
+                    Some(start) => {
+                        shown += &rest[..start];
+                        comment = true;
+                        rest = &rest[start + 4..];
+                    }
+                    None => {
+                        shown += rest;
+                        break;
+                    }
+                }
+            }
+        }
+        out.push((i + 1, line, shown));
+    }
+    out
+}
+
+/// Holds `text`, the badge file `name`, to `want`, the line
+/// [`badge_line`] gives for the FLOOR file `floor`: exactly one rendered
+/// line holds a Verus badge ([`is_badge`], [`rendered_lines`]), and it is
+/// `want`. The report line, or the failure.
+fn badge_report(text: &str, name: &str, floor: &str, want: &str) -> Result<String, String> {
+    let found: Vec<(usize, &str)> = rendered_lines(text)
+        .into_iter()
+        .filter(|(_, _, shown)| is_badge(shown))
+        .map(|(n, l, _)| (n, l))
+        .collect();
+    match found.as_slice() {
+        [] => Err(format!(
+            "FAIL badge: {name} has no Verus badge; add this line, which gives {floor}'s functions and lines figures:\n{want}"
+        )),
+        [(n, line)] if *line == want => Ok(format!(
+            "ok badge: {name}:{n} gives {floor}'s functions and lines figures"
+        )),
+        [(n, _)] => Err(format!(
+            "FAIL badge: {name}:{n} is not the badge {floor}'s functions and lines figures give; replace it with this line:\n{want}"
+        )),
+        _ => Err(format!(
+            "FAIL badge: {name} has {} Verus badges (lines {}); keep one, this line:\n{want}",
+            found.len(),
+            found
+                .iter()
+                .map(|(n, _)| n.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// The badge gate (`[badge]`, run with `--floor`): `path` under `root`
+/// must hold the one badge line `floor_file`'s figures `floor` give
+/// ([`badge_report`]), so the badge cannot drift from FLOOR. A `path` that
+/// is not relative, has a `..`, or passes through a symlink exits 2, as a
+/// `[floor] path` through one does: the base comparison of `[badge] path`
+/// ([`Config::narrowed_from`]) goes by the path, which another spelling or
+/// a link would slip past. Returns whether the badge passes.
+fn check_badge(root: &Path, path: &str, floor_file: &str, floor: &Floor) -> bool {
+    let rel = Path::new(path);
+    if rel.components().any(|c| {
+        !matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    }) {
+        usage(format!(
+            "FAIL badge: [badge] path {path} is not a relative path without `..`: give the file under {}",
+            root.display()
+        ));
+    }
+    if let Some(link) = symlink_in(root, rel) {
+        usage(format!(
+            "FAIL badge: [badge] path {path} passes through {}, a symlink: give `path` the file itself",
+            link.display()
+        ));
+    }
+    let text = match fs::read_to_string(root.join(rel)) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("FAIL badge: {path}: {e}");
+            return false;
+        }
+    };
+    match badge_report(&text, path, floor_file, &badge_line(floor)) {
+        Ok(r) => {
+            println!("{r}");
+            true
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            false
+        }
+    }
+}
+
 /// `P` or `P.D` as tenths of a percent, at most 100.0.
 fn parse_tenths(s: &str) -> Option<u32> {
     parse_tenths_to(s, 1000)
@@ -3932,6 +4134,15 @@ mod tests {
                 ..Args::default()
             })
         );
+        assert_eq!(
+            parse(&["--badge", "--config", "c.toml", "r"]),
+            Ok(Args {
+                badge: true,
+                config_file: Some("c.toml".into()),
+                root: Some("r".into()),
+                ..Args::default()
+            })
+        );
         for (args, want) in [
             (
                 &["--no-base", "--base-rev", "HEAD^"][..],
@@ -3941,11 +4152,186 @@ mod tests {
             (&["-l", "."][..], "unknown option -l"),
             (&["verus/FLOOR", "."][..], "a second ROOT ."),
             (&["--floor"][..], "--floor needs a value"),
+            (&["--badge", "--floor", "verus/FLOOR"][..], "--badge prints"),
+            (&["--badge", "--base-rev", "HEAD"][..], "--badge prints"),
+            (&["--badge", "--no-base"][..], "--badge prints"),
+            (&["--list", "--badge"][..], "--badge prints"),
+            (&["--badge", "--rlimit", "s.json"][..], "--badge prints"),
         ] {
             let got = parse(args).unwrap_err();
             assert!(
                 got.contains(want),
                 "{args:?}: got = {got:?}, wanted = {want:?}"
+            );
+        }
+    }
+
+    /// The badge line is challoc's form with FLOOR's figures, one decimal
+    /// each, in the alt text and the URL; a file passes only with that
+    /// line, once. Negative: no badge, the alt text or the URL alone off
+    /// by a tenth, the line with other text on it, two badges (even two
+    /// canonical lines, or a second in any case or form), and the
+    /// canonical line only where it does not render (a fence or an HTML
+    /// comment) each fail, naming the line to write. A badge that does not
+    /// render is not a second one.
+    #[test]
+    fn the_badge_gives_floors_figures_once() {
+        let floor = Floor([Some(863), Some(944), Some(900), Some(950)]);
+        let want = badge_line(&floor);
+        assert_eq!(
+            want,
+            "[![Verus: 86.3% of functions, 94.4% of lines](https://img.shields.io/badge/Verus-86.3%25%20of%20functions%2C%2094.4%25%20of%20lines-blue)](verus/README.md#coverage)"
+        );
+        assert_eq!(
+            badge_line(&Floor([Some(1000), Some(0), None, None])),
+            "[![Verus: 100.0% of functions, 0.0% of lines](https://img.shields.io/badge/Verus-100.0%25%20of%20functions%2C%200.0%25%20of%20lines-blue)](verus/README.md#coverage)"
+        );
+        let readme = |badge: &str| format!("# port\n\n{badge}\n\nText.\n");
+        assert_eq!(
+            badge_report(&readme(&want), "README.md", "verus/FLOOR", &want),
+            Ok("ok badge: README.md:3 gives verus/FLOOR's functions and lines figures".to_owned())
+        );
+        let alt = want.replacen("86.3% of functions", "86.2% of functions", 1);
+        // Another Verus badge where it does not render is not a second one.
+        for hidden in [
+            format!("```markdown\n{alt}\n```"),
+            format!("~~~\n{alt}\n~~~"),
+            format!("<!--\n{alt}\n-->"),
+            format!("<!-- {alt} -->"),
+        ] {
+            assert_eq!(
+                badge_report(
+                    &readme(&format!("{want}\n{hidden}")),
+                    "README.md",
+                    "verus/FLOOR",
+                    &want
+                ),
+                Ok(
+                    "ok badge: README.md:3 gives verus/FLOOR's functions and lines figures"
+                        .to_owned()
+                ),
+                "{hidden:?}"
+            );
+        }
+        let url = want.replacen("86.3%25", "86.2%25", 1);
+        let alt_lines = want.replacen("94.4% of lines", "94.1% of lines", 1);
+        let url_lines = want.replacen("94.4%25", "94.1%25", 1);
+        for (text, wanted) in [
+            (
+                "# port\n\nText.\n".to_owned(),
+                "FAIL badge: README.md has no Verus badge; add this line, which gives verus/FLOOR's functions and lines figures:\n",
+            ),
+            (
+                readme(&alt),
+                "FAIL badge: README.md:3 is not the badge verus/FLOOR's functions and lines figures give; replace it with this line:\n",
+            ),
+            (readme(&url), "FAIL badge: README.md:3 is not the badge"),
+            (
+                readme(&alt_lines),
+                "FAIL badge: README.md:3 is not the badge",
+            ),
+            (
+                readme(&url_lines),
+                "FAIL badge: README.md:3 is not the badge",
+            ),
+            (
+                readme(&format!("{want} [![CI](x)](y)")),
+                "FAIL badge: README.md:3 is not the badge",
+            ),
+            (
+                readme(&format!("{want}\n{want}")),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4); keep one, this line:\n",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n![Verus](https://img.shields.io/badge/Verus-1%25-blue)"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n[![Verus: 90%](https://example.com/v.svg)](x)"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4)",
+            ),
+            // A Verus badge in any case: a lowercase label, and the
+            // `static/v1` endpoint with no `[` before the `![`.
+            (
+                readme(&format!(
+                    "{want}\n![verus](https://img.shields.io/badge/verus-99%25%20verified-green)"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n![Verus](https://img.shields.io/static/v1?label=Verus&message=99%25&color=blue)"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4)",
+            ),
+            (
+                readme(&format!("{want}\n[![VERUS](x.svg)](y)")),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n<img src=\"https://img.shields.io/badge/verus-1%25-blue\">"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4)",
+            ),
+            // The canonical line where it does not render: inside a
+            // multi-line HTML comment, a ``` fence, a ~~~ fence, and an
+            // inline comment; and with a stale badge rendered outside.
+            (
+                readme(&format!("<!--\n{want}\n-->")),
+                "FAIL badge: README.md has no Verus badge",
+            ),
+            (
+                readme(&format!("```markdown\n{want}\n```")),
+                "FAIL badge: README.md has no Verus badge",
+            ),
+            (
+                readme(&format!("~~~\n{want}\n~~~")),
+                "FAIL badge: README.md has no Verus badge",
+            ),
+            (
+                readme(&format!("<!-- {want} -->")),
+                "FAIL badge: README.md has no Verus badge",
+            ),
+            (
+                readme(&format!("<!--\n{want}\n-->\n{alt}")),
+                "FAIL badge: README.md:6 is not the badge",
+            ),
+            (
+                readme(&format!("```\n{want}\n```\n{alt}")),
+                "FAIL badge: README.md:6 is not the badge",
+            ),
+            // A fence only closes on a line of its own character, at least
+            // as long, so a badge after "````" inside a ~~~ fence, or after
+            // "```" inside a ```` fence, stays inside it.
+            (
+                readme(&format!("~~~\n````\n{want}\n~~~")),
+                "FAIL badge: README.md has no Verus badge",
+            ),
+            (
+                readme(&format!("````\n```\n{want}\n````")),
+                "FAIL badge: README.md has no Verus badge",
+            ),
+            // A comment ends at `-->`, and text after it renders; inline
+            // code with three backticks is not a fence.
+            (
+                readme(&format!("<!-- note --> {want}")),
+                "FAIL badge: README.md:3 is not the badge",
+            ),
+            (
+                readme(&format!("```x``` {want}")),
+                "FAIL badge: README.md:3 is not the badge",
+            ),
+        ] {
+            let got = badge_report(&text, "README.md", "verus/FLOOR", &want);
+            assert!(
+                got.as_ref()
+                    .is_err_and(|e| e.contains(wanted) && e.ends_with(&want)),
+                "{text:?}: got = {got:?}, wanted = Err({wanted:?} ... {want:?})"
             );
         }
     }

@@ -183,6 +183,13 @@ Rules:
   conflict there. Follow the port's header, and never raise FLOOR in a
   feature PR of a port with the own-PR rule, except the first proof PR
   that brings the counter (`references/lifecycle.md`, phase 4).
+- The README's Verus badge carries FLOOR's `functions` and `lines`
+  figures in its text, since shields.io cannot read a private
+  repository. With `[badge]` in `verus/count.toml` the counter fails
+  `--floor` unless the README holds exactly the badge line FLOOR gives,
+  so a PR that raises FLOOR replaces the badge with what
+  `verus-count --badge .` prints, in the same PR. Never keep the badge
+  by hand or fix it in a follow-up: the check refuses the drift.
 - A drop is closed by verifying more code, in the PR or in a small PR
   that lands first. A `lowered` line is the last resort, and its reason
   names exactly which functions or lines became trusted or outside, with
