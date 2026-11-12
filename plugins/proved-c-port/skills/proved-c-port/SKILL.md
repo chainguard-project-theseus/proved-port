@@ -64,7 +64,9 @@ Each rule has a correct and a wrong form. The references explain why.
 ### The C library decides what is correct
 
 Correct: a divergence found by fuzz-diff is a bug, or it gets an
-`ABI-nnn` ledger entry and a narrow predicate in `known.c` citing it.
+`ABI-nnn` ledger entry and a narrow predicate in `known.c` citing it
+(or, where the surface is small, the driver steers around the input
+class and cites the entry: `references/abi-compat.md`).
 
 Wrong: widening a known-divergence predicate until the fuzzer goes
 quiet, or adding a line to the deviations list without a ledger entry.
@@ -74,7 +76,12 @@ quiet, or adding a line to the deviations list without a ledger entry.
 Correct: every crate but the C API crate is `#![forbid(unsafe_code)]`;
 every `extern "C"` body runs under a `catch_unwind` guard that returns
 an error code. (challoc is `no_std` with `panic = "abort"` instead: an
-allocator aborts on inconsistency, it never continues.)
+allocator aborts on inconsistency, it never continues.) Use one guard
+shape for every export and lint for it (expat-rs's `ffi_guard` and
+`ci/lint-ffi-guard.sh`), with panic-injection tests that the guard
+leaks nothing. Where a library hands out long-lived handles, a caught
+panic also poisons the handle: later calls on it fail, and the end call
+still frees it (chainz's `poison_on_panic`, ABI-013).
 
 Wrong: a safe `fn` pointer type that lets a forbid-unsafe crate jump to
 an arbitrary address (pcre3's `RawFind`, flagged in its trust audit).
@@ -131,6 +138,10 @@ answered after the push that fixes it.
 Wrong: a branch-update merge commit, a computed push target, or a reply
 posted before the fix is pushed.
 
+The port's own `AGENTS.md` and `CONTRIBUTING.md` win on any convention
+they state (the issue line, who merges, sign-off, the raise rule); this
+skill fills in what they leave out.
+
 ## References
 
 - [lifecycle.md](references/lifecycle.md): phases, exit criteria, how
@@ -164,5 +175,8 @@ Before calling a phase done, check:
   has a new `lowered` line; a raised rlimit has an `rlimit-raised` line.
 - The PR body: box numbers name the arms by sha, the run, and all three
   comparisons, with every row.
-- `grep -c '^### ABI-'` in the ledger against the deviations and
-  `known.c` citations: no citation names a missing entry.
+- `grep -cE '^#+ ABI-'` in the ledger (ports use `##` or `###`
+  headings) against the deviations and `known.c` citations: no citation
+  names a missing entry, and no `TODO(#n)` names a closed issue.
+- Every `unsafe {` block has a `SAFETY:` comment naming the invariant it
+  relies on (chainz's and expat-rs's `ci/lint-unsafe.sh`).

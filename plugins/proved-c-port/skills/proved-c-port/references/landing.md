@@ -42,6 +42,14 @@ and safe to merge while main moves every 15 minutes.
 - Resolve FLOOR conflicts by re-measuring on the new base, never by
   picking a side.
 - Stage children as drafts naming their base PR, to front-load review.
+- When a large draft is split into slices, land the build files and the
+  CI definitions first, so every later slice is gated on its own. Slices
+  cut in parallel off one base onto a main that does not build have no
+  CI until the last one lands (chainz's first split).
+- Deferring review findings out of a large split is fine when each one
+  becomes a numbered follow-up with a citation to its thread, kept in
+  the repository (chainz's `docs/handoff.md`, F1 to F21), and the thread
+  names the follow-up.
 
 ## Pushing
 
@@ -106,6 +114,22 @@ and safe to merge while main moves every 15 minutes.
 - When main breaks, fix it on main first (a fix-forward PR, merged as
   soon as green); bisect afterwards.
 
+### Where a reviewer bot approves and authors merge
+
+Some ports require one approval and let a Checks reviewer bot give it,
+with the author squash-merging once CI is green and the PR is approved
+(chainz's `.chainguard/reviewers.yaml`; expat-rs's codeowners and
+`reviewer/expat-rs`). There:
+
+- The bot's approval presumes green CI; merge only when both hold on
+  the same head.
+- Answer the bot's findings as you would a human's, in their threads,
+  and push a new head for it to re-review; it does not re-read an
+  answer on the old one.
+- Merging your own PR is the repository's rule, not a shortcut: follow
+  its `AGENTS.md` on who merges and when, and merge with
+  `--match-head-commit`.
+
 ## Review threads
 
 - Answer every finding in its thread: fixed (say where, with the sha
@@ -125,7 +149,8 @@ and safe to merge while main moves every 15 minutes.
 ## PR body
 
 - Start with the issue line (`Fixes #n`, or `Refs #n` for upstream
-  issues and multi-PR work).
+  issues and multi-PR work), unless the repository's `AGENTS.md` states
+  its own form (expat-rs: every PR body starts with `Fixes #n`).
 - Say what changed, how it is verified (Verus result, FLOOR figures,
   mutants refused, tests added), any known differences (ledger ids), and
   the checks run.

@@ -1,8 +1,9 @@
 # Pitfalls: dated lessons, one rule each
 
 Each entry is a rule, then the incident that taught it. Dates are
-Pacific, and are when it happened in pcre3 or challoc; `#n` is a pull
-request in that repository, dated by its GitHub record.
+Pacific, and are when it happened in pcre3, challoc or the port the
+entry names; `#n` is a pull request in that repository, dated by its
+GitHub record.
 
 ## Proofs and coverage
 
@@ -26,6 +27,38 @@ request in that repository, dated by its GitHub record.
 - **Do not narrow a spec's ensures without saying who consumed it.**
   2026-11-07: pcre3 #1035's anchors layer weakened `lead_of`'s ensures;
   it shipped only after confirming nothing used the stronger form.
+- **Never order-compare bools in a Kani harness.** Kani 0.68 emits
+  relations CBMC ignores for `<`, `<=`, `>` and `>=` over bools, so the
+  harness passes vacuously; use `==`/`!=` or cast to an integer (chainz
+  `AGENTS.md`, "Environment").
+
+## Harnesses
+
+Each of these cost a run while building chainz's fuzz-abi leg
+(chainz #17, 2026-11-08):
+
+- **Build UBSan legs with `-fno-wrapv` and plant a UBSan finding in the
+  self-test.** Wolfi's clang defaults to `-fwrapv`, so
+  `-fsanitize=undefined` silently dropped the signed-overflow check;
+  the plant caught it.
+- **Run the sanitizer symbolizer without the port on its library
+  path.** It inherits `LD_LIBRARY_PATH`, could not load with a
+  sancov-instrumented port first (`undefined symbol:
+  __sanitizer_cov_pcs_init`), and a UBSan report died with SIGPIPE
+  before printing. Wrap the symbolizer to drop `LD_LIBRARY_PATH`.
+- **Check `panic = "abort"` by a symbol that only unwinding brings.**
+  With `-static-libgcc` the unwinder is always linked, so "no
+  `_Unwind_RaiseException`" survived its mutant; the `panic_unwind`
+  crate's symbols do not.
+- **Fuzz upstream's targets against the C library before blaming the
+  port.** Upstream's own targets had UB (gzio_fuzzer's unaligned loads
+  and a zero-length VLA) and fixed `/tmp` paths that race under
+  `-fork=N` (minigzip_fuzzer). Replaying the seeds against the C
+  library found the first kind only on inputs that reach it.
+- **Run every new check against the oracle in the self-test.** zlib's
+  `inflate` returns `Z_NEED_DICT` before updating `total_in`, looser
+  than the natural check; only running it against the C library showed
+  it.
 
 ## Fast paths and architectures
 

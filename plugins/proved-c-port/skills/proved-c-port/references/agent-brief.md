@@ -48,6 +48,8 @@ HARD RULES
 - Use one CARGO_TARGET_DIR under {SCRATCH}; delete it when done.
 
 GATE (run before declaring done; paste the summary lines)
+Run these {WHERE: locally | through the repo's remote runner, never on
+the workstation (chainz: `make <target>` via scripts/develop-run.sh)}.
 - {BUILD CMD}            e.g. cargo build --locked --release
 - {TEST CMD, scoped}     e.g. cargo test -p {CRATE} -- {FILTER}
 - {LINT CMD}             e.g. cargo fmt --check; cargo clippy -D warnings

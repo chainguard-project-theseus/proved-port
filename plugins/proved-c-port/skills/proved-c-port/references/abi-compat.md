@@ -19,7 +19,9 @@ Write this list down in the design doc (pcre3 design 3.3):
 
 Correct: `ci/header-check.sh` diffs every `PCRE2_*` and `REG_*`
 definition against the distro's `pcre2-dev`; `ci/abi.sh` fails when the
-export set and the linker map differ.
+export set and the linker map differ. A port pinned to one upstream
+release compares with that release instead, built from its tarball by
+SHA-256 (`references/lifecycle.md`, phase 1).
 
 Wrong: regenerating the header from your own constants, or editing an
 upstream version node except to add a new upstream node.
@@ -36,16 +38,49 @@ upstream version node except to add a new upstream node.
 
 Rules for the legs:
 
-- The fuzz-diff driver checks before fuzzing that every function
-  resolves into its own object (`dladdr`), that the two objects differ,
-  and that each reports the version it should. A harness that silently
-  compares a library with itself passes everything.
+- The fuzz-diff driver proves before fuzzing that each side is the
+  library it claims to be, and that the two differ. A harness that
+  silently compares a library with itself passes everything. The
+  mechanism may vary: pcre3's C driver `dlopen`s both and checks with
+  `dladdr` that every function resolves into its own object and that
+  each reports its version; expat-rs's Rust fuzzer `dlopen`s the
+  reference by path with `RTLD_LOCAL`, checks with `dladdr` that every
+  reference function resolves into that file (same device and inode)
+  and its own `Parser::parse` into the executable, checks the
+  reference's version, and refuses to run while any libexpat is in the
+  global scope (`identify` in `fuzz/fuzz_targets/differential.rs`).
+  Self-test the check with a plant that points both sides at the same
+  library and must be refused, or with a planted reference (expat-rs's
+  `fuzz/diff/planted.c`: upstream with one deliberate difference) whose
+  run must report a FINDING, which vanishes if both sides are one
+  library. A difference planted in the driver's comparison still shows
+  when both sides are the reference, so it cannot catch a
+  self-comparison.
+- fuzz-abi uses upstream's OSS-Fuzz harnesses. When they live in
+  google/oss-fuzz (`projects/<name>`) rather than upstream's tree,
+  vendor them unedited at a pinned OSS-Fuzz commit, with their own
+  licence, and adapt them with a forced include (`-include`) rather than
+  patches (chainz #17).
+- Stable Rust is not ASan-instrumented: ASan sees the port's bulk copies
+  only through libc interceptors (`memcpy`, `memset`). The guard bytes
+  around caller buffers are what check the port's own stores; do not
+  count on ASan for them.
+- Build the fuzz-abi library with `panic = "abort"`, so any panic the
+  guard would catch is a crash: a caught panic is a port bug, and a
+  port that returns the ordinary failure value for one gives C no other
+  way to see it. Check it by the `panic_unwind` crate's symbols, not by
+  the absence of `_Unwind_RaiseException` (with `-static-libgcc` the
+  unwinder is always linked).
+- Run the C tests under ASan and UBSan on every PR when it is cheap
+  (expat-rs's `ci/sanitize.sh`); keep the fuzzers on request.
 - Run every leg on every target architecture natively; a fast path that
   exists on one architecture is a different program on the other.
 - Give the fuzz-diff driver a voice per mode: the C library's
   interpreter, its JIT, and the port's answer before any JIT compile.
   pcre3 added a fourth voice for JS6 and a rerun of upstream with
-  `PCRE2_NO_AUTO_POSSESS` as a second voice for one ledger class.
+  `PCRE2_NO_AUTO_POSSESS` as a second voice for one ledger class. A
+  fast path the C library shares needs a voice of the port against
+  itself without the fast path (`references/lifecycle.md`, phase 5).
 - Keep slow legs behind labels. Add the labels before the push that
   should run them (see `references/landing.md`), and drop them before
   the final landing push once they have passed on that head, so the
@@ -95,10 +130,36 @@ stream is refused with `BADMAGIC`).
   differ, never on a hash of the input.
 - Each row cites an active `ABI-nnn` or an open bug (`TODO(#n)`); the
   script fails a row that cites neither, and `-Werror=unused-function`
-  fails an unlisted predicate.
+  fails an unlisted predicate. Check the issue's state too: expat-rs's
+  `ci/fuzz-diff.sh --check-known` fails a row citing a closed issue, and
+  a `Fixes #n` in the PR that leaves `TODO(#n)` cited.
 - `known_test.c` checks each class accepts its issue's cases and refuses
   agreeing look-alikes.
 - Narrow a predicate when review shows it excuses more than its class.
+
+Where the surface is small, tolerate no difference at all: no
+`known.c`, and for each deliberate difference the driver does not
+generate the input class, with a comment citing the ledger entry
+(chainz generates only `prime_bits < 8`, skipping the `>= 8` class
+UP-001 records). It is stricter, but the
+avoided class is then compared by nothing, so keep the list of avoided
+classes short and tested elsewhere.
+
+## Caller callbacks and allocators
+
+Function pointers a caller hands in are ABI too: custom allocators
+(zlib's `zalloc`/`zfree`/`opaque`, PCRE2's general context, expat's
+memory suite) and handlers the library calls back.
+
+- Honour the caller's allocator for everything the C library allocated
+  through it, with its alignment, and free through the matching call
+  (chainz ABI-006; expat-rs S9).
+- A callback may panic (a Rust caller) or throw (a C++ one) through the
+  port; test both and say in the ledger what the port does (chainz
+  ABI-005, the `panic_in_zfree_*` tests).
+- A handler may re-enter the library on the same handle. Decide which
+  calls are allowed from inside a callback, refuse the rest, and test
+  them (expat-rs S8).
 
 ## Upstream bugs
 

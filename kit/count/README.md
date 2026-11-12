@@ -252,7 +252,17 @@ proof PR (the skill's lifecycle.md, phase 4):
 2. Copy `kit/templates/verus/FLOOR`, whose figures are all 0.0.
 3. On the PR's base the counter names 0.0 for every figure; on the PR it
    names the figures the proof reaches. Record those in FLOOR in the
-   same PR.
+   same PR, even where FLOOR's raise rule is "own PR": this first raise
+   cannot come before the counter and the proof.
+
+A port with a `verus/floor/` directory names the FLOOR file something
+else (chainz: `verus/SHARES`), since `verus/FLOOR` and `verus/floor/`
+are one path on a case-insensitive file system. Name it in both places:
+the `--floor` flag, which the counter reads at the head, and
+`[floor] path` in `verus/count.toml`, which it reads at `--base-rev`
+(chainz: `--floor verus/SHARES` and `path = "verus/SHARES"`). With only
+the key set, step 1's `--floor verus/FLOOR` reads the directory and the
+counter exits 2.
 
 On chainz's PR #6 head (`eb79512`), the two-line configuration counts
 16 verified functions in zlib-core, the number chainz's own

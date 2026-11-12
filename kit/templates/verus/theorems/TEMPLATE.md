@@ -11,6 +11,16 @@ inputs, and the premises it needs from callers (the `requires`).}
 RFC, a CVE class it rules out, a section of the C library's
 documentation.}
 
+## Premises
+
+| premise | where it comes from | what pins it |
+|---|---|---|
+| {PREMISE: a `requires` clause in words} | {SOURCE: the caller, a hand-written table, the C caller's contract} | {PIN: the theorem that proves it, the test that pins the table, or the seam id that trusts it} |
+
+{Or: "None beyond the `requires` its verified callers prove." A premise
+a test pins rather than a proof is not proved; name the test, so a
+change to the table fails it.}
+
 ## Mutants
 
 Each mutant is a small change to the code or to the proof that a correct

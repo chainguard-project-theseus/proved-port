@@ -49,6 +49,16 @@ check.
 - Survey upstream's CVEs and ChangeLog by bug class before designing.
   pcre3 picked its theorems from that survey (error offsets bounded,
   ovector sanity, bounded recursion, heap limit honoured).
+- Turn the bug classes into numbered security rules, each naming the
+  check that enforces it ("Review" where none can), and map every CVE to
+  its rule and a pinning test. expat-rs's S1 to S14 (`CONTRIBUTING.md`)
+  and `docs/research/cves.md` are the model; theorems then cite the rule
+  they discharge.
+- Pick the oracle's source. A port that tracks the distro compares with
+  its `-dev` package; a port pinned to one upstream release builds the
+  oracle from upstream's release tarball, checked by SHA-256, so the
+  oracle does not move when the distro does (expat-rs's
+  `ci/fuzz-diff.sh`).
 
 Exit: the header, map and smoke checks pass against the C library
 itself, and the consumer survey exists.
@@ -85,6 +95,12 @@ architectures.
   option bits.
 - A test that cannot check its claim on a host prints `SKIP <name>
   <reason>`. It never passes silently.
+- A port may replace the C a piece at a time over the unedited vendored
+  source instead of starting with no C left. chainz builds zlib with
+  `Z_PREFIX`, so the C's internal calls go to `z_*` names, and Rust
+  supplies those names piece by piece. Check that every export is Rust
+  or forwards to the vendored C, and that the forwarding list only
+  shrinks.
 
 Exit: the conformance ratchet's deviations are all ledger entries; the
 differential and fuzz-diff legs are green or every red is a ledger entry
@@ -106,7 +122,18 @@ or an open bug.
    the kit's `verus/FLOOR` template, and raises FLOOR from 0.0 to the
    figures the counter names on that PR. Run the counter on the PR's
    base too: every figure there is 0.0, which shows the gate measured
-   before the proof moved it.
+   before the proof moved it. This raise is the one exception to an
+   own-PR raise rule (`references/proofs.md`, "The FLOOR ratchet"): no
+   figure can rise before a counter and a proof exist, so the first
+   raise lands with them (expat-rs #193).
+   A port that already has its own counter adopts the kit's in a PR of
+   its own and keeps any check of its own that is stricter (chainz #59
+   kept its seam-spelling rejection and per-theorem floor beside it).
+   Where the port has a `verus/floor/` directory, name the kit's FLOOR
+   file something else, in both the counter's `--floor` flag (the head
+   read) and `[floor] path` in `verus/count.toml` (the `--base-rev`
+   read): on a case-insensitive file system `verus/FLOOR` and
+   `verus/floor/` are the same path. chainz uses `verus/SHARES` in both.
    **Vendor the counter:** the ports' check guests cannot reach this
    repository, so the port carries a copy. From a clone of this
    repository, `kit/sync.sh PORT_ROOT` copies `kit/count` at the clone's
@@ -151,12 +178,38 @@ stage. pcre3's rules:
   a native build before dropping it.
 - A second architecture shares the proofs through a neutral layer (see
   `references/proofs.md`, "Transport").
+- A fast path the C library has always had (zlib's `inffast`, which
+  chainz ports as `inflate/fast.rs`) is on from the start, so phase 6
+  does not apply; it still needs the equality theorem and a fuzz voice
+  without it. The differential against the C library cannot see a
+  misreading both share, since the C library runs the same algorithm.
+
+The fuzz voice can land before the proof. chainz #61's shape:
+
+- A cargo feature, off by default, compiles the fast path's call out;
+  a second feature plants a mutant for the self-test. No shipped build
+  enables either.
+- Show the default library is unchanged: build it at the base and at
+  the change in the same environment and compare `.text`, `.rodata`,
+  `.eh_frame` and `.dynsym` byte for byte. Explain any other section
+  that differs (there, panic `Location` line numbers).
+- The self-test replays the seeds with the plant against the slow build
+  and requires a difference; the slow side carries the plant too, so a
+  clean run also shows the slow build never reaches the fast path.
+- The C library's own fast and slow paths may disagree on some outputs.
+  Before excluding one, show it on two builds of the C library, with and
+  without its fast-path call, and that the port's fast build matches the
+  C library there; record each exclusion and its evidence in the PR and
+  the design doc.
 
 Exit: the equality theorem holds; fuzz-diff runs a voice that compares
 the fast path with the slow path; the differential leg runs with the
 fast path on each architecture natively.
 
 ## Phase 6: default on
+
+For a fast path the C library always had, there is nothing to flip;
+the leg that runs without it is the phase 5 fuzz voice.
 
 - Flip the feature in the default build in its own PR, last.
 - Keep the build without it, tested and linted, as its own CI leg
