@@ -1,0 +1,51 @@
+# The conformance check: {LIBRARY} {UPSTREAM_VERSION}'s own tests through
+# upstream's driver, patched to use only the public API and built against
+# {PORT}'s library, compared one block at a time against the deviations
+# list (tests/upstream/deviations.txt), strictly both ways: a block that
+# fails and is not listed fails the check, and so does a listed block
+# that passes. The list only shrinks; every line's reason cites an
+# active docs/abi-changes.md entry. It runs on both architectures and
+# blocks. `make conformance` runs the same script in a development
+# session.
+#
+# differential (on request only: label a pull request
+# ci/run:differential): the same tests through {LIBRARY} and {PORT},
+# against the advisory list tests/upstream/differential.txt.
+# kit: proved-port kit/v{KIT_VERSION}
+version: 1
+
+environment:
+  # build-base: cc for upstream's driver; git: applies
+  # tests/upstream/patches.
+  packages: [{RUST_STREAM}, build-base, busybox, git]
+
+checks:
+  conformance:
+    description: >-
+      {LIBRARY} {UPSTREAM_VERSION}'s tests through the patched driver
+      against {PORT}, per block; the failing blocks must be exactly the
+      reasoned ones in tests/upstream/deviations.txt.
+    trigger: [presubmit, postsubmit]
+    foreach:
+      - {name: amd64, resources: medium-amd64}
+      - {name: arm64, resources: medium-arm64}
+    timeout: 20m
+    network: &crates
+      egress: [index.crates.io, static.crates.io]
+    cmd: [sh, ci/conformance.sh, testdata]
+
+  differential:
+    when: {requested: true}
+    description: >-
+      {PORT} against {LIBRARY} {UPSTREAM_VERSION} on the same tests, per
+      block; the differing blocks must be exactly the reasoned ones in
+      tests/upstream/differential.txt. Advisory.
+    environment:
+      # The file's packages plus the reference library and headers.
+      packages: [{RUST_STREAM}, build-base, busybox, git, {REFERENCE_PACKAGES}]
+    foreach:
+      - {name: amd64, resources: medium-amd64}
+      - {name: arm64, resources: medium-arm64}
+    timeout: 20m
+    network: *crates
+    cmd: [sh, ci/conformance.sh, differential]

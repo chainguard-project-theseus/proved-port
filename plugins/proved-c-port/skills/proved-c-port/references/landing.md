@@ -8,6 +8,12 @@ and safe to merge while main moves every 15 minutes.
 
 - Every PR branch is one commit, at open and after every push. Fold
   review fixes into it and force-push with a lease.
+- The exception is a deps agent PR (`chainguard/deps/<name>`,
+  `.chainguard/deps.yaml`): each turn on it adds a commit on top of its
+  head and never amends, so it holds several commits. Squash-merge it,
+  which gives main one, and do not ask the agent to squash or rewrite
+  it, or amend it yourself. The port's AGENTS.md (workflow step 3)
+  says the same.
 - Squash with a fresh branch at current main, `git merge --squash
   <head>`, then `git commit`. Never `git reset`, soft or otherwise.
 - Follow the repository's signing policy. Where commits are signed
@@ -77,12 +83,18 @@ and safe to merge while main moves every 15 minutes.
   failure came from main, update the branch by rebasing, not rerunning.
 - Run `chainctl checks validate` (or the CI system's linter) before any
   PR that touches the check definitions.
+- A new port's check keys, labels and deps entries start from the kit's
+  `kit/templates/.chainguard/` files, so `ci/run:<check>` means the same
+  leg in every port; `main` requires only `Chainguard Checks
+  (presubmit)`, set in chainguard-dev/infra's github-iac.
 
 ## Merging
 
 - Merge only with `--match-head-commit <sha>`, and with auto-merge
   pinned to the head once the PR is one signed commit with no open
-  Blocking finding.
+  Blocking finding. A deps agent PR needs no squashing first: merge it
+  with `--squash`, pinned to its head, once it has no open Blocking
+  finding.
 - A green PR behind main may merge if `git merge-tree` is clean and the
   commits main gained touch none of the PR's files. A FLOOR change on
   main counts as overlap for every PR.

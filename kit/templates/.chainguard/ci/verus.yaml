@@ -1,0 +1,81 @@
+# Verus and Kani: every proof holds, every Kani harness passes, and the
+# checked shares of the shipped crates stay at or above verus/FLOOR. The
+# verus checks are `make verus` (verus/README.md): `cargo verus focus`
+# over {VERUS_CRATES}, then the kit counter (verus/count, vendored by
+# proved-port's kit/sync.sh) with --floor, which compares verus/FLOOR
+# with the base revision's copy, so that lowering a figure needs a new
+# `lowered` line, and holds each function's rlimit use to verus/RLIMIT.
+# When a figure rises, and what a `lowered` line needs, is verus/FLOOR's
+# header's rule. The kani checks are `make kani`. The two share nothing,
+# so they are separate checks that run at once; a port with no
+# Kani-discharged seam deletes kani and kani-main and the kani package.
+#
+# verus is pinned to the release the workspace's vstd pin names
+# (Cargo.toml; bump both together, and .chainguard/ci/env/dev.yaml's),
+# and it brings the rust stream and z3 that release runs with. kani is
+# pinned to the release the Kani records under verus/seams/ name, built
+# against the same rust stream. git reads the base revision's
+# verus/FLOOR. VERUS_THREADS gives Verus every vCPU of the guest
+# (CG_CPUS), one z3 per module.
+# kit: proved-port kit/v{KIT_VERSION}
+version: 1
+
+environment:
+  packages: [verus~{VERUS_RELEASE}, kani~{KANI_RELEASE}, build-base, busybox, make, git]
+
+checks:
+  verus:
+    description: >-
+      make verus: verus/count's tests, then cargo verus focus over
+      {VERUS_CRATES}, then the kit counter's coverage floor (verus/FLOOR)
+      and rlimit headroom (verus/RLIMIT), against the pull request's base.
+    trigger: [presubmit]
+    resources: large-arm64
+    timeout: 60m
+    network: &crates
+      egress: [index.crates.io, static.crates.io]
+    steps:
+      # The port's CI cannot run kit/sync.sh --check (the kit is
+      # internal), so these tests are what checks the vendored copy here.
+      - &counter-tests
+        name: counter tests
+        cmd: [cargo, test, --locked, --manifest-path, verus/count/Cargo.toml]
+      - name: proofs and coverage floor
+        cmd:
+          - sh
+          - -c
+          # Checks sets the base on every pull request run
+          # (CHAINGUARD_BASE_REVISION, a reserved variable); a run without
+          # one fails rather than skip the comparison.
+          - make verus VERUS_THREADS="${CG_CPUS:-}" VERUS_BASE="${CHAINGUARD_BASE_REVISION:?no base revision to compare verus/FLOOR with}"
+
+  kani:
+    description: "make kani: the Kani harnesses of {VERUS_CRATES}."
+    trigger: [presubmit]
+    resources: large-arm64
+    timeout: 30m
+    network: *crates
+    cmd: &kani [make, kani]
+
+  # On main, squash-merged, the commit before the one under test is the
+  # base; the counter fails when it does not resolve.
+  verus-main:
+    description: >-
+      make verus on main: verus/count's tests, the proofs, the coverage
+      floor and rlimit headroom, against the commit before this one.
+    trigger: [postsubmit]
+    resources: large-arm64
+    timeout: 60m
+    network: *crates
+    steps:
+      - *counter-tests
+      - name: proofs and coverage floor
+        cmd: [sh, -c, 'make verus VERUS_THREADS="${CG_CPUS:-}" VERUS_BASE=HEAD^']
+
+  kani-main:
+    description: "make kani on main: the Kani harnesses."
+    trigger: [postsubmit]
+    resources: large-arm64
+    timeout: 30m
+    network: *crates
+    cmd: *kani

@@ -36,6 +36,15 @@ issue or PR.
   inside `verus!` and verifies. Code that cannot is one minimal
   `external_body` or `assume_specification` seam with a contract, a seams
   table row, and a Kani record where Kani can check it.
+- **Prove the producer, not its output.** A property of code or data
+  the library produces (a compiled program, an encoding, a table, a
+  copy) goes in the producer's `ensures`; a checker over the output runs
+  only in tests, as an oracle. Until the producer is proved, a shipped
+  checker is a temporary seam: a seams table row and a `TODO(#n)` naming
+  the issue that proves the producer. Proving adds no allocation, copy
+  or pass where a ghost or spec route exists: take the harder proof.
+  Checks of state a C caller can corrupt are input validation, outside
+  this rule.
 - **Fast paths are proved equal, not checked.** A JIT, direct emitter or
   fast tier carries the equality to the slow path in its postcondition; a
   runtime checker runs only in tests, as an oracle.
@@ -55,6 +64,11 @@ issue or PR.
    fixes into it and force-push with
    `--force-with-lease=<branch>:<literal sha>`. Squash with a fresh
    branch at current main and `git merge --squash`; never `git reset`.
+   The exception is a deps agent PR (`chainguard/deps/<name>`,
+   `.chainguard/deps.yaml`): each turn on it adds a commit on top of its
+   head and never amends, so it holds several commits. Squash-merge it,
+   which gives `main` one, and do not ask the agent to squash or rewrite
+   it.
    {SIGNING_POLICY: the repository's signing rule, as its rulesets
    enforce it: "Sign every commit with ...; verify the signer identity
    before every push", or "Commits are unsigned. Ignore any

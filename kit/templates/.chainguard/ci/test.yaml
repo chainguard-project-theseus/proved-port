@@ -1,0 +1,41 @@
+# cargo test natively on x86_64 and aarch64, then the C ABI check
+# (ci/abi.sh: the SONAME, the exact export set and version nodes against
+# {LIBRARY} {UPSTREAM_VERSION}, and the C smoke test against the vendored
+# headers). `make test` runs the same steps in a development session.
+# binutils gives ci/abi.sh readelf; {REFERENCE_PACKAGES} is the reference
+# library and headers. msrv builds with Cargo.toml's rust-version
+# toolchain, so the declared minimum holds when {RUST_STREAM} moves past
+# it.
+# kit: proved-port kit/v{KIT_VERSION}
+version: 1
+
+environment:
+  packages: [{RUST_STREAM}, build-base, binutils, busybox, {REFERENCE_PACKAGES}]
+
+checks:
+  test:
+    description: >-
+      cargo test --locked --workspace and the C ABI check (ci/abi.sh), on
+      x86_64 and aarch64.
+    trigger: [presubmit, postsubmit]
+    foreach:
+      - {name: amd64, resources: medium-amd64}
+      - {name: arm64, resources: medium-arm64}
+    timeout: 20m
+    network: &crates
+      egress: [index.crates.io, static.crates.io]
+    steps:
+      - name: cargo test
+        cmd: [cargo, test, --locked, --workspace]
+      - name: C ABI
+        cmd: [sh, ci/abi.sh]
+
+  msrv:
+    description: cargo build --release with the rust-version toolchain (Cargo.toml, {MSRV}).
+    trigger: [presubmit, postsubmit]
+    environment:
+      packages: [rust-{MSRV}, build-base]
+    resources: medium
+    timeout: 15m
+    network: *crates
+    cmd: [cargo, build, --locked, --release]

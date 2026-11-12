@@ -19,9 +19,13 @@ environment names, or in a development session. The Makefile targets
 (`build`, `test`, `lint`, `smoke`, `verus`, `kani`, `bench`) and what
 each runs.}
 
-Toolchain: the Wolfi stream `{RUST_STREAM}` is used in the check files,
-the development environment and the package's `rust-version`; bump them
-together. The `verus` package (pinned `verus~{VERUS_RELEASE}`) depends
+Toolchain: the Wolfi stream `{RUST_STREAM}` is used in every check file
+but the msrv check, and in the development environment; bump them
+together. `rust-version` in `Cargo.toml` is {MSRV}, the floor the msrv
+check builds with (`rust-{MSRV}` in `.chainguard/ci/test.yaml`). It does
+not move with `{RUST_STREAM}`: it and the msrv check's toolchain move
+together, only through the deps agent's `msrv` entry
+(`.chainguard/deps.yaml`), never higher than `{RUST_STREAM}`. The `verus` package (pinned `verus~{VERUS_RELEASE}`) depends
 on that stream, and its release is the one `Cargo.toml`'s `vstd` pin
 names, so a Verus bump moves the stream, the `verus` pins and the vstd
 pin together. The `kani` package (pinned `kani~{KANI_RELEASE}`) is built
@@ -84,6 +88,8 @@ name, so a Kani bump moves the pins and the records together.
 - One logical change per PR, as **one commit**, following the
   workflow in `AGENTS.md`: issue, branch, `Fixes #n`, labels set before
   the push, literal push targets, merge on green with the head pinned.
+  A deps agent PR is the exception: it gains a commit per turn, and the
+  squash merge gives `main` one.
 - {Licence statement.}
 
 ## Code review
