@@ -232,3 +232,25 @@ updates:
     failure that is a {PORT} bug is left for a person: keep that consumer
     at its old version and describe the failure. Do not edit
     .chainguard/deps.yaml unless a person asks in a comment.
+
+# Optional: with the miri checks (.chainguard/ci/miri.yaml) only.
+- name: miri
+  schedule: "30 {DEPS_HOUR} * * 3" # Wednesdays
+  paths: ["ci/miri.sh", "ci/lib.sh", "ci/miri-known.txt"]
+  environment: .chainguard/ci/miri.yaml
+  merge: manual
+  prompt: >-
+    Move ci/miri.sh's dated nightly (`nightly=`) to the newest nightly at
+    least 7 days old whose channel manifest ships the miri and rust-src
+    components for x86_64 and aarch64 Linux, and set `manifest_sum` to the
+    SHA-256 of https://static.rust-lang.org/dist/<date>/channel-rust-nightly.toml.
+    Keep both comments that name the date and the URL in step. When a
+    newer rustup release is at least 7 days old, move ci/lib.sh's
+    rustup-init pin too: `_rp_version` and both SHA-256s, one per host,
+    of its rustup-init. Run `sh ci/miri.sh` (MIRI_TREE_BORROWS=0, then
+    1). A new Miri finding in {CAPI_CRATE} is a real bug: do not silence
+    it, and add no ci/miri-known.txt row for it; leave the nightly where
+    it is and describe the finding in the body. A known test that now
+    passes, or fails without undefined behaviour, fails the script: say
+    which in the body and leave its row for a person. Do not edit
+    .chainguard/deps.yaml unless a person asks in a comment.

@@ -22,8 +22,15 @@ echo "$sum  $tarball" | sha256sum -c -
 tar -xJf "$tarball" -C "$dir"
 "$dir/shellcheck-$version/shellcheck" --version
 # A command substitution, not a pipe, so a git failure stops the script.
-files=$(git -c safe.directory='*' ls-files -- 'kit/*.sh')
+files=$(git -c safe.directory='*' ls-files -- 'kit/*.sh' ':!kit/templates/*')
 test -n "$files"
 # The paths have no spaces; split them into arguments.
 # shellcheck disable=SC2086
 "$dir/shellcheck-$version/shellcheck" $files
+# The templates' scripts run from kit/templates, as a port runs them from
+# its root, so that their `# shellcheck source=ci/lib.sh` lines resolve.
+templates=$(git -c safe.directory='*' -C kit/templates ls-files -- '*.sh')
+if [ -n "$templates" ]; then
+  # shellcheck disable=SC2086
+  (cd kit/templates && "$dir/shellcheck-$version/shellcheck" $templates)
+fi

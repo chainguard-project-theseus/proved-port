@@ -1,0 +1,18 @@
+# Tests of the kit's script templates. miri-template is kit/miri-test.sh:
+# kit/templates/ci/miri.sh filled into a scratch port with a stub cargo.
+# busybox only, as the ports' miri checks have (BusyBox grep, sed and
+# awk), so the template is tested with the tools it runs with. Blocks.
+version: 1
+
+environment:
+  packages: [busybox]
+
+checks:
+  miri-template:
+    description: >-
+      kit/miri-test.sh: the Miri template's runs with a stub cargo (the
+      known list, the thread tests' guard, a test the Miri build leaves
+      out) and the README's placeholder pattern, with BusyBox's tools.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [sh, kit/miri-test.sh]

@@ -156,3 +156,69 @@ its name to the `required_checks` ruleset's `for_each`, which requires
 that context with the `chainguard` app's `integration_id`.
 chainguard-dev/infra#5389 is the example: it adds chainz, expat-rs, pcre3
 and proved-port, importing pcre3's hand-made ruleset to add the app pin.
+
+### The optional Miri checks
+
+A port whose C API crate has unsafe code may run its tests under Miri.
+These files are optional: a port without them deletes the deps.yaml
+`miri` entry and env/dev.yaml's `libgcc`. They come from wolfi-dev/pcre3
+main at `0c42c50d` and wolfi-dev/expat-rs#202 (`98588c1f`).
+
+| template | copy to | what it holds |
+|---|---|---|
+| `.chainguard/ci/miri.yaml` | `.chainguard/ci/miri.yaml` | `miri` (Stacked Borrows, the thread seeds and the known tests) on every pull request and merge; `miri-tree` (Tree Borrows) on request |
+| `ci/miri.sh` | `ci/miri.sh` | the passes, sharded one per vCPU, with a dated nightly from rustup |
+| `ci/miri-known.txt` | `ci/miri-known.txt` | the tests that hit an open, Miri-confirmed bug: `TEST #ISSUE REASON` |
+| `ci/lib.sh` | `ci/lib.sh` | `fetch`, `rust_host` and `rustup_pinned`, which pin rustup-init and the nightly's channel manifest by SHA-256 |
+
+The deps.yaml `miri` entry moves the nightly and the rustup-init pin. A
+port where another script installs a toolchain with `rustup_pinned`
+(pcre3's ci/test-32.sh) moves the rustup-init pin in the entry that owns
+that script instead (pcre3's toolchain entry), and the `miri` entry
+leaves it alone.
+
+A known test must still fail with undefined behaviour (expat-rs's rule):
+ci/miri.sh runs each row's test alone under Stacked Borrows and fails
+when it passes, so the fix deletes its row, and when it fails another
+way, so the row is updated. A row that names no listed test, or no
+`#issue`, fails it too. A test Miri cannot run is not a row: it says so
+with `cfg(miri)`, or its file goes in `nomiri`.
+
+Where the two ports differ, ci/miri.sh's settings choose:
+
+- `nomiri`: the test files Miri cannot run. expat-rs runs only the
+  library's tests, since tests/c_link_test.rs links C; pcre3 runs every
+  test binary. The template finds the binaries as pcre3 does and leaves
+  out those `nomiri` names.
+- `thread_tests`: pcre3's tests start threads, so it runs them again
+  over the scheduler seeds 0..4; expat-rs's start none. With `no`, a test
+  that starts a thread fails the script until it says `yes`. The thread
+  tests are found by scanning the source, as pcre3 does. pcre3 fails
+  when a name it finds is not in the Miri listing. The template skips
+  that name instead, as a test that `cfg(not(miri))` or a feature leaves
+  out of the Miri build. A name that matches more than one listed test
+  still fails.
+- `flags`: pcre3 passes `-Zmiri-permissive-provenance` for the one
+  integer-to-pointer cast it keeps (its recursion guard); expat-rs passes
+  nothing.
+- pcre3 has no known list, expat-rs lists three tests (#168, #170,
+  #171). The template keeps the list, empty.
+- expat-rs runs one Miri process per test, so the first undefined
+  behaviour in a shard does not hide the shard's later tests; pcre3 runs
+  each shard's tests of a binary in one process, which is faster. The
+  template does as pcre3 does; the failing shard's log names the test.
+- pcre3's ci/miri.sh installs curl in a session that lacks it; the
+  template's env/dev.yaml has curl, so the template does not.
+
+Fill the placeholders as above, also `{MIRI_NIGHTLY}`,
+`{MIRI_MANIFEST_SHA256}`, `{CAPI_CRATE_DIR}` (the crate's directory, such
+as `crates/{CAPI_CRATE}`), `{RUSTUP_RELEASE}` and the two
+`{RUSTUP_INIT_SHA256_...}` values (both sources pin rustup 1.29.2), and
+keep one choice of each of `nomiri`, `thread_tests` and `flags`. Add a
+`miri` target to the Makefile that runs `sh ci/miri.sh` in a session.
+The shell files use `${VAR:-}`, so they take a pattern that skips `${`;
+this finds none when you are done:
+
+```sh
+grep -nE '(^|[^$])\{[A-Z][A-Z0-9_]*[}:]|\{[A-Z][a-z]' ci/miri.sh ci/lib.sh ci/miri-known.txt .chainguard/ci/miri.yaml
+```
