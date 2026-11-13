@@ -1,0 +1,20 @@
+# codeowners-gate sidecar for wolfi-dev/proved-port: the source of truth for
+# .github/CODEOWNERS, which renders it without the bot: owners. Change both
+# with a change request and the codeowners-gate tool's apply step (a
+# Chainguard-internal tool), run from the root of this repository. GitHub
+# reads the rendering with last match wins.
+#
+# The Chainguard Checks review gate reads this file from the default
+# branch. bot:proved-port is the reviewer declared in
+# .chainguard/reviewers.yaml: on a gated entry its approve verdict satisfies
+# a path the way an owner's approval does, and once every changed path is
+# satisfied, Checks submits an approving review as chainguard[bot]. A path
+# the reviewers read as their own definitions (this file, reviewers.yaml,
+# the prompt file, AGENTS.md, CLAUDE.md) always needs a person's approval,
+# from someone named here other than the author or a pusher of the head.
+version: 1
+entries:
+  - pattern: '*'
+    owners: [dlorenc, mattmoor, tcnghia, 'bot:proved-port']
+    gate: 1
+    note: 'every path: one approval from a maintainer or the proved-port Checks reviewer (bot:proved-port, .chainguard/reviewers.yaml); one entry so no pull request mixes a gated path with an advisory one, which Checks never approves'

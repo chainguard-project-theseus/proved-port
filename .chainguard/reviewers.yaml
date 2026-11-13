@@ -1,0 +1,28 @@
+# Checks code reviewers for proved-port. Read from the default branch by
+# the Chainguard Checks code reviewer (mono's
+# ai-cicd/sandbox/cmd/code-reviewer), so a change here takes effect once
+# it merges. The reviewer named here is the `bot:proved-port` owner of
+# every path in .github/codeowners.yaml. Shaped on the kit's own template
+# (kit/templates/.chainguard/reviewers.yaml) and on the ports' copies.
+version: 1
+# Checks submits the approving review once every changed path has its
+# approval (root file only).
+approve: true
+# Per-pass read limits, at their ceilings: kit/count/src/main.rs is near
+# 7,000 lines and kit/count/tests/cli.rs near 2,000, and a counter rule
+# change touches both and the README that states the rule, so each pass
+# may read the diff and its context. No `diff_lines`: mono's
+# code-reviewer README lists it as deprecated, and the reviewer ignores
+# it.
+limits:
+  read_calls: 60
+  read_kib: 800
+reviewers:
+  - name: proved-port
+    trigger:
+      paths: ["**"]
+    prompt_file: review-prompt.md
+    # The reviewer reads the presubmit results (review-prompt.md,
+    # "Evidence"), so it runs again at the same head once the presubmit
+    # aggregate finishes, and a verdict that waited on CI reads them.
+    rerun_on_checks: ["Chainguard Checks (presubmit)"]
