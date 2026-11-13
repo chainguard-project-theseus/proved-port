@@ -194,8 +194,15 @@ Rules:
   their own, to the figures the check names on main, never in the PR
   that earns them, so parallel PRs never conflict there (pcre3's
   same-PR raises once cost #689 four updates from main;
-  `references/pitfalls.md`). The one exception is the first proof PR,
-  which brings the counter (`references/lifecycle.md`, phase 4).
+  `references/pitfalls.md`). The one exception is the port's first
+  proof PR, which may raise FLOOR from 0.0 in the same PR, whether it
+  brings the counter or the counter landed earlier at FLOOR 0.0
+  (`references/lifecycle.md`, phase 4).
+- FLOOR compares with one base, the one Checks sets
+  (`CHAINGUARD_BASE_REVISION`): the PR's base on a PR, and on main the
+  start of the push the run covers. Not `HEAD^`: Checks settles a burst
+  of merges into one run, and `HEAD^` would compare only the last. A run
+  with no base fails; it never SKIPs.
 - The README's Verus badge carries FLOOR's `functions` and `lines`
   figures in its text, since shields.io cannot read a private
   repository. With `[badge]` in `verus/count.toml` the counter fails
@@ -203,8 +210,8 @@ Rules:
   so the PR that raises FLOOR replaces the badge with what
   `verus-count --badge .` prints, in that same PR. Never keep the badge
   by hand or fix it in a follow-up: the check refuses the drift.
-- Every verus run compares FLOOR with a base: the PR's base on
-  presubmit, `HEAD^` on main. Where FLOOR exists, a run with no base
+- Every verus run compares FLOOR with that base, on presubmit and on
+  main. Where FLOOR exists, a run with no base
   fails; a wrapper that prints SKIP and passes lets main lower FLOOR
   unseen. A local run says so: `make verus VERUS_BASE=none`.
 - A port with no proofs yet runs the gate from its first commit: at

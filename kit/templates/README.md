@@ -42,9 +42,11 @@ templates and their checks use.
 The FLOOR raise rule is the same in every port: FLOOR and the README
 badge rise in a pull request of their own, to the figures the check
 names, never in the pull request that earns them, so that pull requests
-landing in parallel do not conflict there. The first proof pull request,
-which brings the counter, is the one exception (FLOOR's header;
-`kit/count/README.md`, "Bootstrapping a port").
+landing in parallel do not conflict there. The one exception is the
+port's first proof pull request, which may raise FLOOR from 0.0 in the
+same pull request, whether it brings the counter or the counter landed
+earlier with FLOOR at 0.0 (FLOOR's header; `kit/count/README.md`,
+"Bootstrapping a port").
 
 | template | copy to | what it holds |
 |---|---|---|
@@ -85,8 +87,9 @@ which brings the counter, is the one exception (FLOOR's header;
    ```
 3. Start FLOOR at the counter's first run: record the figures its
    `shipped` row names, rounded down, as the check prints them. A port
-   with no proofs yet starts at `0.0` and rises with its first theorem.
-   From then on it rises only in pull requests of its own (above).
+   with no proofs yet starts at `0.0`, and its first proof pull request
+   may raise it in the same pull request. From then on it rises only in
+   pull requests of its own (above).
    README.md's badge line gives FLOOR's `functions` and `lines`, and with
    `[badge]` the check fails when it does not, so each change that moves
    those figures replaces the line with what `verus-count --badge .`
@@ -118,7 +121,7 @@ merged) with #202 (`98588c1f`).
 |---|---|---|
 | `.chainguard/ci/lint.yaml` | rustfmt, clippy, the source rules (`ci/lint-unsafe.sh`, `ci/header-check.sh`), shellcheck from the packaged `shellcheck~` | pcre3, expat-rs; shellcheck as chainz#63 |
 | `.chainguard/ci/test.yaml` | cargo test and `ci/abi.sh` on amd64 and arm64; msrv on the `rust-version` toolchain | pcre3, expat-rs, chainz#63 |
-| `.chainguard/ci/verus.yaml` | `verus` and `kani` against the pull request's base; `verus-main` and `kani-main` on main against `HEAD^`; one architecture (large-arm64, 60 and 30 minutes) by default, with a commented `verus-amd64` for proved code that differs by target | pcre3, challoc, expat-rs; `verus-amd64` as challoc's `verus-arm64` |
+| `.chainguard/ci/verus.yaml` | `verus` and `kani` against the pull request's base; `verus-main` and `kani-main` on main, `verus-main` against the start of the push; one architecture (large-arm64, 60 and 30 minutes) by default, with a commented `verus-amd64` for proved code that differs by target | pcre3, challoc, expat-rs; `verus-amd64` as challoc's `verus-arm64` |
 | `.chainguard/ci/fuzz.yaml` | `fuzz`, `fuzz-diff` and `fuzz-abi` on request, each fuzzer after its self-test; `known-citations` on every pull request | pcre3, expat-rs |
 | `.chainguard/ci/conformance.yaml` | the deviations ratchet on both architectures; `differential` on request | pcre3, chainz, expat-rs |
 | `.chainguard/ci/consumers.yaml` | one instance per consumer, on request | pcre3, chainz, expat-rs |
@@ -155,7 +158,7 @@ but has no gate there until it does. From the first commit:
 | file | check | trigger |
 |---|---|---|
 | `.chainguard/ci/verus.yaml` | `verus` (`make verus` against the pull request's base) | presubmit |
-| `.chainguard/ci/verus.yaml` | `verus-main` (`make verus` against `HEAD^`) | postsubmit |
+| `.chainguard/ci/verus.yaml` | `verus-main` (`make verus` against the start of the push) | postsubmit |
 | `.chainguard/ci/verus.yaml` | `kani` (`make kani`), for a port that will discharge seams with Kani | presubmit |
 | `.chainguard/ci/verus.yaml` | `kani-main` (`make kani`), likewise | postsubmit |
 | `.chainguard/ci/test.yaml` | `msrv` (`cargo build --release` on the `rust-version` toolchain) | presubmit, postsubmit |
@@ -163,8 +166,9 @@ but has no gate there until it does. From the first commit:
 Each passes on a port with no proofs yet:
 
 - `verus` and `verus-main` pass at FLOOR 0.0 with the 0.0 badge, on a
-  port with no `verus!` code, with the pull request's base or `HEAD^`
-  as the base and also when that base predates `verus/`. On such a
+  port with no `verus!` code, with the base Checks sets (a pull
+  request's, or the start of a push to main) and also when that base
+  predates `verus/`. On such a
   port `cargo verus focus` (Verus 0.2026.10.18) warns that no crate
   opted into verification, exits 0 and writes empty statistics, which
   the counter reads as no verified function; the counter's
@@ -213,8 +217,18 @@ check in the port of a hand-edited counter, and a hand edit to
 `verus/make/` has no check there but the reviewer, whose prompt holds
 both copies to the commit `verus/count/KIT` names.
 
-Every verus run compares FLOOR with a base: the pull request's on
-`verus`, the commit before on `verus-main`. Where verus/FLOOR exists, a
+The verus checks compare verus/FLOOR and verus/RLIMIT with one base, by
+one rule: the base Checks sets (`CHAINGUARD_BASE_REVISION`), which both
+`verus` and `verus-main` read. On a pull request (`verus`, presubmit) it
+is the pull request's base. On main (`verus-main`, postsubmit) it is the
+start of the push the run covers: Checks settles a burst of pushes into
+one run at the last, and names as its base the tip its previous run
+planned (when that is a first-parent ancestor, else the first parent).
+`HEAD^` is not the base there: when a run covers two merges, `HEAD^` is
+the first of them, and that merge would never be compared with main
+before it. A run with no base fails rather than SKIP.
+
+Every verus run compares FLOOR with that base. Where verus/FLOOR exists, a
 run with no base fails, never SKIPs: the port's `make verus` passes
 `--base-rev` and fails when `VERUS_BASE` is empty, as verus.yaml's
 header says. A wrapper that prints SKIP and passes when no base is set

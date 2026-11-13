@@ -152,7 +152,10 @@ or an open bug.
    in a PR of their own, to the figures the check names, never in the
    PR that earns them (`references/proofs.md`, "The FLOOR ratchet"). No
    figure can rise before a counter and a proof exist, so the first
-   raise lands with them (expat-rs #193).
+   raise lands with them (expat-rs #193). A port whose counter landed
+   earlier at FLOOR 0.0 (from its setup, or in a PR of its own) takes
+   the same exception: its first proof PR may raise FLOOR and the badge
+   from 0.0 in that PR.
    A port that already has its own counter adopts the kit's in a PR of
    its own and keeps any check of its own that is stricter (chainz #59
    kept its seam-spelling rejection and per-theorem floor beside it).

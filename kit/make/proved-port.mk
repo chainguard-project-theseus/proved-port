@@ -104,8 +104,9 @@ VERUS_FLOOR ?= verus/FLOOR
 # with no verus/RLIMIT yet.
 VERUS_RLIMIT ?= yes
 # VERUS_BASE: the revision verus/FLOOR, verus/RLIMIT and the counter's
-# other ratchets compare with (--base-rev). The verus check passes the
-# pull request's base and verus-main HEAD^. Empty fails verus and
+# other ratchets compare with (--base-rev). The verus checks pass the
+# base Checks sets: the pull request's, or on main the start of the
+# push the run covers. Empty fails verus and
 # verus-count before they run anything, so a check that loses its base
 # fails rather than skip the comparison. `none` runs the counter with
 # --no-base, no comparison: for a local or development run
@@ -144,7 +145,7 @@ verus_count_cmd = $(or $(verus_count_bin),$(VERUS_COUNT_TARGET)/release/verus-co
   $(if $(filter none,$(VERUS_BASE)),--no-base,--base-rev $(VERUS_BASE)) $(VERUS_COUNT_FLAGS) .
 # Expanded with the recipe, so it fails `make verus` (and `make -n
 # verus`) before the proofs run, and leaves other targets alone.
-verus_base_missing = no VERUS_BASE to compare $(VERUS_FLOOR) with: give the revision (the verus check passes the pull request's base, verus-main HEAD^), or VERUS_BASE=none for a local run or the proof PR that adds the first FLOOR
+verus_base_missing = no VERUS_BASE to compare $(VERUS_FLOOR) with: give the revision (the verus checks pass the base Checks sets, CHAINGUARD_BASE_REVISION), or VERUS_BASE=none for a local run or the proof PR that adds the first FLOOR
 verus_base_check = $(if $(VERUS_BASE),,$(error $(verus_base_missing)))
 # Installed: PROVED_PORT_VERSION must be set, and the release
 # PROVED_PORT_HOME/KIT records must be that one. Expanded with each kit

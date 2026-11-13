@@ -13,7 +13,8 @@ The badge above gives verus/FLOOR's `functions` and `lines` figures,
 the shares of the shipped crates' executable functions and of their
 lines that Verus checks (verus/README.md, "Coverage"). The verus check
 fails when the badge disagrees with verus/FLOOR, so the pull request
-that raises FLOOR, which does nothing else (verus/FLOOR's header),
+that raises FLOOR, which does nothing else but in the port's first
+proof pull request (verus/FLOOR's header),
 replaces the line with the one `verus-count --badge .` (the counter
 verus/count builds) prints.
 

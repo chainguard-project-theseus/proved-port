@@ -43,8 +43,9 @@ a change cites. The checks below are what a change must not get wrong.
   line, each as its header says; anything else is Blocking. FLOOR and the
   README badge rise in a pull request of their own, to the figures the
   check names (FLOOR's header): a raise in a pull request that changes
-  anything else is a Question citing that header, unless it is the first
-  proof pull request, which brings the counter.
+  anything else is a Question citing that header, unless it is the port's
+  first proof pull request, raising FLOOR from 0.0, whether or not it
+  brings the counter.
 - The vendored kit (`verus/count/`, the counter, and `verus/make/`, the
   make targets, Kani runner and header lint with their templates).
   Every file in either comes from `kit/sync.sh` in the proved-port kit,
