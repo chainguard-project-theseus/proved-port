@@ -9,8 +9,8 @@ Use this skill when porting a C library to Rust where the Rust library
 must load in place of the C one (same header, sonames, symbols, error
 codes) and must be proved safe, shown correct against the C original,
 and measured at least as fast. The worked examples are wolfi-dev/pcre3
-(a PCRE2 10.49 replacement) and wolfi-dev/challoc (a jemalloc-compatible
-`malloc`).
+(a PCRE2 10.49 replacement) and chainguard-project-theseus/challoc (a
+jemalloc-compatible `malloc`).
 
 The C library is the specification you did not have to write. Every rule
 below exists to keep the port tied to it: compare against it, prove what
