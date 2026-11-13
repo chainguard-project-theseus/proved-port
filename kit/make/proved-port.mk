@@ -39,8 +39,8 @@
 #   kani              kani.sh: the Kani harnesses, all of them or a shard,
 #                     failing on any failure and when none run, unless
 #                     KANI_NONE = yes declares the port has none yet.
-#   kani-list         kani.sh --list: the harnesses, one `CRATE NAME` a
-#                     line (or this shard's, with KANI_SHARDS).
+#   kani-list         kani.sh --list: the harnesses, one `CRATE NAME FILE`
+#                     a line (or this shard's, with KANI_SHARDS).
 
 # The directory this file is in (verus/make/), for its scripts.
 PROVED_PORT_MAKE := $(dir $(lastword $(MAKEFILE_LIST)))
@@ -161,5 +161,5 @@ verus-headers: ## the kit's Verus files against the kit's templates (verus/make/
 kani: ## the Kani harnesses, all or a shard (verus/make/kani.sh; KANI_SHARD/KANI_SHARDS; KANI_NONE=yes for none yet)
 	sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
 
-kani-list: ## the Kani harnesses, one CRATE NAME a line
+kani-list: ## the Kani harnesses, one CRATE NAME FILE a line
 	sh $(PROVED_PORT_MAKE)kani.sh --list $(KANI_ARGS)

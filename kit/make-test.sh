@@ -7,7 +7,8 @@
 #     and for the settings pcre3, expat-rs, chainz and challoc need;
 #   - kani.sh runs with a stub cargo: crate selection, one harness,
 #     shards, jobs, a failure, the fail pattern, the version check, a
-#     selection with no harnesses with and without KANI_NONE;
+#     selection with no harnesses with and without KANI_NONE, one name
+#     in several files;
 #   - headers.sh holds the kit's Verus files (kit/make/VERUS-FILES) and
 #     no other: it passes them as the port fills them and fails on
 #     drift.
@@ -338,12 +339,20 @@ kani -p=alpha" KANI_CRATES=alpha STUB_SAY='VERIFICATION:- SUCCESSFUL' KANI_FAIL_
 grep -qx 'VERIFICATION:- SUCCESSFUL' "$tmp/out" || fail "kani.sh with a fail pattern did not print the result lines"
 
 kani KANI_CRATES="alpha beta" sh "$k" --list || fail "kani.sh --list failed"
-expect "kani.sh --list" "$(grep -v '^kani:' "$tmp/out")" "alpha kani::a_one
-alpha kani::a_three
-alpha kani::a_two
-beta kani::b_one"
+expect "kani.sh --list" "$(grep -v '^kani:' "$tmp/out")" "alpha kani::a_one src/lib.rs
+alpha kani::a_three src/lib.rs
+alpha kani::a_two src/lib.rs
+beta kani::b_one src/lib.rs"
 grep -q ' list ' "$tmp/calls" || fail "kani.sh --list did not call cargo kani list"
 if grep -v ' list ' "$tmp/calls" | grep -q .; then fail "kani.sh --list ran a harness"; fi
+# Each place the vendored kani.sh and proved-port.mk (the kani-list
+# target's header row and its help) say what --list prints names the
+# columns it prints.
+grep -v '^kani:' "$tmp/out" | awk '{ print NF }' | LC_ALL=C sort -u > "$tmp/cols"
+grep -h -o -E 'one `?CRATE NAME[A-Z ]*' "$port/verus/make/kani.sh" "$port/verus/make/proved-port.mk" |
+  awk '{ print NF - 1 }' > "$tmp/doc-cols"
+expect "kani.sh, the kani-list target and its help each document --list" "$(wc -l < "$tmp/doc-cols" | tr -d ' ')" 3
+expect "the docs of --list name the $(cat "$tmp/cols") columns it prints" "$(LC_ALL=C sort -u "$tmp/doc-cols")" "$(cat "$tmp/cols")"
 
 list beta 2 kani::b_one
 refuses "a kani-list.json whose totals do not match" 1 KANI_CRATES=beta KANI_SHARD=1 KANI_SHARDS=1 sh "$k"
@@ -382,6 +391,91 @@ kani -p=alpha --exact --harness kani::a_three
 kani -p=beta --exact --harness kani::b_one" \
   KANI_CRATES="alpha beta" KANI_WEIGHTS=weights2 KANI_SHARDS=3 KANI_SHARD=3 sh "$k"
 
+# A harness is its name and its file. cargo's default selection over a
+# workspace whose crates a, b and c each have a tests::check (c's a
+# contract harness) has four harnesses: the kani-list.json Kani 0.68.0
+# wrote for it, whose "contracts" array names c's a second time.
+{
+  echo '{'
+  echo '  "kani-version": "0.68.0",'
+  echo '  "file-version": "0.1",'
+  echo '  "standard-harnesses": {'
+  echo '    "a/src/lib.rs": ['
+  echo '      "tests::check"'
+  echo '    ],'
+  echo '    "b/src/lib.rs": ['
+  echo '      "tests::check",'
+  echo '      "tests::other"'
+  echo '    ]'
+  echo '  },'
+  echo '  "contract-harnesses": {'
+  echo '    "c/src/lib.rs": ['
+  echo '      "tests::check"'
+  echo '    ]'
+  echo '  },'
+  echo '  "contracts": ['
+  echo '    {'
+  echo '      "function": "half",'
+  echo '      "file": "c/src/lib.rs",'
+  echo '      "harnesses": ['
+  echo '        "tests::check"'
+  echo '      ]'
+  echo '    }'
+  echo '  ],'
+  echo '  "totals": {'
+  echo '    "standard-harnesses": 3,'
+  echo '    "contract-harnesses": 1,'
+  echo '    "functions-under-contract": 1'
+  echo '  }'
+  echo '}'
+} > "$tmp/lists/default.json"
+runs "cargo's default selection with tests::check in three files" "kani list --format json
+kani" sh "$k"
+kani sh "$k" --list || { cat "$tmp/out" >&2; fail "kani.sh --list over tests::check in three files failed"; }
+expect "kani.sh --list keeps each file's tests::check" "$(grep -v '^kani:' "$tmp/out")" "- tests::check a/src/lib.rs
+- tests::check b/src/lib.rs
+- tests::check c/src/lib.rs
+- tests::other b/src/lib.rs"
+refuses "KANI_NONE=yes over tests::check in three files" 1 KANI_NONE=yes sh "$k"
+grep -q 'the selected crates have 4; delete KANI_NONE' "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "kani.sh KANI_NONE=yes over tests::check in three files: got = no message naming 4 harnesses, want = one"; }
+# Sharded, --exact --harness tests::check runs all three, so they share
+# a shard: 150 s on shard 1, tests::other on shard 2. Split by file, two
+# would go to shard 1 and one to shard 2, which runs all three again.
+printf 'tests::check 50\ntests::other 40\n' > "$port/weights3"
+runs "shard 1 of 2 runs tests::check of every file" "kani list --format json
+kani --exact --harness tests::check" KANI_WEIGHTS=weights3 KANI_SHARDS=2 KANI_SHARD=1 sh "$k"
+grep -qx 'kani: shard 1 of 2: 3 of 4 harnesses' "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "shard 1 of 2 over tests::check in three files: got = no count of 3 of 4, want = it"; }
+grep -q 'shard 1: 3 harnesses, ~150 s' "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "shard 1 of 2 over tests::check in three files: got = no split line of 3 harnesses, ~150 s, want = it"; }
+runs "shard 2 of 2 runs tests::other alone" "kani list --format json
+kani --exact --harness tests::other" KANI_WEIGHTS=weights3 KANI_SHARDS=2 KANI_SHARD=2 sh "$k"
+kani KANI_SHARDS=2 KANI_SHARD=1 sh "$k" --list || fail "kani.sh --list of shard 1 of 2 failed"
+expect "kani.sh --list of a shard keeps each file's tests::check" "$(grep -v '^kani:' "$tmp/out")" "- tests::check a/src/lib.rs
+- tests::check b/src/lib.rs
+- tests::check c/src/lib.rs"
+# A harness map line in another shape fails rather than be skipped: a
+# file key with a space.
+{
+  echo '{'
+  echo '  "standard-harnesses": {'
+  echo '    "a b/src/lib.rs": ['
+  echo '      "tests::check"'
+  echo '    ]'
+  echo '  },'
+  echo '  "contract-harnesses": {},'
+  echo '  "totals": {'
+  echo '    "standard-harnesses": 1,'
+  echo '    "contract-harnesses": 0'
+  echo '  }'
+  echo '}'
+} > "$tmp/lists/default.json"
+refuses "a harness map line in another shape" 1 sh "$k"
+grep -q 'not a line of a harness map as Kani 0.68.0 writes it' "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "kani.sh with a file key holding a space: got = no message naming the line, want = one"; }
+list default 1 kani::d_one
+
 # ARGS reach the harness listing too: a harness gated on quantum8 is
 # listed, so its shard runs it.
 list alpha-quantum8 4 kani::a_one kani::a_two kani::a_three kani::a_q8
@@ -390,10 +484,10 @@ runs "ARGS reach cargo kani list (challoc's quantum8)" \
 kani -p=alpha --exact --harness kani::a_one --harness kani::a_q8 --harness kani::a_three --harness kani::a_two --no-default-features --features quantum8" \
   KANI_CRATES=alpha KANI_SHARDS=1 KANI_SHARD=1 sh "$k" --no-default-features --features quantum8
 kani KANI_CRATES=alpha sh "$k" --list --no-default-features --features quantum8 || fail "kani.sh --list ARGS failed"
-expect "kani.sh --list ARGS lists the feature-gated harness" "$(grep -v '^kani:' "$tmp/out")" "alpha kani::a_one
-alpha kani::a_q8
-alpha kani::a_three
-alpha kani::a_two"
+expect "kani.sh --list ARGS lists the feature-gated harness" "$(grep -v '^kani:' "$tmp/out")" "alpha kani::a_one src/lib.rs
+alpha kani::a_q8 src/lib.rs
+alpha kani::a_three src/lib.rs
+alpha kani::a_two src/lib.rs"
 runs "list flags (challoc)" "kani -Z stubbing list -Z mem-predicates --format json
 kani -Z stubbing --exact --harness kani::d_one" \
   KANI_FLAGS="-Z stubbing" KANI_LIST_FLAGS="-Z mem-predicates" KANI_SHARDS=1 KANI_SHARD=1 sh "$k"
@@ -430,7 +524,7 @@ fi
 echo "ok make kani fails a port with no harnesses that does not declare KANI_NONE"
 (cd "$port" && PATH="$bin:$PATH" make -s kani-list KANI_CRATES=alpha KANI_ARGS='--no-default-features --features quantum8' > "$tmp/out" 2>&1) ||
   { cat "$tmp/out" >&2; fail "make kani-list KANI_ARGS failed"; }
-grep -qx 'alpha kani::a_q8' "$tmp/out" ||
+grep -qx 'alpha kani::a_q8 src/lib.rs' "$tmp/out" ||
   { cat "$tmp/out" >&2; fail "make kani-list KANI_ARGS: got = no kani::a_q8, want = the harness quantum8 gates"; }
 echo "ok make kani-list passes KANI_ARGS to the listing"
 
