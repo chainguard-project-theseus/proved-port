@@ -15,10 +15,15 @@
 #                                  same targets
 #
 # verus/make also gets, under templates/, the kit templates its
-# headers.sh holds the port's headers to: each of kit/templates'
-# verus/FLOOR, RLIMIT, REACH and MINTS and .chainguard/ files with a
-# `# kit: proved-port` line. A commit from before kit/make has none, and
-# its copy has no verus/make.
+# headers.sh holds the port's files to: the kit's Verus files, which
+# kit/make/VERUS-FILES names, each as NAME.tmpl, so that no vendored path
+# ends in the name of a file a port's code owners protect
+# (reviewers.yaml) and a re-sync needs no owner of those files. A commit
+# from before that file (v0.2.0) gets
+# what that commit's sync.sh copied, its verus/FLOOR, RLIMIT, REACH and
+# MINTS and every .chainguard/ file with a `# kit: proved-port` line, so
+# --check holds a copy to the rule of the commit KIT records. A commit
+# from before kit/make has none, and its copy has no verus/make.
 #
 # The copy comes from `git archive` of the commit, not the working tree,
 # so it is exactly what the recorded commit holds: no target/, no
@@ -63,6 +68,17 @@ extract_make() {
   mkdir -p "$2" "$tmp/templates-$1"
   git -C "$repo" archive --format=tar "$1:kit/make" | tar -xf - -C "$2"
   git -C "$repo" archive --format=tar "$1:kit/templates" | tar -xf - -C "$tmp/templates-$1"
+  if [ -f "$2/VERUS-FILES" ]; then
+    grep -v -e '^#' -e '^$' "$2/VERUS-FILES" | LC_ALL=C sort > "$tmp/templates-$1.list"
+    while IFS= read -r f; do
+      [ -f "$tmp/templates-$1/$f" ] || { echo "$0: kit/make/VERUS-FILES at $1 names $f, which kit/templates lacks" >&2; exit 1; }
+      mkdir -p "$2/templates/$(dirname "$f")"
+      cp "$tmp/templates-$1/$f" "$2/templates/$f.tmpl"
+    done < "$tmp/templates-$1.list"
+    return 0
+  fi
+  # A commit from before kit/make/VERUS-FILES (v0.2.0): the four ratchet
+  # files and every .chainguard/ file with a `# kit:` line.
   (cd "$tmp/templates-$1" && find verus .chainguard -type f) | LC_ALL=C sort > "$tmp/templates-$1.list"
   while IFS= read -r f; do
     case $f in

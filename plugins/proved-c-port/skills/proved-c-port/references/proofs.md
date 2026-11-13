@@ -140,6 +140,12 @@ SKILL.md's audit grep matches every one of these spellings.
   check), the row's status, and the inert
   `#[cfg_attr(any(), discharged_by = "kani")]` marker. The counter fails
   a marker with no record.
+- `make kani` (the kit's `kani.sh`) fails a run with no harness to
+  check, since cargo kani passes a crate with none. Until its first
+  harness, a port with the kani checks sets `KANI_NONE = yes` in its
+  Makefile: `make kani` then passes only while there are none, so the
+  pull request that adds the first harness deletes the line, or its
+  kani check fails.
 - With a generated ledger (challoc), the discharge is the status column
   of the seam's overrides line, naming the harness and copying the
   item's contract and body hashes from its ledger entry; the ledger
@@ -201,6 +207,10 @@ Rules:
   presubmit, `HEAD^` on main. Where FLOOR exists, a run with no base
   fails; a wrapper that prints SKIP and passes lets main lower FLOOR
   unseen. A local run says so: `make verus VERUS_BASE=none`.
+- A port with no proofs yet runs the gate from its first commit: at
+  FLOOR 0.0 with the 0.0 badge, `make verus` passes against any base,
+  one from before `verus/` included, so the verus checks are in place
+  before the first theorem (`references/lifecycle.md`, phase 0).
 - A drop is closed by verifying more code, in the PR or in a small PR
   that lands first. A `lowered` line is the last resort, and its reason
   names exactly which functions or lines became trusted or outside, with

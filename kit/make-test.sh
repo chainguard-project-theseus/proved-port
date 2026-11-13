@@ -6,9 +6,11 @@
 #   - `make -n` shows the commands each target runs, for the defaults
 #     and for the settings pcre3, expat-rs, chainz and challoc need;
 #   - kani.sh runs with a stub cargo: crate selection, one harness,
-#     shards, jobs, a failure, the fail pattern, the version check;
-#   - headers.sh passes the templates as the port fills them and fails
-#     on drift.
+#     shards, jobs, a failure, the fail pattern, the version check, a
+#     selection with no harnesses with and without KANI_NONE;
+#   - headers.sh holds the kit's Verus files (kit/make/VERUS-FILES) and
+#     no other: it passes them as the port fills them and fails on
+#     drift.
 # No Verus or Kani runs. Run it from the repository root.
 set -eu
 
@@ -152,14 +154,20 @@ log=$tmp/cargo.log
 # $tmp/lists/<crate>.json for `list` (<crate>-quantum8.json when the call
 # has `--features quantum8` and that file exists, as a feature-gated
 # harness is listed only with its feature), fails a run of crate
-# $STUB_FAIL and prints $STUB_SAY in each run.
+# $STUB_FAIL and prints $STUB_SAY in each run. As Kani 0.68.0's does, a
+# separate `-p` takes every bare word after it, so `-p CRATE list` is a
+# usage error (exit 2).
 cat > "$bin/cargo" <<EOF
 #!/bin/sh
 echo "\$*" >> "$log"
 [ "\$1" = fetch ] && exit 0
 [ "\$2" = --version ] && { echo "cargo-kani \${STUB_VERSION:-0.68.0}"; exit 0; }
 crate=default
-[ "\$2" = -p ] && crate=\$3
+if [ "\$2" = -p ]; then
+  crate=\$3
+  [ "\${4-}" != list ] || { echo "error: unexpected argument '--format' found" >&2; exit 2; }
+fi
+case "\$2" in -p=*) crate=\${2#-p=} ;; esac
 json=$tmp/lists/\$crate.json
 case " \$* " in
   *" --features quantum8 "*) [ ! -f "$tmp/lists/\$crate-quantum8.json" ] || json=$tmp/lists/\$crate-quantum8.json ;;
@@ -234,24 +242,86 @@ refuses() {
 }
 
 k=verus/make/kani.sh
-runs "runs each crate" "kani -p alpha
-kani -p beta" KANI_CRATES="alpha beta" sh "$k"
-runs "runs cargo's default selection with no KANI_CRATES" "kani" sh "$k"
-runs "KANI_ONLY" "kani -p alpha" KANI_CRATES="alpha beta" KANI_ONLY=alpha sh "$k"
-runs "KANI_EXCLUDE" "kani -p beta" KANI_CRATES="alpha beta" KANI_EXCLUDE=alpha sh "$k"
-runs "KANI_HARNESS (chainz's foreach)" "kani -p beta --harness b_one" \
+# A run of every harness lists them first (cargo kani passes a crate
+# with none), then runs each crate.
+la='kani -p=alpha list --format json'
+lb='kani -p=beta list --format json'
+runs "runs each crate" "$la
+$lb
+kani -p=alpha
+kani -p=beta" KANI_CRATES="alpha beta" sh "$k"
+runs "runs cargo's default selection with no KANI_CRATES" "kani list --format json
+kani" sh "$k"
+runs "KANI_ONLY" "$la
+kani -p=alpha" KANI_CRATES="alpha beta" KANI_ONLY=alpha sh "$k"
+runs "KANI_EXCLUDE" "$lb
+kani -p=beta" KANI_CRATES="alpha beta" KANI_EXCLUDE=alpha sh "$k"
+runs "KANI_HARNESS (chainz's foreach), with no listing" "kani -p=beta --harness b_one" \
   KANI_CRATES="alpha beta" KANI_ONLY=beta KANI_HARNESS=b_one sh "$k"
-runs "KANI_JOBS (pcre3)" "kani -p alpha -j 4 --output-format terse" \
+runs "KANI_JOBS (pcre3)" "$la
+kani -p=alpha -j 4 --output-format terse" \
   KANI_CRATES=alpha KANI_JOBS=4 sh "$k"
 runs "flags, ARGS and CBMC arguments (challoc)" \
-  "kani -Z stubbing --features quantum16 --output-format regular -Z extra --cbmc-args --verbosity 9" \
+  "kani -Z stubbing --features quantum16 -Z extra list --format json
+kani -Z stubbing --features quantum16 --output-format regular -Z extra --cbmc-args --verbosity 9" \
   KANI_FLAGS="-Z stubbing --features quantum16" KANI_FORMAT=regular \
   KANI_CBMC_ARGS="--verbosity 9" sh "$k" -Z extra
 runs "KANI_VERSION it has" "kani --version
-kani -p alpha" KANI_CRATES=alpha KANI_VERSION=0.68.0 sh "$k"
+$la
+kani -p=alpha" KANI_CRATES=alpha KANI_VERSION=0.68.0 sh "$k"
+
+# No harnesses: a selection with none fails, since cargo kani would pass
+# it having checked nothing, unless KANI_NONE=yes declares it; under the
+# declaration a harness fails the run, so it cannot hide one.
+list gamma 0
+lg='kani -p=gamma list --format json'
+refuses "a selection with no harnesses" 1 KANI_CRATES=gamma sh "$k"
+expect "kani.sh runs nothing for a selection with no harnesses" "$(cat "$tmp/calls")" "$lg"
+grep -q 'have no harnesses, so nothing would run; a port with none yet sets KANI_NONE = yes' "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "kani.sh with no harnesses: got = no message naming KANI_NONE, want = one"; }
+refuses "KANI_ONLY on the crate with no harnesses" 1 KANI_CRATES="alpha gamma" KANI_ONLY=gamma sh "$k"
+# cargo's default selection whose last harness is gone: an ordinary,
+# unsharded run, which cargo kani would pass.
+list default 0
+refuses "cargo's default selection with no harnesses" 1 sh "$k"
+expect "kani.sh runs nothing for a default selection with no harnesses" "$(cat "$tmp/calls")" "kani list --format json"
+list default 1 kani::d_one
+runs "a crate with no harnesses beside one with some" "$la
+$lg
+kani -p=alpha
+kani -p=gamma" KANI_CRATES="alpha gamma" sh "$k"
+runs "KANI_NONE=yes with no harnesses" "$lg" KANI_CRATES=gamma KANI_NONE=yes sh "$k"
+grep -qx 'kani: no harnesses, as KANI_NONE=yes declares' "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "kani.sh KANI_NONE=yes: got = no declaration line, want = it"; }
+refuses "KANI_NONE=yes with harnesses" 1 KANI_CRATES="alpha gamma" KANI_NONE=yes sh "$k"
+expect "kani.sh runs no harness under a stale KANI_NONE" "$(cat "$tmp/calls")" "$la
+$lg"
+grep -q 'KANI_NONE=yes declares no harnesses, but the selected crates have 3; delete KANI_NONE' "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "kani.sh stale KANI_NONE: got = no message, want = one naming the 3 harnesses"; }
+refuses "KANI_NONE=yes over cargo's default selection, which has a harness" 1 KANI_NONE=yes sh "$k"
+refuses "a KANI_NONE other than yes" 2 KANI_CRATES=gamma KANI_NONE=1 sh "$k"
+refuses "KANI_NONE=yes with KANI_HARNESS" 2 KANI_CRATES=gamma KANI_NONE=yes KANI_HARNESS=g sh "$k"
+refuses "KANI_NONE=yes with KANI_SHARD" 2 KANI_CRATES=gamma KANI_NONE=yes KANI_SHARD=1 KANI_SHARDS=1 sh "$k"
+refuses "a shard of a selection with no harnesses" 1 KANI_CRATES=gamma KANI_SHARD=1 KANI_SHARDS=1 sh "$k"
+
+# A list file in another shape than Kani 0.68.0's would read as no
+# harnesses, which KANI_NONE=yes passes, so it fails: written on one
+# line, with no totals, or with a total missing.
+printf '{"kani-version":"0.68.0","standard-harnesses":{"src/lib.rs":["kani::o_one"]},"totals":{"standard-harnesses":1,"contract-harnesses":0}}\n' \
+  > "$tmp/lists/odd.json"
+refuses "KANI_NONE=yes over a list file on one line" 1 KANI_CRATES=odd KANI_NONE=yes sh "$k"
+grep -q 'has no "totals" block giving "standard-harnesses" and "contract-harnesses"' "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "kani.sh with a one-line list file: got = no message naming the totals, want = one"; }
+list odd 1 kani::o_one
+grep -v -e totals -e '-harnesses": ' -e 'functions-under-contract' "$tmp/lists/odd.json" > "$tmp/odd" &&
+  cp "$tmp/odd" "$tmp/lists/odd.json"
+refuses "KANI_NONE=yes over a list file with no totals" 1 KANI_CRATES=odd KANI_NONE=yes sh "$k"
+list odd 0
+grep -v '"contract-harnesses": ' "$tmp/lists/odd.json" > "$tmp/odd" && cp "$tmp/odd" "$tmp/lists/odd.json"
+refuses "KANI_NONE=yes over a list file with no contract-harnesses total" 1 KANI_CRATES=odd KANI_NONE=yes sh "$k"
 
 refuses "on a failing crate" 1 KANI_CRATES="alpha beta" STUB_FAIL=alpha sh "$k"
-grep -qx 'kani -p beta' "$tmp/calls" || fail "kani.sh stopped at the failing crate"
+grep -qx 'kani -p=beta' "$tmp/calls" || fail "kani.sh stopped at the failing crate"
 echo "ok kani.sh runs the other crates after a failure"
 refuses "KANI_ONLY and KANI_EXCLUDE on one crate" 1 KANI_CRATES="alpha beta" KANI_ONLY=alpha KANI_EXCLUDE=alpha sh "$k"
 refuses "a KANI_ONLY not in KANI_CRATES" 2 KANI_CRATES="alpha beta" KANI_ONLY=gamma sh "$k"
@@ -263,7 +333,8 @@ refuses "KANI_SHARDS 0" 2 KANI_SHARD=0 KANI_SHARDS=0 sh "$k"
 refuses "a KANI_VERSION it lacks" 1 KANI_VERSION=0.67.0 sh "$k"
 refuses "the fail pattern" 1 KANI_CRATES=alpha STUB_SAY='warning: ignoring >=' KANI_FAIL_PATTERN='warning: ignoring' sh "$k"
 grep -q 'warning: ignoring' "$tmp/out" || fail "kani.sh did not print the line with the fail pattern"
-runs "the fail pattern, absent" "kani -p alpha" KANI_CRATES=alpha STUB_SAY='VERIFICATION:- SUCCESSFUL' KANI_FAIL_PATTERN='warning: ignoring' sh "$k"
+runs "the fail pattern, absent" "$la
+kani -p=alpha" KANI_CRATES=alpha STUB_SAY='VERIFICATION:- SUCCESSFUL' KANI_FAIL_PATTERN='warning: ignoring' sh "$k"
 grep -qx 'VERIFICATION:- SUCCESSFUL' "$tmp/out" || fail "kani.sh with a fail pattern did not print the result lines"
 
 kani KANI_CRATES="alpha beta" sh "$k" --list || fail "kani.sh --list failed"
@@ -284,15 +355,15 @@ printf '# NAME SECONDS\nkani::a_one 100 alone\nkani::a_two 50\nkani::b_one 40\n'
 shard() {
   runs "$1" "$2" KANI_CRATES="alpha beta" KANI_WEIGHTS=weights KANI_SHARDS=3 KANI_SHARD="$3" sh "$k"
 }
-lists="kani -p alpha list --format json
-kani -p beta list --format json"
+lists="kani -p=alpha list --format json
+kani -p=beta list --format json"
 shard "shard 1 of 3: the harness marked alone" "$lists
-kani -p alpha --exact --harness kani::a_one" 1
+kani -p=alpha --exact --harness kani::a_one" 1
 shard "shard 2 of 3" "$lists
-kani -p alpha --exact --harness kani::a_two" 2
+kani -p=alpha --exact --harness kani::a_two" 2
 shard "shard 3 of 3: one call a crate" "$lists
-kani -p alpha --exact --harness kani::a_three
-kani -p beta --exact --harness kani::b_one" 3
+kani -p=alpha --exact --harness kani::a_three
+kani -p=beta --exact --harness kani::b_one" 3
 shard "shard 0 runs nothing" "$lists" 0
 grep -q 'shard 1: 1 harnesses, ~100 s' "$tmp/out" || fail "shard 0 did not print the split"
 
@@ -307,16 +378,16 @@ for s in 0 1 2; do
   if grep -q -- '--exact' "$tmp/calls"; then fail "shard $s of 2 ran harnesses before refusing"; fi
 done
 runs "two shards marked alone of three leave shard 3 for the rest" "$lists
-kani -p alpha --exact --harness kani::a_three
-kani -p beta --exact --harness kani::b_one" \
+kani -p=alpha --exact --harness kani::a_three
+kani -p=beta --exact --harness kani::b_one" \
   KANI_CRATES="alpha beta" KANI_WEIGHTS=weights2 KANI_SHARDS=3 KANI_SHARD=3 sh "$k"
 
 # ARGS reach the harness listing too: a harness gated on quantum8 is
 # listed, so its shard runs it.
 list alpha-quantum8 4 kani::a_one kani::a_two kani::a_three kani::a_q8
 runs "ARGS reach cargo kani list (challoc's quantum8)" \
-  "kani -p alpha --no-default-features --features quantum8 list --format json
-kani -p alpha --exact --harness kani::a_one --harness kani::a_q8 --harness kani::a_three --harness kani::a_two --no-default-features --features quantum8" \
+  "kani -p=alpha --no-default-features --features quantum8 list --format json
+kani -p=alpha --exact --harness kani::a_one --harness kani::a_q8 --harness kani::a_three --harness kani::a_two --no-default-features --features quantum8" \
   KANI_CRATES=alpha KANI_SHARDS=1 KANI_SHARD=1 sh "$k" --no-default-features --features quantum8
 kani KANI_CRATES=alpha sh "$k" --list --no-default-features --features quantum8 || fail "kani.sh --list ARGS failed"
 expect "kani.sh --list ARGS lists the feature-gated harness" "$(grep -v '^kani:' "$tmp/out")" "alpha kani::a_one
@@ -331,7 +402,32 @@ kani -Z stubbing --exact --harness kani::d_one" \
 : > "$log"
 (cd "$port" && PATH="$bin:$PATH" make -s kani KANI_CRATES=alpha KANI_JOBS=2 > "$tmp/out" 2>&1) ||
   { cat "$tmp/out" >&2; fail "make kani failed"; }
-expect "make kani passes the KANI_ variables" "$(grep -v '^fetch' "$log")" "kani -p alpha -j 2 --output-format terse"
+expect "make kani passes the KANI_ variables" "$(grep -v '^fetch' "$log")" "$la
+kani -p=alpha -j 2 --output-format terse"
+
+# A port with no harnesses yet declares it in its Makefile: make kani
+# passes while it has none and fails once it has one.
+cp "$port/Makefile" "$tmp/Makefile"
+cat > "$port/Makefile" <<'EOF'
+KANI_NONE = yes
+include verus/make/proved-port.mk
+EOF
+(cd "$port" && PATH="$bin:$PATH" make -s kani KANI_CRATES=gamma > "$tmp/out" 2>&1) ||
+  { cat "$tmp/out" >&2; fail "make kani with the Makefile's KANI_NONE = yes and no harnesses: got = failure, want = success"; }
+grep -qx 'kani: no harnesses, as KANI_NONE=yes declares' "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "make kani with KANI_NONE = yes: got = no declaration line, want = it"; }
+echo "ok make kani passes a port whose Makefile declares KANI_NONE = yes and has no harnesses"
+if (cd "$port" && PATH="$bin:$PATH" make -s kani KANI_CRATES=alpha > "$tmp/out" 2>&1); then
+  cat "$tmp/out" >&2
+  fail "make kani with the Makefile's KANI_NONE = yes and harnesses: got = success, want = failure"
+fi
+echo "ok make kani fails a port whose Makefile declares KANI_NONE = yes and has harnesses"
+cp "$tmp/Makefile" "$port/Makefile"
+if (cd "$port" && PATH="$bin:$PATH" make -s kani KANI_CRATES=gamma > "$tmp/out" 2>&1); then
+  cat "$tmp/out" >&2
+  fail "make kani with no harnesses and no KANI_NONE: got = success, want = failure"
+fi
+echo "ok make kani fails a port with no harnesses that does not declare KANI_NONE"
 (cd "$port" && PATH="$bin:$PATH" make -s kani-list KANI_CRATES=alpha KANI_ARGS='--no-default-features --features quantum8' > "$tmp/out" 2>&1) ||
   { cat "$tmp/out" >&2; fail "make kani-list KANI_ARGS failed"; }
 grep -qx 'alpha kani::a_q8' "$tmp/out" ||
@@ -340,24 +436,67 @@ echo "ok make kani-list passes KANI_ARGS to the listing"
 
 # --- headers.sh ----------------------------------------------------------
 templates=$port/verus/make/templates
+# tpl FILE: the vendored template of the port's FILE, FILE.tmpl.
+tpl() {
+  echo "$templates/$1.tmpl"
+}
 # fill FILE: the port's copy of template FILE, its kit line in the
 # templates' `vX.Y.Z (SHA)` form naming the scratch kit's commit, which
 # has no tag yet, so the version is the release before it.
 fill() {
   mkdir -p "$port/$(dirname "$1")"
-  sed "s|^# kit: proved-port .*|# kit: proved-port v0.1.0 ($sha)|" "$templates/$1" > "$port/$1"
+  sed "s|^# kit: proved-port .*|# kit: proved-port v0.1.0 ($sha)|" "$(tpl "$1")" > "$port/$1"
 }
 headers() {
   rc=0
   (cd "$port" && sh verus/make/headers.sh) > "$tmp/out" 2>&1 || rc=$?
   return $rc
 }
-(cd "$templates" && find . -type f | sed 's|^\./||') > "$tmp/templates"
+(cd "$templates" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) > "$tmp/vendored"
+# Every vendored template ends in .tmpl, so that none ends in the name
+# of a file a port's code owners protect (reviewers.yaml).
+if grep -v '\.tmpl$' "$tmp/vendored"; then
+  fail "sync vendored the templates above without .tmpl"
+fi
+echo "ok sync vendors each template as NAME.tmpl"
+sed 's|\.tmpl$||' "$tmp/vendored" > "$tmp/templates"
+# The vendored templates are the kit's Verus files, kit/make/VERUS-FILES,
+# and no other.
+grep -v -e '^#' -e '^$' kit/make/VERUS-FILES | LC_ALL=C sort > "$tmp/verus-files"
+expect "sync vendors the kit's Verus files, kit/make/VERUS-FILES" "$(cat "$tmp/templates")" "$(cat "$tmp/verus-files")"
+expect "kit/make/VERUS-FILES names the Verus files" "$(cat "$tmp/verus-files")" ".chainguard/ci/miri.yaml
+.chainguard/ci/verus.yaml
+.chainguard/review-prompt.md
+.chainguard/reviewers.yaml
+verus/FLOOR
+verus/MINTS
+verus/REACH
+verus/RLIMIT
+verus/count.toml"
 while IFS= read -r f; do fill "$f"; done < "$tmp/templates"
+# The port's other check files are its own shape, which headers.sh does
+# not hold: each here has no kit header at all.
+for f in .chainguard/ci/conformance.yaml .chainguard/ci/consumers.yaml .chainguard/ci/fuzz.yaml \
+  .chainguard/ci/test.yaml .chainguard/ci/lint.yaml .chainguard/ci/env/default.yaml \
+  .chainguard/ci/env/dev.yaml .chainguard/develop.yaml .chainguard/deps.yaml; do
+  [ -f "kit/templates/$f" ] || fail "kit/templates has no $f to stand in for"
+  mkdir -p "$port/$(dirname "$f")"
+  printf '# The port'"'"'s own %s, not the kit'"'"'s.\nversion: 1\n' "$f" > "$port/$f"
+done
 headers || { cat "$tmp/out" >&2; fail "headers.sh failed on the templates as they are"; }
-grep -qx 'ok verus/FLOOR' "$tmp/out" || fail "headers.sh did not check verus/FLOOR"
-grep -qx 'ok .chainguard/ci/verus.yaml' "$tmp/out" || fail "headers.sh did not check .chainguard/ci/verus.yaml"
-echo "ok headers.sh passes the templates as they are, kit lines in the vX.Y.Z (SHA) form"
+expect "headers.sh checks each Verus file and nothing else" "$(LC_ALL=C sort "$tmp/out")" "$(sed 's/^/ok /' "$tmp/verus-files")"
+echo "ok headers.sh passes the templates as they are, kit lines in the vX.Y.Z (SHA) form, beside non-Verus check files of the port's own shape"
+
+# The review prompt: the vendored-kit rule, rewrapped among the port's
+# own text, passes; reworded or gone, it fails.
+awk '
+  /^- The vendored kit/ { print "- A check of the port'"'"'s own."; print "- The vendored kit"; sub(/^- The vendored kit/, ""); print; next }
+  { print }
+  /^## / { print "A paragraph of the port'"'"'s own." }' "$(tpl .chainguard/review-prompt.md)" > "$port/.chainguard/review-prompt.md"
+headers || { cat "$tmp/out" >&2; fail "headers.sh failed on a rewrapped vendored-kit rule"; }
+grep -qx 'ok .chainguard/review-prompt.md' "$tmp/out" || fail "headers.sh did not check .chainguard/review-prompt.md"
+echo "ok headers.sh passes the vendored-kit rule rewrapped among the port's own text"
+cp "$(tpl .chainguard/review-prompt.md)" "$port/.chainguard/review-prompt.md"
 
 # A port fills its placeholders, rewrapping the paragraph, deletes the
 # ones that are whole list items, and adds lines after its kit line.
@@ -372,14 +511,8 @@ cp "$tmp/FLOOR" "$port/verus/FLOOR"
 awk '/^# - [{]PORT_SPECIFIC_ROOTS/ { skip = 1 } skip { if (/}/) skip = 0; next } { print }' \
   "$port/verus/REACH" > "$tmp/REACH"
 cp "$tmp/REACH" "$port/verus/REACH"
-awk '/^# - [{]Any other pin/ { skip = 1 } skip { if (/}/) skip = 0; next } { print }' \
-  "$port/.chainguard/deps.yaml" > "$tmp/deps"
-cp "$tmp/deps" "$port/.chainguard/deps.yaml"
-awk '/^# [{]Name each further package/ { skip = 1 } skip { if (/}/) skip = 0; next } { print }' \
-  "$port/.chainguard/ci/env/dev.yaml" > "$tmp/dev"
-cp "$tmp/dev" "$port/.chainguard/ci/env/dev.yaml"
-for f in verus/FLOOR verus/REACH .chainguard/deps.yaml .chainguard/ci/env/dev.yaml; do
-  [ "$(wc -l < "$port/$f")" -lt "$(wc -l < "$templates/$f")" ] ||
+for f in verus/FLOOR verus/REACH; do
+  [ "$(wc -l < "$port/$f")" -lt "$(wc -l < "$(tpl "$f")")" ] ||
     fail "the fixture deleted no placeholder lines from $f"
 done
 sed "s|^# kit: proved-port .*|# kit: proved-port $(echo "$sha" | cut -c1-12)|" "$port/verus/RLIMIT" > "$tmp/RLIMIT"
@@ -403,6 +536,34 @@ bad() {
 }
 bad verus/FLOOR "a header line reworded" 'NR == 2 { print "# something the kit never said"; next } { print }'
 bad .chainguard/ci/verus.yaml "a header line deleted" 'NR == 3 { next } { print }'
+bad verus/count.toml "a count.toml header line reworded" 'NR == 2 { print "# something the kit never said"; next } { print }'
+bad .chainguard/ci/miri.yaml "a miri.yaml header line deleted" 'NR == 2 { next } { print }'
+bad .chainguard/reviewers.yaml "a reviewers.yaml header line reworded" 'NR == 2 { print "# something the kit never said"; next } { print }'
+bad .chainguard/review-prompt.md "the vendored-kit rule reworded" '/^- The vendored kit/ { on = 1 } on && /KIT/ { sub(/KIT/, "KITS"); on = 0 } { print }'
+bad .chainguard/review-prompt.md "the vendored-kit rule gone" '/^- The vendored kit/ { skip = 1; next } skip && (/^- / || /^$/) { skip = 0 } skip { next } { print }'
+
+# badtemplate FILE WHAT AWK MESSAGE: the vendored template of FILE edited
+# by AWK so that it would hold nothing fails every port, with MESSAGE,
+# rather than pass the port's copy unchecked.
+badtemplate() {
+  cp "$(tpl "$1")" "$tmp/keep"
+  awk "$3" "$tmp/keep" > "$(tpl "$1")"
+  rc=0
+  headers || rc=$?
+  [ "$rc" -eq 1 ] || { cat "$tmp/out" >&2; fail "headers.sh: $2: got = exit $rc, want = exit 1"; }
+  grep -qF "$4" "$tmp/out" || { cat "$tmp/out" >&2; fail "headers.sh: $2: got = no message naming it, want = $4"; }
+  cp "$tmp/keep" "$(tpl "$1")"
+  echo "ok headers.sh fails $2"
+}
+badtemplate .chainguard/review-prompt.md "a template whose vendored-kit item is reworded" \
+  '{ sub(/^- The vendored kit/, "- The kit copies") } { print }' \
+  "verus/make/templates/.chainguard/review-prompt.md.tmpl has no \`- The vendored kit\` item"
+badtemplate .chainguard/review-prompt.md "a template whose vendored-kit item is gone" \
+  '/^- The vendored kit/ { skip = 1; next } skip && (/^- / || /^$/) { skip = 0 } skip { next } { print }' \
+  "verus/make/templates/.chainguard/review-prompt.md.tmpl has no \`- The vendored kit\` item"
+badtemplate verus/count.toml "a template with no kit line" \
+  '/^# kit:/ { next } { print }' \
+  "verus/make/templates/verus/count.toml.tmpl has no \`# kit: proved-port\` line, so it holds nothing"
 bad verus/RLIMIT "a kit line naming another commit" '/^# kit:/ { print "# kit: proved-port 0123456789abcdef"; next } { print }'
 bad verus/RLIMIT "a kit line naming a tag the kit has not" '/^# kit:/ { print "# kit: proved-port kit/v0.1.0"; next } { print }'
 bad verus/RLIMIT "a kit line with too short a sha" "/^# kit:/ { print \"# kit: proved-port $(echo "$sha" | cut -c1-6)\"; next } { print }"

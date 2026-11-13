@@ -300,6 +300,106 @@ fn a_floor_without_a_base_fails_unless_no_base_says_so() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// The badge line kit/templates/PORT-README.md starts a port with.
+const ZERO_BADGE: &str = "[![Verus: 0.0% of functions, 0.0% of lines](https://img.shields.io/badge/Verus-0.0%25%20of%20functions%2C%200.0%25%20of%20lines-blue)](verus/README.md#coverage)";
+
+/// A new port's first commit, before any proof: `make verus`'s counter
+/// command (`--floor --rlimit STATS`) passes on FLOOR 0.0, the 0.0 badge
+/// and Verus statistics with nothing verified (empty, as cargo verus
+/// writes them for a port with no `verus!` code, or with no module
+/// times), for a crate with one
+/// function and for one with none (every share `-`), with `--no-base`,
+/// with a base that has the same FLOOR, and with a base from before
+/// verus/ (the change that adds the first FLOOR). A figure above 0.0
+/// fails, so the pass is the floor's, not a check that ran nothing.
+#[test]
+fn a_port_with_no_proofs_passes_at_floor_zero() {
+    for (name, lib) in [("one", "pub fn f() {}\n"), ("none", "")] {
+        let dir = std::env::temp_dir().join(format!(
+            "verus-count-cli-zero-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("crates/a/src")).expect("mkdir");
+        fs::create_dir_all(dir.join("verus")).expect("mkdir");
+        fs::write(
+            dir.join("crates/a/Cargo.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+        )
+        .expect("write");
+        fs::write(dir.join("crates/a/src/lib.rs"), lib).expect("write");
+        fs::write(dir.join("README.md"), "# a\n").expect("write");
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["add", "crates", "README.md"]);
+        git(&dir, &["commit", "-q", "-m", "before verus"]);
+        git(&dir, &["tag", "before"]);
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!("{PLAIN}[floor]\npath = \"verus/FLOOR\"\n[rlimit]\npath = \"verus/RLIMIT\"\n[badge]\npath = \"README.md\"\n"),
+        )
+        .expect("write");
+        fs::write(
+            dir.join("verus/FLOOR"),
+            "functions 0.0\nlines 0.0\nchecked-functions 0.0\nchecked-lines 0.0\n",
+        )
+        .expect("write");
+        fs::write(dir.join("verus/RLIMIT"), "max-share 65\n").expect("write");
+        fs::write(dir.join("README.md"), format!("# a\n{ZERO_BADGE}\n")).expect("write");
+        // `cargo verus focus --output-json` (Verus 0.2026.10.18) writes
+        // nothing when no crate opts into verification, as on a port with
+        // no `verus!` code; a crate that opts in with nothing to verify
+        // writes the statistics below.
+        fs::write(dir.join("stats-empty.json"), "").expect("write");
+        fs::write(
+            dir.join("stats.json"),
+            r#"{"times-ms":{"smt":{"smt-run-module-times":[]}},"verification-results":{"success":true,"verified":0,"errors":0}}"#,
+        )
+        .expect("write");
+        git(&dir, &["add", "verus", "README.md"]);
+        git(&dir, &["commit", "-q", "-m", "floor 0.0"]);
+        let floor = dir.join("verus/FLOOR").to_string_lossy().into_owned();
+        let stats = dir.join("stats.json").to_string_lossy().into_owned();
+        let empty = dir.join("stats-empty.json").to_string_lossy().into_owned();
+        let run = ["--floor", floor.as_str(), "--rlimit", stats.as_str()];
+        for statistics in [stats.as_str(), empty.as_str()] {
+            for base in [
+                &["--no-base"][..],
+                &["--base-rev", "HEAD"],
+                &["--base-rev", "before"],
+            ] {
+                let args = [
+                    &["--floor", floor.as_str(), "--rlimit", statistics][..],
+                    base,
+                ]
+                .concat();
+                let (got, out, err) = count(&dir, &args);
+                for want in [
+                    "ok coverage floor: functions verified 0.0%, at the floor",
+                    "ok coverage floor: checked-lines verified or discharged 0.0%, at the floor",
+                    "ok badge: README.md:2 gives verus/FLOOR's functions and lines figures",
+                    "ok rlimit headroom: 0 functions",
+                ] {
+                    assert!(
+                        got == 0 && out.contains(want),
+                        "{name} {statistics} {base:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, {want:?}"
+                    );
+                }
+            }
+        }
+        fs::write(
+            dir.join("verus/FLOOR"),
+            "functions 0.1\nlines 0.0\nchecked-functions 0.0\nchecked-lines 0.0\n",
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &[&run[..], &["--no-base"]].concat());
+        assert!(
+            got == 1 && out.contains("FAIL coverage floor: functions"),
+            "{name} at functions 0.1: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, a functions FAIL"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 /// A crate whose own Cargo.toml gains `publish = false` leaves the shipped
 /// tally, so with `--base-rev` it is a narrowing: it fails without a
 /// `[[narrowed]]` line and passes with one, for a `dir` crate and for a

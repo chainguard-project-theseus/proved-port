@@ -15,8 +15,8 @@ checks:
     description: >-
       kit/make-test.sh: proved-port.mk's commands under make -n, kani.sh
       with a stub cargo (crates, a harness, shards, a failure, the fail
-      pattern) and headers.sh over the kit templates, with BusyBox's
-      tools.
+      pattern, no harnesses with and without KANI_NONE) and headers.sh
+      over the kit's Verus files, with BusyBox's tools.
     trigger: [presubmit, postsubmit]
     timeout: 5m
     cmd: [sh, kit/make-test.sh]

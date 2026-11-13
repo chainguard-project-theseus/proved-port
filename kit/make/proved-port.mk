@@ -29,13 +29,16 @@
 #                     the comparison with VERUS_BASE, which verus and
 #                     verus-count require (VERUS_BASE=none for none).
 #   verus-count-test  the vendored counter's own tests.
-#   verus-headers     headers.sh: the headers of verus/FLOOR, RLIMIT,
-#                     REACH and MINTS and of the .chainguard files against
-#                     the kit templates of the commit verus/count/KIT
-#                     records; VERUS_FLOOR's header is the verus/FLOOR
-#                     template's.
+#   verus-headers     headers.sh: the kit's Verus files against the kit
+#                     templates of the commit verus/count/KIT records:
+#                     the headers of verus/FLOOR, RLIMIT, REACH, MINTS and
+#                     count.toml, of .chainguard/ci/verus.yaml, miri.yaml
+#                     and .chainguard/reviewers.yaml, and the vendored-kit
+#                     rule of .chainguard/review-prompt.md; VERUS_FLOOR's
+#                     header is the verus/FLOOR template's.
 #   kani              kani.sh: the Kani harnesses, all of them or a shard,
-#                     failing on any failure.
+#                     failing on any failure and when none run, unless
+#                     KANI_NONE = yes declares the port has none yet.
 #   kani-list         kani.sh --list: the harnesses, one `CRATE NAME` a
 #                     line (or this shard's, with KANI_SHARDS).
 
@@ -112,7 +115,12 @@ endef
 
 # --- Kani ----------------------------------------------------------------
 # kani.sh reads these from its environment; its header says what each
-# does. KANI_ARGS go to every cargo kani call.
+# does. KANI_ARGS go to every cargo kani call. A port with no harnesses
+# yet sets `KANI_NONE = yes` before the include, so `make kani` (and the
+# kani checks) pass until its first harness, which must delete the line:
+# kani.sh fails a run that finds harnesses under it, and an empty run
+# without it.
+KANI_NONE ?=
 KANI_CRATES ?=
 KANI_FLAGS ?=
 KANI_LIST_FLAGS ?=
@@ -130,7 +138,7 @@ KANI_VERSION ?=
 KANI_ARGS ?=
 export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_ARGS \
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
-  KANI_FAIL_PATTERN KANI_VERSION
+  KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
 .PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list
 
@@ -147,10 +155,10 @@ verus-count: ## the vendored counter over the port, from VERUS_STATS (VERUS_BASE
 verus-count-test: ## the vendored counter's tests
 	cargo test --locked --manifest-path $(VERUS_COUNT_DIR)/Cargo.toml --target-dir $(VERUS_COUNT_TARGET)
 
-verus-headers: ## the verus/ and .chainguard/ headers against the kit's templates (verus/make/headers.sh)
+verus-headers: ## the kit's Verus files against the kit's templates (verus/make/headers.sh)
 	VERUS_FLOOR=$(VERUS_FLOOR) sh $(PROVED_PORT_MAKE)headers.sh .
 
-kani: ## the Kani harnesses, all or a shard (verus/make/kani.sh; KANI_SHARD/KANI_SHARDS)
+kani: ## the Kani harnesses, all or a shard (verus/make/kani.sh; KANI_SHARD/KANI_SHARDS; KANI_NONE=yes for none yet)
 	sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
 
 kani-list: ## the Kani harnesses, one CRATE NAME a line

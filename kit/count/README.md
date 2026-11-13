@@ -681,9 +681,10 @@ kit/sync.sh --check PORT_ROOT  # fail unless the copy matches its recorded commi
 - The same sync copies `kit/make` to `verus/make/`, which `KIT` and
   `--check` cover too: `proved-port.mk`, which the port's Makefile
   includes for `make verus` (the build and run above) and `make kani`;
-  their scripts; and the templates `make verus-headers` holds the
-  port's headers to. `kit/make/proved-port.mk`'s header names each
-  target and variable.
+  their scripts; and the templates of the kit's Verus files
+  (`kit/make/VERUS-FILES`), which `make verus-headers` holds the port's
+  copies to. `kit/make/proved-port.mk`'s header names each target and
+  variable.
 
 ## Release
 
