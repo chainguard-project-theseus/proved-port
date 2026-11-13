@@ -64,7 +64,8 @@ VERUS_FLAGS ?=
 # verus-count reads them.
 VERUS_STATS ?= target/verus-stats.json
 # VERUS_FLOOR: the ratchet file, the counter's --floor. It is the
-# `[floor] path` of verus/count.toml too (chainz: verus/SHARES).
+# `[floor] path` of verus/count.toml too (verus/SHARES, say, in a port
+# with a verus/floor/ directory).
 VERUS_FLOOR ?= verus/FLOOR
 # VERUS_RLIMIT: non-empty passes --rlimit VERUS_STATS, which holds each
 # verified function to verus/RLIMIT; empty leaves it out, for a port

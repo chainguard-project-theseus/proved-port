@@ -160,7 +160,7 @@ or an open bug.
    file something else, in both the counter's `--floor` flag (the head
    read) and `[floor] path` in `verus/count.toml` (the `--base-rev`
    read): on a case-insensitive file system `verus/FLOOR` and
-   `verus/floor/` are the same path. chainz uses `verus/SHARES` in both.
+   `verus/floor/` are the same path (`verus/SHARES` in both, say).
    **Vendor the counter:** the ports' check guests cannot reach this
    repository, so the port carries a copy. From a clone of this
    repository, `kit/sync.sh PORT_ROOT` copies `kit/count` at the clone's
