@@ -594,13 +594,15 @@ Verus's, read in Verus's build:
   path (`use vstd::prelude::verus;`), and no `#[macro_use] extern crate`
   but `vstd`, `verus_builtin_macros`, `std`, `core` or `alloc` is in it,
   and no dependency named `vstd` or `verus_builtin_macros` is another
-  package; and where no `*` in its module may bring another crate's
-  `verus` (a dependency can export its own): a `*` of another crate,
-  or of a module of the crate where such a `*` is (`use super::*;`),
-  is allowed only beside an import of Verus's in the same module (`use
-  vstd::prelude::*;` or `use vstd::prelude::verus;`), which settles the
-  name only where every proof run that compiles the module compiles the
-  import. Every `cfg` it is under, its own and those around it, is read
+  package. Beside a `*` that may bring another crate's `verus` (a
+  dependency can export its own), it counts as Verus's only beside a
+  sure import of Verus's in the same module instance (`use
+  vstd::prelude::*;` or `use vstd::prelude::verus;`), or where the `*` is
+  `use super::*;` in a file whose module identity is certain and the
+  parent settles. Anything else fails the run.
+
+  An import is sure where every proof run that compiles the module
+  compiles the import. Every `cfg` it is under, its own and those around it, is read
   as one conjunction that must be sure, as for a function (Verus's
   build, above), so `#[cfg(target_arch = "x86_64")] #[cfg(target_arch =
   "aarch64")]` on it settles nothing. Unlike a function, the import's
@@ -610,7 +612,25 @@ Verus's, read in Verus's build:
   import force the key's value. With challoc's two architectures,
   `#[cfg(target_arch = "x86_64")] use vstd::prelude::*;` settles nothing,
   since the aarch64 run compiles the invocation without it, while the
-  same import in a `#[cfg(target_arch = "x86_64")] mod` does;
+  same import in a `#[cfg(target_arch = "x86_64")] mod` does. The import
+  settles only the `*`s of its own module instance: two inline modules of
+  one name under exclusive `cfg`s (`#[cfg(target_arch = "x86_64")] mod q`
+  and `#[cfg(target_arch = "aarch64")] mod q`) share a path, but one's
+  import of Verus's does not settle the other's `*`, and a `*` a macro
+  writes is in the instance the macro is invoked in (a `mod` it writes
+  is an instance of its own).
+
+  Any other `*` (`use other::*;`, `crate::`, `self::` or deeper paths,
+  and every path in edition 2015) may name another crate's module, or an
+  alias of one, in some target or run. A file's module identity is
+  certain where every target root that may compile it (`src/lib.rs` or
+  `src/main.rs`) reaches it by its place under src/, and no declaration
+  reaches it, at any depth, through a file a `#[path]` names, one inside
+  an inline module whose directory a `#[path]` chose, a module file named
+  `main.rs` or `lib.rs`, or another target's root, even beside a
+  declaration by its place (rustc compiles a file once per
+  declaration); a root elsewhere (`src/bin/NAME.rs`, or a `[lib]` or
+  `[[bin]]` `path`) that may compile it leaves it uncertain;
 - by any other path (`vstd::prelude::verus!` without `::`) never: the run
   fails (exit 1), as it does where a rule does not hold, naming why.
 

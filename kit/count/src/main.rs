@@ -215,6 +215,10 @@ struct Counter {
     /// crate (`pcre3_syntax`), then each module of the file's path and of
     /// any inline `mod` around the item.
     module: Vec<String>,
+    /// The instance of `module` [`Counter::items`] is walking
+    /// ([`Binding::scope`]): the file, or the innermost inline `mod` around
+    /// the item.
+    scope: String,
     /// Every function's `#[verifier::rlimit]`, ghost ones too, for the
     /// headroom check ([`rlimit::shares`]): Verus-only code's too, which
     /// Verus checks.
@@ -280,6 +284,12 @@ struct Counter {
     /// Every module of the crate, by path from its root, so that a `use`
     /// path whose first segment is one of them reads as this crate's.
     modules: std::collections::BTreeSet<Vec<String>>,
+    /// For each crate root (the library, each binary and other target),
+    /// the files it may compile and those it surely names by their place
+    /// under src/ ([`Counter::add_proof_trees`]), by which
+    /// [`Counter::certain`] decides whether a file's `super` is the module
+    /// its place gives.
+    proof_trees: Vec<ProofTree>,
     /// The crates a `#[macro_use] extern crate` at the crate root loads
     /// macros from ([`macro_use_crates`]): their names are in scope in
     /// every module, ahead of the standard library's prelude.
@@ -403,6 +413,7 @@ impl Counter {
             traits: std::collections::BTreeSet::new(),
             owner: String::new(),
             module: Vec::new(),
+            scope: String::new(),
             limits: Vec::new(),
             verus_fns: BTreeMap::new(),
             shipped: true,
@@ -419,6 +430,7 @@ impl Counter {
             dry: None,
             unresolved: Vec::new(),
             modules: std::collections::BTreeSet::new(),
+            proof_trees: Vec::new(),
             macro_use: Vec::new(),
             bindings: Vec::new(),
             emitted: Vec::new(),
@@ -602,21 +614,31 @@ fn arity(sig: &Signature) -> (usize, bool) {
 /// modules they declare are their siblings; and the crate's root files
 /// (`roots`: `src/lib.rs`, `src/main.rs`, and each `src/bin` target),
 /// which nothing declares. [`module_guards`] reads a file's guards from
-/// them, and from those of the files that declare it.
+/// them, and from those of the files that declare it. `alternate` holds
+/// the declarations a file makes under the other reading of where its
+/// modules live, for a file another target may read the other way (a
+/// root read as a module, a main.rs or lib.rs that is a module, a
+/// `#[path]`-named file declared by its place elsewhere); only
+/// [`Counter::add_proof_trees`] reads them, as files a target may compile.
 #[derive(Default)]
 struct ModFiles {
     inner: Vec<(PathBuf, Vec<String>)>,
     declared: Vec<Declared>,
     path_named: Vec<PathBuf>,
     roots: Vec<PathBuf>,
+    alternate: Vec<Declared>,
 }
 
 /// One out-of-line declaration ([`ModFiles`]): the file declared, the file
-/// declaring it, and the `cfg` predicates it is under there.
+/// declaring it, the `cfg` predicates it is under there, and whether it is
+/// inside an inline module whose directory a path attribute chose
+/// (`under_path`), so that the file's location does not give its module's
+/// name ([`Counter::add_proof_trees`]).
 struct Declared {
     file: PathBuf,
     from: PathBuf,
     guards: Vec<String>,
+    under_path: bool,
 }
 
 impl ModFiles {
@@ -996,6 +1018,39 @@ fn test_module_files(
         return;
     };
     declared_module_files(file, (&dir, &base), &parsed.items, &[], atoms, out, errors);
+    // Where a file's modules live depends on how a target reads it: beside
+    // it for a crate root, a `#[path]`-named file or a `mod.rs`-like
+    // main.rs or lib.rs, under `stem/` for a module file declared by its
+    // place. A target may read any file but a mod.rs the other way (a root
+    // read as `mod tool;`, a main.rs that is `a::main`, a file one target's
+    // `#[path]` names and another declares by its place, and any file only
+    // that other reading reaches), so every such file has both readings.
+    let named = canonical.file_name().and_then(|n| n.to_str());
+    let other = match dir == base {
+        true => base.join(canonical.file_stem().unwrap_or_default()),
+        false => base.clone(),
+    };
+    if named != Some("mod.rs") && other != dir {
+        let mut alt = ModFiles {
+            path_named: out.path_named.clone(),
+            roots: out.roots.clone(),
+            ..ModFiles::default()
+        };
+        declared_module_files(
+            file,
+            (&other, &base),
+            &parsed.items,
+            &[],
+            atoms,
+            &mut alt,
+            &mut Vec::new(),
+        );
+        out.alternate
+            .extend(alt.declared.into_iter().map(|d| Declared {
+                under_path: true,
+                ..d
+            }));
+    }
 }
 
 /// [`test_module_files`] for the items of one module: `dir` is where its
@@ -1032,9 +1087,9 @@ fn declared_module_files(
             } else {
                 inner.push(UNREAD_DECLARATION.to_owned());
                 let mut found = Vec::new();
-                macro_module_files(m.mac.tokens.clone(), (dir, base), &mut found);
+                macro_module_files(m.mac.tokens.clone(), (dir, base), false, &mut found);
                 let from = canonical(file);
-                for (f, named) in found {
+                for (f, named, under_path) in found {
                     let Ok(f) = fs::canonicalize(f) else { continue };
                     if named {
                         out.path_named.push(f.clone());
@@ -1043,6 +1098,7 @@ fn declared_module_files(
                         file: f,
                         from: from.clone(),
                         guards: inner.clone(),
+                        under_path,
                     });
                 }
             }
@@ -1054,13 +1110,20 @@ fn declared_module_files(
             // The inline module's directory is chosen as an out-of-line
             // module's file is: by its path attributes in source order.
             for (path, extra) in path_choices(&m.attrs) {
+                let named = path.is_some();
                 let sub = match path {
                     Some(p) => base.join(p),
                     None => dir.join(&name),
                 };
                 let mut guards = inner.clone();
                 guards.extend(extra);
+                let before = out.declared.len();
                 declared_module_files(file, (&sub, &sub), items, &guards, atoms, out, errors);
+                if named {
+                    for d in &mut out.declared[before..] {
+                        d.under_path = true;
+                    }
+                }
             }
             continue;
         }
@@ -1091,6 +1154,7 @@ fn declared_module_files(
                 file: f,
                 from: canonical(file),
                 guards,
+                under_path: false,
             });
         }
     }
@@ -1141,11 +1205,15 @@ fn ordered_paths(attrs: &[Attribute]) -> Vec<(Option<String>, String)> {
 /// `#[path = ".."]` before the declaration names, relative to `base` (the
 /// declaring module's directory), or else `name.rs` or `name/mod.rs` under
 /// `dir`. Inside an inline `mod outer { .. }` in the body, both are its
-/// directory: `outer` under `dir`, or its own `#[path]` from `base`.
+/// directory: `outer` under `dir`, or its own `#[path]` from `base`. Each
+/// file also carries whether it is declared inside an inline module whose
+/// directory a `#[path]` chose (`under_path` here, or one in the body), as
+/// [`Declared::under_path`].
 fn macro_module_files(
     tokens: TokenStream,
     (dir, base): (&Path, &Path),
-    out: &mut Vec<(PathBuf, bool)>,
+    under_path: bool,
+    out: &mut Vec<(PathBuf, bool, bool)>,
 ) {
     let toks: Vec<TokenTree> = tokens.into_iter().collect();
     // The `#[path]` of the item the attributes so far precede.
@@ -1169,10 +1237,10 @@ fn macro_module_files(
                 if k == "mod" && p.as_char() == ';' =>
             {
                 match path.take() {
-                    Some(p) => out.push((base.join(p), true)),
+                    Some(p) => out.push((base.join(p), true, under_path)),
                     None => {
-                        out.push((dir.join(format!("{name}.rs")), false));
-                        out.push((dir.join(name.to_string()).join("mod.rs"), false));
+                        out.push((dir.join(format!("{name}.rs")), false, under_path));
+                        out.push((dir.join(name.to_string()).join("mod.rs"), false, under_path));
                     }
                 }
                 skip = 2;
@@ -1180,11 +1248,11 @@ fn macro_module_files(
             (TokenTree::Ident(k), Some(TokenTree::Ident(name)), Some(TokenTree::Group(g)))
                 if k == "mod" && g.delimiter() == proc_macro2::Delimiter::Brace =>
             {
-                let sub = match path.take() {
-                    Some(p) => base.join(p),
-                    None => dir.join(name.to_string()),
+                let (sub, chosen) = match path.take() {
+                    Some(p) => (base.join(p), true),
+                    None => (dir.join(name.to_string()), under_path),
                 };
-                macro_module_files(g.stream(), (&sub, &sub), out);
+                macro_module_files(g.stream(), (&sub, &sub), chosen, out);
                 skip = 2;
             }
             // A restricted visibility (`pub(crate)`, `pub(super)`,
@@ -1195,7 +1263,7 @@ fn macro_module_files(
                     && matches!(&toks[i - 1], TokenTree::Ident(v) if v == "pub") => {}
             (TokenTree::Group(g), _, _) => {
                 path = None;
-                macro_module_files(g.stream(), (dir, base), out);
+                macro_module_files(g.stream(), (dir, base), under_path, out);
             }
             (TokenTree::Punct(p), _, _) if p.as_char() == ';' => path = None,
             _ => {}
@@ -2673,6 +2741,8 @@ impl Counter {
                     module: self.module.clone(),
                     guards: Vec::new(),
                     shared: 0,
+                    scope: self.scope.clone(),
+                    expansion: Some(at),
                 };
                 bindings_in(
                     std::slice::from_ref(item),
@@ -2812,7 +2882,11 @@ impl Counter {
                     {
                         let was = self.enter(built, &m.attrs);
                         self.module.push(m.ident.to_string());
+                        let instance =
+                            mod_instance(&self.file, self.expansion, m.ident.span().start());
+                        let outer = std::mem::replace(&mut self.scope, instance);
                         self.items(inner, in_verus);
+                        self.scope = outer;
                         self.module.pop();
                         self.leave(was);
                     }
@@ -3075,14 +3149,18 @@ impl Counter {
             // rustc takes a `#[macro_use] extern crate` only at a crate
             // root; every file's is read.
             macro_use_crates(&file.items, &self.atoms, &mut self.macro_use);
+            let rel = f.strip_prefix(root).unwrap_or(f);
             let at = BindAt {
-                file: f.strip_prefix(root).unwrap_or(f),
+                file: rel,
                 module,
                 guards: classes[i].1.clone(),
                 shared: classes[i].1.len(),
+                scope: rel.display().to_string(),
+                expansion: None,
             };
             bindings_in(&file.items, &at, &self.atoms, &mut bindings);
         }
+        self.add_proof_trees(&mods, (root, src), &files);
         for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
             let Some(Ok(file)) = p else { continue };
             let module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
@@ -3175,6 +3253,7 @@ impl Counter {
                 self.files.push((self.krate.clone(), self.file.clone()));
             }
             self.module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
+            self.scope = self.file.display().to_string();
             match p {
                 Some(Ok(file)) => self.items(&file.items, false),
                 Some(Err(e)) => {
@@ -3739,11 +3818,134 @@ impl Counter {
             })
     }
 
+    /// Adds to [`Counter::proof_trees`] each root's files, from the
+    /// declarations [`module_files`] read (`mods`), with no `cfg` read: a
+    /// module's parent is its parent whether or not a build compiles it.
+    /// A file is possibly the root's where any declaration from a possible
+    /// file reaches it, under either reading of where that file's modules
+    /// live (`ModFiles::alternate`). It is surely the root's, as the module
+    /// its place under src/ names ([`module_path`]), where it is reached by
+    /// place from src/lib.rs or src/main.rs.
+    ///
+    /// A file a `#[path]` names (a `#[cfg_attr(.., path = ..)]` choice too),
+    /// one declared inside an inline module whose directory a path
+    /// attribute chose, or under the other reading (`Declared::under_path`),
+    /// a module file named main.rs or lib.rs, and another target's root
+    /// hold a module their location does not name (`module_path` reads the
+    /// location, rustc the declarations). So they, and every file declared
+    /// from one at any depth, are never sure, even where another
+    /// declaration reaches them by place, since rustc compiles a file once
+    /// per declaration; and
+    /// a root other than src/lib.rs and src/main.rs has no sure file at
+    /// all. Each stays possible, so [`Counter::certain`] does not take its
+    /// place for its module.
+    fn add_proof_trees(&mut self, mods: &ModFiles, (root, src): (&Path, &Path), files: &[PathBuf]) {
+        let canon: Vec<PathBuf> = files.iter().map(|f| canonical(f)).collect();
+        let rel = |f: &PathBuf| f.strip_prefix(root).unwrap_or(f).display().to_string();
+        let src_dir = canonical(src);
+        let root_named = |f: &Path| {
+            f.file_name()
+                .is_some_and(|n| n == "lib.rs" || n == "main.rs")
+        };
+        let reach = |r: &PathBuf, keep: &dyn Fn(&Declared) -> bool| {
+            let mut reached = std::collections::BTreeSet::from([r.clone()]);
+            loop {
+                let next: Vec<PathBuf> = mods
+                    .declared
+                    .iter()
+                    .chain(&mods.alternate)
+                    .filter(|d| reached.contains(&d.from) && !reached.contains(&d.file))
+                    .filter(|d| keep(d))
+                    .map(|d| d.file.clone())
+                    .collect();
+                if next.is_empty() {
+                    break;
+                }
+                reached.extend(next);
+            }
+            reached
+        };
+        let maybes: Vec<_> = mods.roots.iter().map(|r| reach(r, &|_| true)).collect();
+        // A declaration from a possible file names a module its file's
+        // place does not: one inside an inline module whose directory a
+        // path attribute chose, or under the other reading
+        // (`Declared::under_path`), and one of a file a `#[path]` names, a
+        // module file named main.rs or lib.rs (`name::main` to rustc,
+        // while `module_path` drops that last segment), or another target's
+        // root, whose modules' directory is its own (`ModFiles::dir_of`).
+        // rustc compiles a file once for each declaration that reaches it,
+        // so such a file, and every file declared from one, is also a
+        // module its place does not name, whatever other declaration
+        // reaches it by place.
+        let edges = || mods.declared.iter().chain(&mods.alternate);
+        let mut unplaced: std::collections::BTreeSet<&PathBuf> = edges()
+            .filter(|d| maybes.iter().any(|m| m.contains(&d.from)))
+            .filter(|d| {
+                d.under_path
+                    || mods.path_named.contains(&d.file)
+                    || root_named(&d.file)
+                    || mods.roots.contains(&d.file)
+            })
+            .map(|d| &d.file)
+            .collect();
+        loop {
+            let next: Vec<&PathBuf> = edges()
+                .filter(|d| unplaced.contains(&d.from) && !unplaced.contains(&d.file))
+                .map(|d| &d.file)
+                .collect();
+            if next.is_empty() {
+                break;
+            }
+            unplaced.extend(next);
+        }
+        let by_place = |d: &Declared| !unplaced.contains(&d.file);
+        for (r, maybe) in mods.roots.iter().zip(&maybes) {
+            // `module_path` names a file by its place under src/ from the
+            // crate root there. A root elsewhere (src/bin/NAME.rs, or a
+            // `[lib]` or `[[bin]]` `path`) names its modules from its own
+            // `crate::`, so its trees hold no sure file, only the files it
+            // may compile, and a `*` in any of them reads no module as this
+            // crate's.
+            let named = r.parent() == Some(src_dir.as_path()) && root_named(r);
+            let sure = match named {
+                true => reach(r, &by_place),
+                false => std::collections::BTreeSet::new(),
+            };
+            let mut tree = ProofTree::default();
+            for (f, cf) in files.iter().zip(&canon) {
+                if maybe.contains(cf) {
+                    tree.maybe.insert(rel(f));
+                }
+                if sure.contains(cf) {
+                    tree.sure.insert(rel(f));
+                }
+            }
+            self.proof_trees.push(tree);
+        }
+    }
+
+    /// Whether the file of a binding of module instance `scope` (its start,
+    /// [`Binding::scope`]) is surely the module its place under src/ names
+    /// ([`module_path`]), so that its `super` is the parent that place gives:
+    /// every root that may compile the file surely names it by its place
+    /// ([`Counter::proof_trees`]), and some root does.
+    fn certain(&self, scope: &str) -> bool {
+        let file = scope.split(':').next().unwrap_or(scope);
+        let mut named = false;
+        for t in &self.proof_trees {
+            if t.maybe.contains(file) && !t.sure.contains(file) {
+                return false;
+            }
+            named |= t.sure.contains(file);
+        }
+        named
+    }
+
     /// The `*` a bare `verus!` in module `at` may take another crate's
     /// `verus` through (a dependency's own macro of that name), if any,
-    /// among the crate's bindings and `extra`'s, read in Verus's build: a
-    /// `*` of another crate, or of a module of this one where such a `*`
-    /// is, unless the module that holds it also imports Verus's where
+    /// among the crate's bindings and `extra`'s, read in Verus's build: any
+    /// `*` but `use super::*;`, or that one where the parent holds such a
+    /// `*`, unless the module that holds it also imports Verus's where
     /// every proof run that compiles the module is sure to compile the
     /// import ([`every_run_sure`]). A `use`
     /// of Verus's by name shadows a `*`, and a `*` of Verus's beside one
@@ -3766,30 +3968,36 @@ impl Counter {
             .collect();
         // A `*` that may bring another `verus` is read where Verus's build
         // may compile it; an import that settles the name, only where that
-        // build is sure to.
-        let confirmed = here.iter().any(|b| {
-            b.verus_sure
-                && match b.glob {
-                    true => one_of(&b.path, &VERUS_GLOBS),
-                    false => b.name == "verus" && one_of(&b.path, &VERUS_PATHS),
-                }
-        });
-        if confirmed {
-            return None;
-        }
-        for b in here
-            .into_iter()
-            .filter(|b| b.glob && !one_of(&b.path, &VERUS_GLOBS))
-        {
-            // Without `crate`, `self` or `super`, a path names a module of
-            // this crate only beside `at`, and with a leading `::` never
-            // (it names an extern crate); in edition 2015 either is from the
-            // crate root. Any other is another crate's.
-            let local = match b.path.first().map(String::as_str) {
-                Some("crate" | "self" | "super") if !b.absolute => self.module_from(at, &b.path),
-                _ if self.edition < 2018 => Some([&at[..1], &b.path[..]].concat()),
-                _ if b.absolute => None,
-                _ => Some([at, &b.path[..]].concat()),
+        // build is sure to, and only for the `*`s of its own module instance
+        // ([`Binding::scope`]): two inline modules of one name under
+        // exclusive `cfg`s share a path, and one's import is not in the
+        // runs that compile the other.
+        let confirmed: std::collections::BTreeSet<&str> = here
+            .iter()
+            .filter(|b| {
+                b.verus_sure
+                    && match b.glob {
+                        true => one_of(&b.path, &VERUS_GLOBS),
+                        false => b.name == "verus" && one_of(&b.path, &VERUS_PATHS),
+                    }
+            })
+            .map(|b| b.scope.as_str())
+            .collect();
+        for b in here.into_iter().filter(|b| {
+            b.glob && !one_of(&b.path, &VERUS_GLOBS) && !confirmed.contains(b.scope.as_str())
+        }) {
+            // Only `use super::*;` (`super` segments alone) is followed, into
+            // the module that holds this one, and only where the `*`'s file
+            // surely is the module its place names ([`Counter::certain`]),
+            // so that place gives that parent. Any other `*` may name
+            // another crate's module, or an alias of one (`pub use other as
+            // q;` behind `crate::q`), in some target or run, and settles
+            // nothing.
+            let parent_glob =
+                !b.absolute && !b.path.is_empty() && b.path.iter().all(|s| s == "super");
+            let local = match parent_glob && self.certain(&b.scope) {
+                true => self.module_from(at, &b.path),
+                false => None,
             }
             .filter(|m| self.modules.contains(m));
             match local {
@@ -4061,6 +4269,11 @@ struct Binding {
     /// Whether Verus's build is sure to compile it (`verus` says only that
     /// it may); a binding written by an expansion is never taken as sure.
     verus_sure: bool,
+    /// The instance of `module` it is in: its file (root-relative), or the
+    /// inline `mod` item that holds it, by that item's file, line and
+    /// column. Two inline modules of one name under exclusive `cfg`s share
+    /// a path but not an instance.
+    scope: String,
     /// An `extern crate path as name;`.
     extern_crate: bool,
     /// A `use ::path..;`, whose path names an extern crate.
@@ -4129,12 +4342,44 @@ fn breaks(b: &Binding, kind: Took, name: &str, at: &[String]) -> bool {
 /// Where [`bindings_in`] reads: the file, the module, and the `cfg`s of
 /// the file and the items around, of which the first `shared` are the
 /// module's own (the file's and the modules' around), which every item
-/// in the module is under ([`every_run_sure`]).
+/// in the module is under ([`every_run_sure`]), the module instance,
+/// `scope` ([`Binding::scope`]), and the line of the invocation whose
+/// expansion the items are, if they are one ([`mod_instance`]).
 struct BindAt<'a> {
     file: &'a Path,
     module: Vec<String>,
     guards: Vec<String>,
     shared: usize,
+    scope: String,
+    expansion: Option<usize>,
+}
+
+/// One root's files ([`Counter::add_proof_trees`]), root-relative: those
+/// the root may compile (`maybe`, through any declaration and either
+/// reading of where a file's modules live), and those it surely compiles
+/// as the module their place under src/ names (`sure`).
+#[derive(Default)]
+struct ProofTree {
+    sure: std::collections::BTreeSet<String>,
+    maybe: std::collections::BTreeSet<String>,
+}
+
+/// The module instance ([`Binding::scope`]) of an inline `mod` whose name
+/// starts at `start` in `file`. An expansion's `mod` carries the spans of
+/// the macro's definition, which may be in another file at the line and
+/// column of a `mod` there, so its instance names the invocation
+/// (`expansion`, its line) instead, in a form no `mod` in a source file
+/// takes.
+fn mod_instance(file: &Path, expansion: Option<usize>, start: proc_macro2::LineColumn) -> String {
+    match expansion {
+        None => format!("{}:{}:{}", file.display(), start.line, start.column),
+        Some(at) => format!(
+            "{}:{at}: a mod the expansion writes, at {}:{}",
+            file.display(),
+            start.line,
+            start.column
+        ),
+    }
 }
 
 /// Adds to `out` the bindings among `items` (in inline modules and
@@ -4175,6 +4420,7 @@ fn bindings_in(items: &[Item], at: &BindAt, atoms: &Atoms, out: &mut Vec<Binding
             verus,
             verus_sure: every_run_sure(&guards[..at.shared], &guards[at.shared..], atoms)
                 .unwrap_or(false),
+            scope: at.scope.clone(),
             ..Binding::default()
         };
         let line = |s: proc_macro2::Span| format!("{}:{}", at.file.display(), s.start().line);
@@ -4227,24 +4473,29 @@ fn bindings_in(items: &[Item], at: &BindAt, atoms: &Atoms, out: &mut Vec<Binding
                 ..base.clone()
             });
         }
-        let inner = |module: Vec<String>, shared: usize| BindAt {
+        let inner = |module: Vec<String>, shared: usize, scope: String| BindAt {
             file: at.file,
             module,
             guards: guards.clone(),
             shared,
+            scope,
+            expansion: at.expansion,
         };
         match item {
-            // An inline module's `cfg`s are its own items' shared ones; a
-            // `verus!` block's cover only what it holds.
+            // An inline module's `cfg`s are its own items' shared ones, and
+            // it is a module instance of its own; a `verus!` block's `cfg`s
+            // cover only what it holds, in the instance around it.
             Item::Mod(m) => {
                 if let Some((_, items)) = &m.content {
                     let module = [&at.module[..], &[m.ident.to_string()]].concat();
-                    bindings_in(items, &inner(module, guards.len()), atoms, out);
+                    let scope = mod_instance(at.file, at.expansion, m.ident.span().start());
+                    bindings_in(items, &inner(module, guards.len(), scope), atoms, out);
                 }
             }
             Item::Macro(m) if verus_path(&m.mac.path) => {
                 if let Ok(f) = parse2::<verus_syn::File>(m.mac.tokens.clone()) {
-                    bindings_in(&f.items, &inner(at.module.clone(), at.shared), atoms, out);
+                    let block = inner(at.module.clone(), at.shared, at.scope.clone());
+                    bindings_in(&f.items, &block, atoms, out);
                 }
             }
             _ => {}
