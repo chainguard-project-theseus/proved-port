@@ -15,9 +15,10 @@
 # "Trust policy"). A port with no trust section needs nothing.
 #
 # Pins no entry moves:
-# - verus/count: the port's copy of the proved-port kit counter. It changes
-#   only by re-running wolfi-dev/proved-port's kit/sync.sh, which the
-#   agent's guest cannot reach (that repository is internal).
+# - verus/count and verus/make: the port's copies of the proved-port kit
+#   counter and make targets. They change only by re-running
+#   wolfi-dev/proved-port's kit/sync.sh, which the agent's guest cannot
+#   reach (that repository is internal).
 # - {Any other pin that moves only with a person's run or decision (a
 #   bench baseline, a workload), and why; or delete this item.}
 #
@@ -33,7 +34,7 @@
 # the exception to one commit per pull request.
 #
 # Every entry is merge: manual: a person approves every pull request.
-# kit: proved-port kit/v{KIT_VERSION}
+# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 updates:
 - name: crates
@@ -50,8 +51,9 @@ updates:
     Update the crate dependencies of the root workspace and the fuzz/
     workspace, and their lockfiles, to their latest compatible releases,
     preferring releases at least 7 days old. Leave vstd alone: the
-    toolchain entry moves it with the Verus release. Leave verus/count and
-    its Cargo.lock alone: it changes only by re-syncing proved-port's kit.
+    toolchain entry moves it with the Verus release. Leave verus/count,
+    its Cargo.lock and verus/make alone: they change only by re-syncing
+    proved-port's kit.
     Add no new dependency. Keep rust-version in Cargo.toml as it is (the
     msrv entry moves it): every update must still build with `cargo build --locked --release` on
     the msrv check's toolchain (its rust-1.NN package in
@@ -61,8 +63,9 @@ updates:
     conformance`. tests/upstream/deviations.txt is a ratchet: only remove
     lines; a new failure is a regression the update caused, so leave that
     update out rather than add a line. verus/FLOOR never goes down and
-    never gains a `lowered` line from this entry: if `make verus` reports
-    a lower share after an update, leave the update out. Keep verus/RLIMIT
+    never gains a `lowered` line from this entry: if `make verus
+    VERUS_BASE=none` (a local run; the verus check passes the base)
+    reports a lower share after an update, leave the update out. Keep verus/RLIMIT
     as its header requires. Do not edit .chainguard/deps.yaml unless a
     person asks in a comment.
 
@@ -100,14 +103,16 @@ updates:
     committed nothing pushes nothing. Fold later fixes in this run into
     that commit; on a turn, add a commit on top of the pull request's
     head. Then run `make lint`, `make test`, `make conformance`, `make
-    verus` and `make kani`. The body names the suites the guest ran and
+    verus VERUS_BASE=none` (a local run; the verus check passes the
+    base) and `make kani`. The body names the suites the guest ran and
     any suite it did not finish. A Verus bump keeps 0 verification
     errors. verus/FLOOR never goes down and never gains a `lowered` line
     from this entry, and verus/RLIMIT gains no `rlimit-raised` line: if
     the new Verus needs either, or fails a proof, fix the proof if the fix
     is small and say what changed, else leave Verus where it is and say
-    why. Leave verus/count and its Cargo.lock alone: it changes only by
-    re-syncing proved-port's kit, which the guest cannot reach; say so in
+    why. Leave verus/count, its Cargo.lock and verus/make alone: they
+    change only by re-syncing proved-port's kit, which the guest cannot
+    reach; say so in
     the body if the new Verus needs a newer verus_syn there. Do not edit
     .chainguard/deps.yaml unless a person asks in a comment.
 
@@ -202,9 +207,10 @@ updates:
     block of the new tests that {PORT} fails is a regression to fix, or,
     if too large for this pull request, to list in the body for a person,
     never a line to add unless a person asks in a comment. Run `make
-    conformance`, `make test`, `make lint` and `make verus`; verus/FLOOR
+    conformance`, `make test`, `make lint` and `make verus
+    VERUS_BASE=none` (a local run; the verus check passes the base); verus/FLOOR
     never goes down and never gains a `lowered` line from this entry.
-    Leave verus/count alone. Do not edit .chainguard/deps.yaml unless a
+    Leave verus/count and verus/make alone. Do not edit .chainguard/deps.yaml unless a
     person asks in a comment.
 
 - name: consumers

@@ -179,7 +179,7 @@ the copy; they need no egress beyond crates.io. A port moves to a newer
 kit in a PR that re-runs the sync.
 
 Later, once the TODO above is done: **a released, versioned package**. Each kit tag
-(`kit/vX.Y.Z`) builds one package holding the counter binary, the Go
+(`vX.Y.Z`) builds one package holding the counter binary, the Go
 tools, the scripts and the templates. A port installs it in each
 check's `environment: packages:` pinned with `~`, the way pcre3 already
 pins `verus~0.2026.10.18` and `kani~0.68.0`, and puts the same pin in
@@ -228,9 +228,11 @@ is deleted in that PR.
    format). A port keeps each header's full text as written in its own
    file: the checks, the reviewer and agents read the port's copy, and
    this repository is internal. Each header gains one line naming the
-   kit version it came from (`# kit: proved-port kit/v{KIT_VERSION}`),
-   and a later lint diffs the port's header against the template at that
-   version, so a copy cannot drift unseen; a kit bump that changes a
+   kit release and commit it came from
+   (`# kit: proved-port v{KIT_VERSION} ({KIT_SHA})`, such as
+   `proved-port v0.2.0 (<sha>)`; `kit/templates/README.md`), and a
+   later lint diffs the port's header against the template at that
+   commit, so a copy cannot drift unseen; a kit bump that changes a
    header moves the port's copy and its version line together. What the
    port drops are restatements elsewhere: `AGENTS.md`, `CONTRIBUTING.md`,
    `verus/README.md` and the check files point at the header instead.
@@ -240,24 +242,26 @@ is deleted in that PR.
    same for `verus/README.md` and `verus/RESULTS.md`; `verus/FLOOR`
    waits for step 2, because challoc's counter reads
    `combined-functions` and `combined-lines` where the template names
-   the kit counter's `checked-*`. The FLOOR template's raise rule is a
-   per-port choice (`{RAISE_RULE}`): pcre3's copy keeps the same-PR rule
-   and challoc's keeps its own-PR rule; the counter passes a share above
-   its figure either way. Exit: neither port restates a header's rule
+   the kit counter's `checked-*`. The FLOOR template's raise rule is one
+   rule for every port: FLOOR and the badge rise in their own PR, to the
+   figures the check names, never in the PR that earns them (challoc's,
+   expat-rs's and chainz#59's rule; pcre3 moves to it from same-PR).
+   Exit: neither port restates a header's rule
    outside the header, and each header names its kit version.
    **Status:** the kit side is done: `kit/templates/` (FLOOR, RLIMIT,
-   REACH, MINTS, SEAMS.md, THEOREMS.md, a headings-only verus
-   README.md with the five sections the headers cite, the theorem and
-   Kani record skeletons, the `ABI-nnn` ledger, AGENTS.md and
+   REACH, MINTS, SEAMS.md, THEOREMS.md, a verus README.md with the
+   sections the headers cite and Coverage and Counter in prose, the
+   theorem and Kani record skeletons, the `ABI-nnn` ledger, AGENTS.md and
    CONTRIBUTING.md outlines; `kit/templates/README.md` says how to apply
-   them). The verus README's prose and the TODO skeleton are not
-   templated yet. pcre3's restatements point at its headers
-   (wolfi-dev/pcre3#1073). The lint that diffs a header against its
-   template is `kit/make/headers.sh` (`make verus-headers`), vendored
-   with the counter: it reads the templates of the kit commit
-   `verus/count/KIT` records and takes a version line naming that
-   commit, or its `kit/vX.Y.Z` tag once the first release (section 4)
-   gives one.
+   them). The rest of the verus README's prose and the TODO skeleton are
+   not templated yet. pcre3's restatements point at its headers
+   (wolfi-dev/pcre3#1073). The version lines take the
+   `v{KIT_VERSION} ({KIT_SHA})` form, naming the release tag and the
+   commit. The lint that diffs a header against its template is
+   `kit/make/headers.sh` (`make verus-headers`), vendored with the
+   counter: it reads the templates of the kit commit `verus/count/KIT`
+   records and takes a version line naming that commit, or its tag once
+   the first release (section 4) gives one.
 2. **Counter, unsafe/assume lint and Kani runner.**
    - pcre3: delete `verus/count/` and `verus/kani/run.sh`; add
      `verus/count.toml` (the four crates, the `test-util` feature, the

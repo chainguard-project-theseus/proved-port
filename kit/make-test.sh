@@ -340,11 +340,12 @@ echo "ok make kani-list passes KANI_ARGS to the listing"
 
 # --- headers.sh ----------------------------------------------------------
 templates=$port/verus/make/templates
-# fill FILE: the port's copy of template FILE, its kit line naming the
-# scratch kit's commit.
+# fill FILE: the port's copy of template FILE, its kit line in the
+# templates' `vX.Y.Z (SHA)` form naming the scratch kit's commit, which
+# has no tag yet, so the version is the release before it.
 fill() {
   mkdir -p "$port/$(dirname "$1")"
-  sed "s|^# kit: proved-port .*|# kit: proved-port $sha|" "$templates/$1" > "$port/$1"
+  sed "s|^# kit: proved-port .*|# kit: proved-port v0.1.0 ($sha)|" "$templates/$1" > "$port/$1"
 }
 headers() {
   rc=0
@@ -356,7 +357,7 @@ while IFS= read -r f; do fill "$f"; done < "$tmp/templates"
 headers || { cat "$tmp/out" >&2; fail "headers.sh failed on the templates as they are"; }
 grep -qx 'ok verus/FLOOR' "$tmp/out" || fail "headers.sh did not check verus/FLOOR"
 grep -qx 'ok .chainguard/ci/verus.yaml' "$tmp/out" || fail "headers.sh did not check .chainguard/ci/verus.yaml"
-echo "ok headers.sh passes the templates as they are"
+echo "ok headers.sh passes the templates as they are, kit lines in the vX.Y.Z (SHA) form"
 
 # A port fills its placeholders, rewrapping the paragraph, deletes the
 # ones that are whole list items, and adds lines after its kit line.
@@ -386,7 +387,7 @@ cp "$tmp/RLIMIT" "$port/verus/RLIMIT"
 rm "$port/verus/MINTS"
 headers || { cat "$tmp/out" >&2; fail "headers.sh failed on filled placeholders"; }
 grep -qx 'skip verus/MINTS: the port has none' "$tmp/out" || fail "headers.sh did not name the file it skipped"
-echo "ok headers.sh passes filled, rewrapped and deleted placeholders, a short sha, a missing file"
+echo "ok headers.sh passes filled, rewrapped and deleted placeholders, a one-word short sha, a missing file"
 
 # bad FILE WHAT AWK: FILE edited by the awk program AWK fails.
 bad() {
@@ -405,8 +406,27 @@ bad .chainguard/ci/verus.yaml "a header line deleted" 'NR == 3 { next } { print 
 bad verus/RLIMIT "a kit line naming another commit" '/^# kit:/ { print "# kit: proved-port 0123456789abcdef"; next } { print }'
 bad verus/RLIMIT "a kit line naming a tag the kit has not" '/^# kit:/ { print "# kit: proved-port kit/v0.1.0"; next } { print }'
 bad verus/RLIMIT "a kit line with too short a sha" "/^# kit:/ { print \"# kit: proved-port $(echo "$sha" | cut -c1-6)\"; next } { print }"
+bad verus/RLIMIT "a vX.Y.Z (SHA) kit line naming another commit" '/^# kit:/ { print "# kit: proved-port v0.1.0 (0123456789abcdef)"; next } { print }'
+bad verus/RLIMIT "a vX.Y.Z (SHA) kit line with too short a sha" "/^# kit:/ { print \"# kit: proved-port v0.1.0 ($(echo "$sha" | cut -c1-6))\"; next } { print }"
 bad verus/REACH "no kit line" '/^# kit:/ { next } { print }'
 headers || fail "headers.sh failed after the edits were undone"
+
+# Once the kit commit is tagged v0.1.0 and the port re-syncs, KIT records
+# the tag: the vX.Y.Z (SHA) lines pass only with that version, and the
+# tag alone passes as one word.
+git -C "$kitrepo" -c tag.gpgsign=false tag v0.1.0
+sh "$kitrepo/kit/sync.sh" "$port" > /dev/null
+grep -qx 'tag v0.1.0' "$port/verus/count/KIT" || fail "sync recorded no tag v0.1.0 in KIT"
+headers || { cat "$tmp/out" >&2; fail "headers.sh failed on vX.Y.Z (SHA) lines naming KIT's tag"; }
+echo "ok headers.sh passes vX.Y.Z (SHA) lines naming KIT's tag and commit"
+cp "$port/verus/REACH" "$tmp/keep"
+awk '/^# kit:/ { print "# kit: proved-port v0.1.0"; next } { print }' "$tmp/keep" > "$port/verus/REACH"
+headers || { cat "$tmp/out" >&2; fail "headers.sh failed on a one-word kit line naming KIT's tag"; }
+cp "$tmp/keep" "$port/verus/REACH"
+echo "ok headers.sh passes a one-word kit line naming KIT's tag"
+bad verus/RLIMIT "a vX.Y.Z (SHA) kit line naming another version than KIT's tag" "/^# kit:/ { print \"# kit: proved-port v0.0.9 ($sha)\"; next } { print }"
+bad verus/RLIMIT "a vX.Y.Z (SHA) kit line naming KIT's tag and another commit" '/^# kit:/ { print "# kit: proved-port v0.1.0 (0123456789abcdef)"; next } { print }'
+headers || fail "headers.sh failed after the tagged edits were undone"
 
 # chainz's ratchet is verus/SHARES (VERUS_FLOOR): make verus-headers holds
 # its header to the verus/FLOOR template's, and fails when it drifts.

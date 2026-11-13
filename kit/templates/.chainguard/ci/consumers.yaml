@@ -8,7 +8,7 @@
 # port whose consumers all come from packages and fit a few minutes may
 # run them on every pull request instead (`trigger: [presubmit,
 # postsubmit]` in place of `when`). Every instance must fit 50 minutes.
-# kit: proved-port kit/v{KIT_VERSION}
+# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 
 environment:

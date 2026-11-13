@@ -11,7 +11,7 @@
 # differential (on request only: label a pull request
 # ci/run:differential): the same tests through {LIBRARY} and {PORT},
 # against the advisory list tests/upstream/differential.txt.
-# kit: proved-port kit/v{KIT_VERSION}
+# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 
 environment:

@@ -123,8 +123,10 @@ or an open bug.
    figures the counter names on that PR, with `[badge]` set and the
    README's badge line at those figures (`verus-count --badge .`). Run the counter on the PR's
    base too: every figure there is 0.0, which shows the gate measured
-   before the proof moved it. This raise is the one exception to an
-   own-PR raise rule (`references/proofs.md`, "The FLOOR ratchet"): no
+   before the proof moved it. This raise is the one exception to the
+   kit's raise rule, which every port follows: FLOOR and the badge rise
+   in a PR of their own, to the figures the check names, never in the
+   PR that earns them (`references/proofs.md`, "The FLOOR ratchet"). No
    figure can rise before a counter and a proof exist, so the first
    raise lands with them (expat-rs #193).
    A port that already has its own counter adopts the kit's in a PR of
@@ -138,14 +140,16 @@ or an open bug.
    **Vendor the counter:** the ports' check guests cannot reach this
    repository, so the port carries a copy. From a clone of this
    repository, `kit/sync.sh PORT_ROOT` copies `kit/count` at the clone's
-   HEAD to `verus/count/` and records the commit in `verus/count/KIT`;
-   the verus check builds it from there
+   HEAD to `verus/count/`, and `kit/make` (the make targets, Kani
+   runner and header lint) to `verus/make/`, and records the commit in
+   `verus/count/KIT`; the verus check builds the counter from there
    (`cargo build --locked --release --manifest-path verus/count/Cargo.toml`)
-   and runs it. Never edit the copy: a fix lands in `kit/count` first,
-   and the port re-syncs in its own PR. Before pushing a change to
-   `verus/count/`, run `kit/sync.sh --check PORT_ROOT`, which fails on
-   any drift from the recorded commit (the port's CI cannot run it), and
-   name the commit in the PR body (`kit/count/README.md`, "Adopting:
+   and runs it. Never edit either copy: a fix lands in `kit/count` or
+   `kit/make` first, and the port re-syncs in its own PR. Before pushing
+   a change to `verus/count/` or `verus/make/`, run
+   `kit/sync.sh --check PORT_ROOT`, which fails on any drift in either
+   from the recorded commit (the port's CI cannot run it), and name the
+   commit in the PR body (`kit/count/README.md`, "Adopting:
    vendoring").
 3. Prove leaf modules first (UTF decoding, tables, parsers), where vstd
    already has a specification to prove against.

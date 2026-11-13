@@ -16,14 +16,12 @@
 #
 # New executable code comes with its proofs (CONTRIBUTING.md), so a change
 # keeps each share at or above these figures. The check passes a share
-# above its figure and names the figure to record; when it is recorded is
-# the port's choice, so keep one of these and delete the other:
-# {RAISE_RULE: same PR: a change that raises a share raises its figure
-# here, to the one the check names, in the same pull request. When two
-# pull requests both raise it, the second to merge takes the figures its
-# run on the new base names. | own PR: the figures rise in their own pull
-# requests between merges, to the figures the check names, so that pull
-# requests landing in parallel do not conflict here.}
+# above its figure and names the figure to record. The figures, and the
+# README badge that shows them, rise in a pull request of their own, to
+# the figures the check names, never in the pull request that earns them,
+# so that pull requests landing in parallel do not conflict here. The one
+# exception is the first proof pull request, which brings the counter and
+# raises every figure from 0.0.
 #
 # README.md's Verus badge gives `functions` and `lines` as written here
 # (verus/count.toml's `[badge]`), and the check fails when it does not, so
@@ -39,7 +37,7 @@
 # the counts before and after (`N of M shipped functions verified, P%,
 # against main's SHA at N' of M'`).
 #
-# kit: proved-port kit/v{KIT_VERSION}
+# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 functions 0.0
 lines 0.0
 checked-functions 0.0

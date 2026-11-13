@@ -10,4 +10,4 @@
 #
 # {What the rows share, if they share a cause, and the issue that tracks
 # Miri over the crate; or delete this paragraph.}
-# kit: proved-port kit/v{KIT_VERSION}
+# kit: proved-port v{KIT_VERSION} ({KIT_SHA})

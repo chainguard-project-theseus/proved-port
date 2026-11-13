@@ -203,8 +203,9 @@ gives verus/FLOOR's functions and lines figures`. A missing file fails
 too (exit 1), and a `path` that is not relative, has a `..` or passes
 through a symlink exits 2, as a `[floor] path` through one does. The
 badge follows FLOOR, not the counted shares, so it moves only when FLOOR
-does: a change that raises FLOOR updates the badge in the same change,
-pasting what `verus-count --badge .` prints. Without `--floor` the badge
+does: the pull request that raises FLOOR, one of its own (FLOOR's
+header), updates the badge too, pasting what `verus-count --badge .`
+prints. Without `--floor` the badge
 is not checked. Removing `[badge]` or moving its `path` is a narrowing
 (Configuration, above). The link is `verus/README.md#coverage` wherever
 the file sits, so keep the file at the root.
@@ -312,8 +313,9 @@ proof PR (the skill's lifecycle.md, phase 4):
 2. Copy `kit/templates/verus/FLOOR`, whose figures are all 0.0.
 3. On the PR's base the counter names 0.0 for every figure; on the PR it
    names the figures the proof reaches. Record those in FLOOR in the
-   same PR, even where FLOOR's raise rule is "own PR": this first raise
-   cannot come before the counter and the proof.
+   same PR, although FLOOR otherwise rises only in a PR of its own
+   (its header): this first raise cannot come before the counter and the
+   proof.
 4. Add `[badge]` to `verus/count.toml` and put the line
    `verus-count --badge .` prints on the README's third line, under
    its title (The badge, above).
@@ -381,7 +383,7 @@ Ports will pin the kit as a released package (kit/PLAN.md, section 4)
 once the TODO above is done; until then they vendor it. A
 release of this crate needs:
 
-- a version: `Cargo.toml` says `0.0.0` until the first `kit/vX.Y.Z` tag
+- a version: `Cargo.toml` says `0.0.0` until a `vX.Y.Z` tag
   sets it, and `--version` prints it so a port's Makefile can refuse
   another;
 - a package build (a melange config in a package repository the ports'

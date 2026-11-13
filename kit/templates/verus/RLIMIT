@@ -23,7 +23,7 @@
 # scope, a lemma in place of an inline proof). Never a weaker contract or
 # an `assume`. Raise the rlimit last, to the smallest N that holds the
 # function within max-share, and say in REASON what it uses on its own
-# prover (`{FUNCTION_EXAMPLE}: 17.5M, 58% of the default and 19% of 30`).
+# prover (`{FUNCTION_EXAMPLE: name: 17.5M, 58% of the default and 19% of 30}`).
 #
-# kit: proved-port kit/v{KIT_VERSION}
+# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 max-share 65
