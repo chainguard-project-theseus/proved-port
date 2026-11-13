@@ -2795,7 +2795,7 @@ fn a_definition_reaches_an_invocation_as_rustc_resolves_it() {
     }
 }
 
-/// wolfi-dev/proved-port#12's reproducer: a function under a `cfg` Verus's
+/// A reported reproducer: a function under a `cfg` Verus's
 /// build might not meet (`target_os = "windows"`, which a Linux proof run
 /// never sees) ships with nothing to prove Verus checked it, so it counts
 /// as trusted, not verified.

@@ -1,6 +1,6 @@
 #!/bin/sh
 # verus/make/kani.sh [--list] [ARGS]: the Kani harnesses (`make kani`,
-# verus/make/proved-port.mk), vendored from wolfi-dev/proved-port's
+# verus/make/proved-port.mk), vendored from the proved-port kit's
 # kit/make by kit/sync.sh. Run it from the port's root. ARGS go to every
 # `cargo kani` call, the `cargo kani list` that finds the harnesses too
 # (before `list`, as KANI_FLAGS do), so `--features quantum8` lists the

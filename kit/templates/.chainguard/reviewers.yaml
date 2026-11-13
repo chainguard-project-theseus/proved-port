@@ -9,7 +9,7 @@ version: 1
 approve: true
 # Per-pass read limits, at their ceilings: a proof pull request can move a
 # whole file inside `verus!`, so each pass may read the diff and its
-# context. No `diff_lines`: mono's code-reviewer README lists it as
+# context. No `diff_lines`: the code reviewer's documentation lists it as
 # deprecated, and the reviewer ignores it.
 limits:
   read_calls: 60

@@ -69,7 +69,7 @@ verus/FLOOR cites this section.}
 
 ## Counter
 
-`verus/count/` is the wolfi-dev/proved-port kit's coverage counter
+`verus/count/` is the proved-port kit's coverage counter
 (`verus-count`), vendored: [count/KIT](count/KIT) names the proved-port
 commit it was copied from, and [count.toml](count.toml) configures it
 for {PORT} (the crates, the test-only `cfg`s and features, and where
@@ -87,12 +87,12 @@ the headers to), under the same KIT.
 
 Never edit either copy. A change to the counter or the make targets
 lands in the kit's `kit/count` or `kit/make` first, in a
-wolfi-dev/proved-port pull request; then a {PORT} pull request runs
+proved-port pull request; then a {PORT} pull request runs
 `kit/sync.sh <{PORT} checkout>` from a clone of proved-port at that
 commit, which replaces `verus/count/` and `verus/make/` and rewrites
 KIT, and `kit/sync.sh --check <{PORT} checkout>`, which fails unless
 both copies are exactly the commit KIT names. Name that commit in the pull
-request: the checks here cannot reach proved-port, which is internal.
+request: the checks here cannot reach proved-port.
 The verus check runs the copy's tests (`counter tests`) before the
 proofs. The copy is a workspace of its own with its own Cargo.lock,
 built under `target/verus-count` so `git status` stays clean, and none

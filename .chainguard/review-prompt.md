@@ -84,6 +84,14 @@ not get wrong.
   README's grep patterns must still find every one a port must fill. A
   new placeholder the README neither lists nor its patterns find is a
   Question.
+- Public ports. A port may be public, so every file it vendors or copies
+  (`kit/count/`, `kit/make/`, `kit/templates/` but its README.md, and
+  the `verus/count/KIT` header `kit/sync.sh` writes) names
+  no internal repository or organization, internal tool or URL, person,
+  or private issue or pull request number; `kit/internal-test.sh` scans
+  for the markers it lists. Such a reference the test misses (an issue
+  number in a private repository, say) is Blocking, as is a change that
+  narrows what the test scans or drops a marker without saying why.
 - FLOOR. Never suggest that a port lower its FLOOR or add a `lowered`
   line, and never accept a kit change whose purpose or effect is to let
   a port's figures fall unseen (skill, "Coverage only ratchets up"). A
@@ -192,7 +200,7 @@ briefly:
 4. Test coverage. For each core behaviour ask: if I broke this, what test
    catches it? Name the breakage and the test (`kit/count/src/`,
    `kit/count/tests/cli.rs`, `kit/sync-test.sh`, `kit/make-test.sh`,
-   `kit/miri-test.sh`), or its absence.
+   `kit/miri-test.sh`, `kit/internal-test.sh`), or its absence.
 5. Earlier feedback. How well do the new commits address it? If earlier
    feedback flagged a bug, was a test for that bug added?
 6. Size and separability, as in the summary rules above.

@@ -1,4 +1,4 @@
-# wolfi-dev/challoc's verus/count.toml: the configuration under which the
+# challoc's verus/count.toml: the configuration under which the
 # kit counter's tables and FLOOR report match challoc's in-tree
 # verus/count (kit/count/README.md, "Parity", which lists where they do
 # not yet).

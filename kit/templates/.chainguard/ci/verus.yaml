@@ -65,8 +65,8 @@ checks:
     network: &crates
       egress: [index.crates.io, static.crates.io]
     steps: &verus-steps
-      # The port's CI cannot run kit/sync.sh --check (the kit is
-      # internal), so these tests are what checks the vendored copy here.
+      # The port's CI cannot run kit/sync.sh --check (it cannot reach the
+      # kit), so these tests are what checks the vendored copy here.
       - &counter-tests
         name: counter tests
         cmd: [cargo, test, --locked, --manifest-path, verus/count/Cargo.toml]

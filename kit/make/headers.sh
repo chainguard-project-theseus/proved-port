@@ -1,7 +1,7 @@
 #!/bin/sh
 # verus/make/headers.sh [PORT_ROOT]: hold a port's copies of the kit's
 # Verus files to the kit's text (`make verus-headers`,
-# verus/make/proved-port.mk). Vendored from wolfi-dev/proved-port's
+# verus/make/proved-port.mk). Vendored from the proved-port kit's
 # kit/make by kit/sync.sh, which copies beside it, under
 # verus/make/templates/, the templates kit/make/VERUS-FILES names, each
 # with `.tmpl` added to its name (verus/FLOOR.tmpl), as they are at the
@@ -254,6 +254,6 @@ while IFS= read -r t; do
   echo "ok $path"
 done < "$tmp/list"
 if [ -n "$drift" ]; then
-  echo "headers: restore the kit's text, or change kit/templates in wolfi-dev/proved-port and re-sync" >&2
+  echo "headers: restore the kit's text, or change kit/templates in the proved-port kit and re-sync" >&2
   exit 1
 fi

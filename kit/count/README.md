@@ -266,8 +266,7 @@ declared), `#[cfg(target_os = "macos")] mod mac { #[cfg(target_arch =
 any(target_arch = "aarch64", unix))`. `not(target_arch = "x86_64")`
 stays unsure too: the function counts as trusted though the aarch64 run
 checks it. A model of each run's atoms would credit these where a run
-checks them:
-[wolfi-dev/proved-port#21](https://github.com/wolfi-dev/proved-port/issues/21).
+checks them; the counter has none yet.
 Since each atom is read on its own, a file declared under `feature =
 "std"` and again under `not(feature = "std")`, which every build
 compiles, stays unsure too, unless the configuration settles `std`.
@@ -591,9 +590,9 @@ in-tree counter, but for one line:
 
 | port | commit | configuration | `--floor verus/FLOOR --base-rev HEAD^` | `--list` |
 |---|---|---|---|---|
-| pcre3 | wolfi-dev/pcre3 main `158cf87a` | `configs/pcre3.toml` | identical but the `ok compile inputs` line | identical but that line (3,919 lines) |
-| challoc | wolfi-dev/challoc main `fcde6b2` | `configs/challoc.toml` | identical | identical (1,674 lines) |
-| challoc | wolfi-dev/challoc main `39751a02` | `configs/challoc.toml` | identical (also with no flag, and `--list --floor verus/FLOOR --base-rev fcde6b2`) | identical (1,672 lines) |
+| pcre3 | pcre3 main `158cf87a` | `configs/pcre3.toml` | identical but the `ok compile inputs` line | identical but that line (3,919 lines) |
+| challoc | challoc main `fcde6b2` | `configs/challoc.toml` | identical | identical (1,674 lines) |
+| challoc | challoc main `39751a02` | `configs/challoc.toml` | identical (also with no flag, and `--list --floor verus/FLOOR --base-rev fcde6b2`) | identical (1,672 lines) |
 
 The kit's `ok compile inputs` line also names each root it resolved
 and where (`(roots Regex::new at crates/pcre3/src/regex.rs:274,
@@ -621,15 +620,14 @@ Where the counters still differ, on inputs neither port has today:
   Neither port has a stand-in, root or attribute these refuse.
 - The kit counts a function under a `cfg` Verus's build might not meet
   as trusted ("Verus's build"); pcre3's and challoc's counters take
-  every atom they do not configure to hold where Verus runs. On
-  wolfi-dev/pcre3 main
-  `b5633f1d`, pcre3-capi's `jit` and `miri` guards are the only such
+  every atom they do not configure to hold where Verus runs. On pcre3
+  main `b5633f1d`, pcre3-capi's `jit` and `miri` guards are the only such
   `cfg`s on a verified or trusted function. With `verus_sets = ['feature
   = "jit"']` and `verus_never_sets = ["miri"]`, as
   [configs/pcre3.toml](configs/pcre3.toml) has, `--list` is the same as
   pcre3's counter's rule gives; without them, 27 verified functions
   of pcre3-capi (exec.rs and tables.rs's `Libc` ctype items) count as
-  trusted. On wolfi-dev/challoc main `0497dc34`, its `target_arch` and
+  trusted. On challoc main `0497dc34`, its `target_arch` and
   `loom` guards are the only ones: with
   [configs/challoc.toml](configs/challoc.toml)'s declarations `--list`
   is the same as challoc's counter's rule gives, and without them 7
@@ -693,7 +691,7 @@ the `--floor` flag, which the counter reads at the head, and
 the key set, step 1's `--floor verus/FLOOR` reads the directory and the
 counter exits 2.
 
-On chainz's PR #6 head (`eb79512`), the two-line configuration counts
+On a chainz pull request's head (`eb79512`), the two-line configuration counts
 16 verified functions in zlib-core, the number chainz's own
 `verus/FLOOR` records (`verified 16`, an older single-figure format
 the kit does not read), and names `functions 4.1`, `lines 12.8`. On
