@@ -66,9 +66,10 @@
 //! Usage: `verus-count [--config FILE] [--list] [--floor FILE [--base-rev
 //! REV | --no-base]] [--rlimit STATS] ROOT`, with ROOT the repository root (default
 //! `.`) and FILE the configuration (default `ROOT/verus/count.toml`);
-//! `--version` prints the counter's version, and `verus-count [--config
-//! FILE] --badge ROOT` the coverage badge line ROOT's FLOOR gives
-//! ([`badge_line`]).
+//! `--version` prints the counter's version, the kit release it comes
+//! from; `--help` (`-h`) prints the usage ([`USAGE`]) and exits 0; and
+//! `verus-count [--config FILE] --badge ROOT` prints the coverage badge
+//! line ROOT's FLOOR gives ([`badge_line`]).
 //! `--list` prints one line per executable function: crate, class, lines,
 //! file:line and name, before the table; every check runs as without it.
 //! `--floor FILE` fails the run when the `shipped`
@@ -4663,6 +4664,29 @@ fn seam_tables(root: &Path, c: &config::Seams) -> (Vec<String>, String) {
     (texts, names.join(", "))
 }
 
+/// What `--help` prints: the forms of the command line and each option.
+/// kit/count/README.md has the whole story.
+const USAGE: &str = "\
+usage: verus-count [--config FILE] [--list] [--floor FILE [--base-rev REV | --no-base]] [--rlimit STATS] [ROOT]
+       verus-count [--config FILE] --badge [ROOT]
+       verus-count --version | --help
+
+ROOT is the repository root (default .), and FILE the configuration
+(default ROOT/verus/count.toml).
+
+  --config FILE   read the configuration from FILE
+  --list          print one line per executable function before the table
+  --floor FILE    fail when a share of the shipped row is below FILE's figure
+  --base-rev REV  also hold FLOOR, RLIMIT, REACH and the configuration to REV's
+  --no-base       run --floor with no base (a local run, or the first FLOOR)
+  --rlimit STATS  hold each verified function to verus/RLIMIT, from Verus's
+                  --time-expanded --output-json statistics
+  --badge         print the README badge line FLOOR's figures give
+  --version       print the counter's version
+  --help, -h      print this
+
+An unknown option or a second ROOT exits 2. See kit/count/README.md.";
+
 /// Exits 2 with `e` printed.
 fn usage(e: impl std::fmt::Display) -> ! {
     eprintln!("{e}");
@@ -4674,6 +4698,7 @@ fn usage(e: impl std::fmt::Display) -> ! {
 struct Args {
     list: bool,
     version: bool,
+    help: bool,
     badge: bool,
     floor: Option<PathBuf>,
     base_rev: Option<String>,
@@ -4687,13 +4712,19 @@ struct Args {
 /// with `-` and is not an option fails, as does a second ROOT: a
 /// misspelt `--flor FILE` would otherwise be read as ROOT, and the run
 /// would pass with no floor checked. `--badge` with a checking option
-/// fails too, since it prints the badge line and checks nothing.
+/// fails too, since it prints the badge line and checks nothing, and so
+/// does `--help` or `--version` with any other argument: either prints
+/// and exits 0, so a check's command line that gained one would pass
+/// with nothing checked.
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut out = Args::default();
+    let mut given = 0;
     while let Some(a) = args.next() {
+        given += 1;
         match a.as_str() {
             "--list" => out.list = true,
             "--version" => out.version = true,
+            "--help" | "-h" => out.help = true,
             "--no-base" => out.no_base = true,
             "--badge" => out.badge = true,
             "--floor" | "--base-rev" | "--rlimit" | "--config" => {
@@ -4711,6 +4742,11 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             }
             _ => out.root = Some(PathBuf::from(a)),
         }
+    }
+    if (out.help || out.version) && given > 1 {
+        return Err(
+            "--help and --version print and check nothing: give either one alone".to_owned(),
+        );
     }
     if out.no_base && out.base_rev.is_some() {
         return Err("--no-base with --base-rev: give one".to_owned());
@@ -4733,6 +4769,7 @@ fn main() {
     let Args {
         list,
         version,
+        help,
         badge,
         floor,
         base_rev,
@@ -4741,6 +4778,10 @@ fn main() {
         config_file,
         root,
     } = parse_args(std::env::args().skip(1)).unwrap_or_else(|e| usage(e));
+    if help {
+        println!("{USAGE}");
+        return;
+    }
     if version {
         println!("verus-count {}", env!("CARGO_PKG_VERSION"));
         return;
@@ -7082,6 +7123,15 @@ mod tests {
             })
         );
         assert_eq!(parse(&[]), Ok(Args::default()));
+        for help in ["--help", "-h"] {
+            assert_eq!(
+                parse(&[help]),
+                Ok(Args {
+                    help: true,
+                    ..Args::default()
+                })
+            );
+        }
         assert_eq!(
             parse(&["--floor", "verus/FLOOR", "--no-base"]),
             Ok(Args {
@@ -7106,6 +7156,19 @@ mod tests {
             ),
             (&["--flor", "verus/FLOOR", "."][..], "unknown option --flor"),
             (&["-l", "."][..], "unknown option -l"),
+            (&["--helps"][..], "unknown option --helps"),
+            (
+                &["--floor", "verus/FLOOR", "--base-rev", "HEAD", "-h", "."][..],
+                "--help and --version print and check nothing",
+            ),
+            (&["--help", "."][..], "--help and --version print"),
+            (&["--list", "--help"][..], "--help and --version print"),
+            (
+                &["--version", "--no-base"][..],
+                "--help and --version print",
+            ),
+            (&["--badge", "--version"][..], "--help and --version print"),
+            (&["--help", "--version"][..], "--help and --version print"),
             (&["verus/FLOOR", "."][..], "a second ROOT ."),
             (&["--floor"][..], "--floor needs a value"),
             (&["--badge", "--floor", "verus/FLOOR"][..], "--badge prints"),

@@ -71,6 +71,84 @@ fn count(root: &Path, args: &[&str]) -> (i32, String, String) {
     )
 }
 
+/// The counter run with `args` alone, no ROOT: its exit code, standard
+/// output and standard error.
+fn run(args: &[&str]) -> (i32, String, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_verus-count"))
+        .args(args)
+        .output()
+        .expect("runs");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// `--version` prints the kit release (Cargo.toml's version, never the
+/// 0.0.0 placeholder) and exits 0; `--help` and `-h` print the usage,
+/// naming every option, and exit 0; a misspelt `--helps` still exits 2,
+/// and so does `--help`, `-h` or `--version` beside a checking option or
+/// a ROOT.
+#[test]
+fn version_and_help_exit_zero() {
+    let (code, out, err) = run(&["--version"]);
+    assert_eq!(code, 0, "--version: got = {code}, wanted = 0 ({err})");
+    assert_eq!(out, format!("verus-count {}\n", env!("CARGO_PKG_VERSION")));
+    assert_ne!(
+        env!("CARGO_PKG_VERSION"),
+        "0.0.0",
+        "Cargo.toml's version: got = 0.0.0, wanted = the kit release"
+    );
+    for help in ["--help", "-h"] {
+        let (code, out, err) = run(&[help]);
+        assert_eq!(code, 0, "{help}: got = {code}, wanted = 0 ({err})");
+        assert!(
+            out.starts_with("usage: verus-count "),
+            "{help}: got = {out:?}"
+        );
+        for option in [
+            "--config",
+            "--list",
+            "--floor",
+            "--base-rev",
+            "--no-base",
+            "--rlimit",
+            "--badge",
+            "--version",
+            "--help",
+        ] {
+            assert!(out.contains(option), "{help}: got = no {option} in {out:?}");
+        }
+    }
+    let (code, _, err) = run(&["--helps"]);
+    assert_eq!(code, 2, "--helps: got = {code}, wanted = 2");
+    assert!(
+        err.contains("unknown option --helps"),
+        "--helps: got = {err:?}"
+    );
+    // Help or version beside a check prints nothing and passes nothing:
+    // a check's command line that gained one exits 2, not 0.
+    for args in [
+        &["--floor", "verus/FLOOR", "--base-rev", "HEAD", "-h", "."][..],
+        &["--floor", "verus/FLOOR", "--no-base", "--help", "."][..],
+        &["--list", "--help"][..],
+        &["--version", "--floor", "verus/FLOOR", "--no-base", "."][..],
+        &["--help", "."][..],
+    ] {
+        let (code, out, err) = run(args);
+        assert_eq!(code, 2, "{args:?}: got = {code}, wanted = 2 ({out})");
+        assert!(
+            out.is_empty(),
+            "{args:?}: got = {out:?}, wanted = nothing printed"
+        );
+        assert!(
+            err.contains("--help and --version print and check nothing"),
+            "{args:?}: got = {err:?}"
+        );
+    }
+}
+
 /// A head that drops `[mints]` (and `[reach]`) from the base's
 /// configuration exits 1 with `--base-rev`, and 0 without it. A base
 /// with no configuration, or the same one, passes; a base whose copy
