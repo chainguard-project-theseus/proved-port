@@ -2,7 +2,7 @@
   "name": "proved-port",
   "description": "Plugins for porting C libraries to proved Rust behind a drop-in C ABI.",
   "owner": {
-    "name": "wolfi-dev"
+    "name": "chainguard-project-theseus"
   },
   "plugins": [
     {

@@ -1,4 +1,4 @@
-# codeowners-gate sidecar for wolfi-dev/proved-port: the source of truth for
+# codeowners-gate sidecar for chainguard-project-theseus/proved-port: the source of truth for
 # .github/CODEOWNERS, which renders it without the bot: owners. Change both
 # with a change request and the codeowners-gate tool's apply step (a
 # Chainguard-internal tool), run from the root of this repository. GitHub
