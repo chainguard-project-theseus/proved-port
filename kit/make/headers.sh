@@ -30,7 +30,9 @@
 #
 # VERUS_FLOOR (from the environment, as proved-port.mk passes it; a path
 # under PORT_ROOT, default verus/FLOOR) is the port's ratchet file, which
-# the verus/FLOOR template's header holds (chainz: verus/SHARES).
+# the verus/FLOOR template's header holds (a port with a verus/floor/
+# directory names it otherwise, verus/SHARES say, as verus/FLOOR and
+# verus/floor/ are one path on a case-insensitive file system).
 #
 # The port's `# kit: proved-port VERSION` line must name the commit
 # verus/count/KIT records (in full or a prefix of 7 or more characters),

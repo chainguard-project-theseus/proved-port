@@ -107,7 +107,7 @@ cargo verus focus --locked -p expat-rs --features verus -- --time-expanded --out
 $count_build
 target/verus-count/release/verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --base-rev HEAD^ ."
 
-expect "make -n verus, chainz (verus/SHARES)" \
+expect "make -n verus, another name (verus/SHARES)" \
   "$(shows verus VERUS_CRATES=zlib-core VERUS_FLOOR=verus/SHARES VERUS_BASE=main)" \
   "mkdir -p target/
 cargo verus focus --locked -p zlib-core -- --time-expanded --output-json > target/verus-stats.json
@@ -131,7 +131,7 @@ expect "make -n verus-count-test" \
   "cargo test --locked --manifest-path verus/count/Cargo.toml --target-dir target/verus-count"
 
 expect "make -n verus-headers" "$(shows verus-headers)" "VERUS_FLOOR=verus/FLOOR sh verus/make/headers.sh ."
-expect "make -n verus-headers, chainz (verus/SHARES)" "$(shows verus-headers VERUS_FLOOR=verus/SHARES)" \
+expect "make -n verus-headers, another name (verus/SHARES)" "$(shows verus-headers VERUS_FLOOR=verus/SHARES)" \
   "VERUS_FLOOR=verus/SHARES sh verus/make/headers.sh ."
 expect "make -n kani" "$(shows kani)" "sh verus/make/kani.sh"
 expect "make -n kani-list" "$(shows kani-list)" "sh verus/make/kani.sh --list"
@@ -683,7 +683,7 @@ bad verus/RLIMIT "a vX.Y.Z (SHA) kit line naming another version than KIT's tag"
 bad verus/RLIMIT "a vX.Y.Z (SHA) kit line naming KIT's tag and another commit" '/^# kit:/ { print "# kit: proved-port v0.1.0 (0123456789abcdef)"; next } { print }'
 headers || fail "headers.sh failed after the tagged edits were undone"
 
-# chainz's ratchet is verus/SHARES (VERUS_FLOOR): make verus-headers holds
+# A ratchet named verus/SHARES (VERUS_FLOOR): make verus-headers holds
 # its header to the verus/FLOOR template's, and fails when it drifts.
 mv "$port/verus/FLOOR" "$port/verus/SHARES"
 # floor_headers: make verus-headers with VERUS_FLOOR=verus/SHARES.

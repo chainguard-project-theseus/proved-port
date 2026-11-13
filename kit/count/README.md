@@ -723,11 +723,11 @@ proof PR (the skill's lifecycle.md, phase 4):
    its title (The badge, above).
 
 A port with a `verus/floor/` directory names the FLOOR file something
-else (chainz: `verus/SHARES`), since `verus/FLOOR` and `verus/floor/`
+else (`verus/SHARES`, say), since `verus/FLOOR` and `verus/floor/`
 are one path on a case-insensitive file system. Name it in both places:
 the `--floor` flag, which the counter reads at the head, and
 `[floor] path` in `verus/count.toml`, which it reads at `--base-rev`
-(chainz: `--floor verus/SHARES` and `path = "verus/SHARES"`). With only
+(`--floor verus/SHARES` and `path = "verus/SHARES"`). With only
 the key set, step 1's `--floor verus/FLOOR` reads the directory and the
 counter exits 2.
 
