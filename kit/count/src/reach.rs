@@ -121,16 +121,21 @@ fn names(id: &proc_macro2::Ident, mac: &str) -> bool {
 
 /// How many times `tokens` invoke `mac!` at any depth, but inside the body
 /// of `macro_rules! mac` itself (its own definition, whose invocations are
-/// its expansions'), and whether they rename it (`mac as`, an import under
-/// another name, whose invocations the scan cannot see).
-fn invocations(tokens: proc_macro2::TokenStream, mac: &str) -> (usize, bool) {
+/// its expansions'), and whether they rename it (`mac as` in a `use`, an
+/// import under another name, whose invocations the scan cannot see; a
+/// cast such as `exports as u32` is none). `in_use` says `tokens` are a
+/// group of a `use` item's tree.
+fn invocations(tokens: proc_macro2::TokenStream, mac: &str, in_use: bool) -> (usize, bool) {
     let trees: Vec<TokenTree> = tokens.into_iter().collect();
     let (mut n, mut renamed) = (0, false);
+    let mut used = in_use;
     for (i, t) in trees.iter().enumerate() {
         match t {
+            TokenTree::Ident(u) if u == "use" => used = true,
+            TokenTree::Punct(p) if p.as_char() == ';' => used = in_use,
             TokenTree::Ident(id) if names(id, mac) => match trees.get(i + 1) {
                 _ if invoked_at(&trees, i, mac) => n += 1,
-                Some(TokenTree::Ident(a)) if a == "as" => renamed = true,
+                Some(TokenTree::Ident(a)) if a == "as" && used => renamed = true,
                 _ => {}
             },
             TokenTree::Group(g) => {
@@ -140,7 +145,16 @@ fn invocations(tokens: proc_macro2::TokenStream, mac: &str) -> (usize, bool) {
                         if kw == "macro_rules" && names(name, mac)
                 );
                 if !own {
-                    let (m, r) = invocations(g.stream(), mac);
+                    // A `use` tree's group follows `use` or `::`; any other
+                    // (a body after `+ use<..>`) is no part of it.
+                    let tree = in_use
+                        || (used
+                            && match i.checked_sub(1).map(|k| &trees[k]) {
+                                Some(TokenTree::Punct(p)) => p.as_char() == ':',
+                                Some(TokenTree::Ident(u)) => u == "use",
+                                _ => false,
+                            });
+                    let (m, r) = invocations(g.stream(), mac, tree);
                     n += m;
                     renamed |= r;
                 }
@@ -234,10 +248,10 @@ pub(crate) fn exported(
         let text = crate::config::stand_in(stand_ins, &text);
         let (invoked, renamed) = match text.parse::<proc_macro2::TokenStream>() {
             Ok(t) => {
-                if !invokes(t.clone(), mac) && !invocations(t.clone(), mac).1 {
+                if !invokes(t.clone(), mac) && !invocations(t.clone(), mac, false).1 {
                     continue;
                 }
-                invocations(t, mac)
+                invocations(t, mac, false)
             }
             Err(e) => {
                 errs.push(format!("{}: {e}", f.display()));
@@ -628,6 +642,25 @@ mod tests {
             "use width::exports as wrap;\nwrap! { fn x [a, b, c] (); }\n",
         );
         let _ = fs::write(
+            dir.join("grouped.rs"),
+            "use width::{exports as wrap, other};\nwrap! { fn x [a, b, c] (); }\n",
+        );
+        let _ = fs::write(
+            dir.join("local.rs"),
+            "fn f() { use width::exports as wrap; }\n",
+        );
+        // A cast of a binding named like the macro (`exports as u32`) is no
+        // import: a file with no block is no error, and one with a block
+        // has it read.
+        let _ = fs::write(
+            dir.join("cast.rs"),
+            "fn width(exports: usize) -> u32 { exports as u32 }\n",
+        );
+        let _ = fs::write(
+            dir.join("cast_block.rs"),
+            "use std::mem;\nwidth::exports! { fn cast_body [a, b, c] (); }\nfn width(exports: usize) -> u32 { exports as u32 }\n",
+        );
+        let _ = fs::write(
             dir.join("wrapped.rs"),
             "macro_rules! both { ($($t:tt)*) => { width::exports! { $($t)* } } }\nboth! { fn x [a, b, c] (); }\n",
         );
@@ -660,6 +693,10 @@ mod tests {
             "invalid.rs",
             "gone.rs",
             "renamed.rs",
+            "grouped.rs",
+            "local.rs",
+            "cast.rs",
+            "cast_block.rs",
             "wrapped.rs",
             "def.rs",
         ]
@@ -669,6 +706,7 @@ mod tests {
         let (got, errs) = exported(&dir, &files, "exports", &stand_ins());
         let _ = fs::remove_dir_all(&dir);
         let want: BTreeSet<(PathBuf, String)> = [
+            (PathBuf::from("cast_block.rs"), "cast_body".to_string()),
             (PathBuf::from("compare.rs"), "cmp".to_string()),
             (PathBuf::from("n.rs"), "in_mod".to_string()),
             (PathBuf::from("n.rs"), "in_verus".to_string()),
@@ -677,7 +715,14 @@ mod tests {
         ]
         .into();
         assert_eq!(got, want);
-        assert_eq!(errs.len(), 6, "{errs:?}");
+        assert_eq!(errs.len(), 8, "{errs:?}");
+        for file in ["grouped.rs:", "local.rs:"] {
+            assert!(
+                errs.iter()
+                    .any(|e| e.starts_with(file) && e.contains("imported under another name")),
+                "{file} {errs:?}"
+            );
+        }
         assert!(
             errs.iter().any(|e| e.starts_with("raw_wrapped.rs:")
                 && e.contains("1 of its 1 `exports!` invocations")),

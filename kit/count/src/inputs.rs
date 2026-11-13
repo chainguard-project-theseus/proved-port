@@ -606,7 +606,8 @@ fn collect_lazy(tokens: TokenStream, out: &mut Vec<Site>) {
 /// of `holder`, the body of the function that holds them. An argument
 /// that is not a closure written in place (`get_or_init(init)`, a local
 /// closure or a value made elsewhere in `holder`), or a closure that
-/// calls a name `holder` binds with `let` (`move || init()`), has its body
+/// calls a name a pattern in `holder` binds ([`bound_names`]: `let init =
+/// ..; .. move || init()`), has its body
 /// somewhere the argument's tokens do not show, so it stands for all of
 /// `holder`.
 fn collect_inline(tokens: TokenStream, holder: &TokenStream, out: &mut Vec<Body>) {
@@ -618,7 +619,7 @@ fn collect_inline(tokens: TokenStream, holder: &TokenStream, out: &mut Vec<Body>
                     && g.delimiter() == Delimiter::Parenthesis
                 {
                     let mut bound = BTreeSet::new();
-                    let_bound(holder.clone(), &mut bound);
+                    bound_names(holder.clone(), &mut bound);
                     let arg = body(g.stream());
                     let local = arg
                         .sites
@@ -637,21 +638,103 @@ fn collect_inline(tokens: TokenStream, holder: &TokenStream, out: &mut Vec<Body>
     }
 }
 
-/// The names `tokens` bind with `let NAME` or `let mut NAME`, at any depth.
-fn let_bound(tokens: TokenStream, out: &mut BTreeSet<String>) {
+/// The names `tokens` bind, at any depth, by every pattern a body can
+/// hold: a `let`'s (`let mut NAME`, `let (a, b)`, `let S { x, .. }`, an
+/// `if let` or `while let` too), up to its type or its `=`; a `for`'s, up
+/// to its `in`; a closure's parameters, between its `|`s; and a `match`
+/// arm's, back from its `=>` to the arm before. A path, field or guard
+/// name is taken too, as is whatever sits between two `|`s of an `|`
+/// expression: a name taken that binds nothing can only make an argument
+/// stand for more of its holder.
+fn bound_names(tokens: TokenStream, out: &mut BTreeSet<String>) {
     let toks: Vec<TokenTree> = tokens.into_iter().collect();
+    let punct =
+        |k: usize, c: char| matches!(toks.get(k), Some(TokenTree::Punct(p)) if p.as_char() == c);
+    let take = |p: &TokenTree, out: &mut BTreeSet<String>| {
+        if matches!(p, TokenTree::Ident(_) | TokenTree::Group(_)) {
+            pattern_names(TokenStream::from(p.clone()), out);
+        }
+    };
+    // The closing `|` of the last parameter list read.
+    let mut closed = None;
     for (i, t) in toks.iter().enumerate() {
         match t {
             TokenTree::Ident(l) if l == "let" => {
-                let name = match toks.get(i + 1) {
-                    Some(TokenTree::Ident(m)) if m == "mut" => toks.get(i + 2),
-                    n => n,
-                };
-                if let Some(TokenTree::Ident(n)) = name {
-                    out.insert(n.to_string());
+                for (k, p) in toks.iter().enumerate().skip(i + 1) {
+                    match p {
+                        TokenTree::Punct(p) if matches!(p.as_char(), '=' | ';') => break,
+                        TokenTree::Punct(p)
+                            if p.as_char() == ':' && !punct(k - 1, ':') && !punct(k + 1, ':') =>
+                        {
+                            break;
+                        }
+                        _ => take(p, out),
+                    }
                 }
             }
-            TokenTree::Group(g) => let_bound(g.stream(), out),
+            // `for<'a>` is a bound's, not a loop's.
+            TokenTree::Ident(f) if f == "for" && !punct(i + 1, '<') => {
+                for p in &toks[i + 1..] {
+                    match p {
+                        TokenTree::Ident(n) if n == "in" => break,
+                        _ => take(p, out),
+                    }
+                }
+            }
+            // A closure's parameters, between its `|`s; `||` has none, and
+            // the `|` that closes a list opens none.
+            TokenTree::Punct(p)
+                if p.as_char() == '|'
+                    && !punct(i + 1, '|')
+                    && !(i > 0 && punct(i - 1, '|'))
+                    && closed != Some(i) =>
+            {
+                for (k, p) in toks.iter().enumerate().skip(i + 1) {
+                    match p {
+                        TokenTree::Punct(p) if p.as_char() == '|' => {
+                            closed = Some(k);
+                            break;
+                        }
+                        _ => take(p, out),
+                    }
+                }
+            }
+            // A `match` arm's pattern and guard, back to the arm before:
+            // its `,`, or its block (a `{ .. }` right after `=>`). Braces
+            // in the pattern (`Pair { a: init }`) or guard (`if { .. }`)
+            // are read.
+            TokenTree::Punct(p) if p.as_char() == '=' && punct(i + 1, '>') => {
+                for k in (0..i).rev() {
+                    match &toks[k] {
+                        TokenTree::Punct(p) if p.as_char() == ',' => break,
+                        TokenTree::Group(g)
+                            if g.delimiter() == Delimiter::Brace
+                                && k >= 2
+                                && punct(k - 1, '>')
+                                && punct(k - 2, '=') =>
+                        {
+                            break;
+                        }
+                        p => take(p, out),
+                    }
+                }
+            }
+            _ => {}
+        }
+        if let TokenTree::Group(g) = t {
+            bound_names(g.stream(), out);
+        }
+    }
+}
+
+/// Every name in pattern `tokens`, at any depth, but `mut` and `ref`.
+fn pattern_names(tokens: TokenStream, out: &mut BTreeSet<String>) {
+    for t in tokens {
+        match t {
+            TokenTree::Ident(n) if n != "mut" && n != "ref" => {
+                out.insert(n.to_string());
+            }
+            TokenTree::Group(g) => pattern_names(g.stream(), out),
             _ => {}
         }
     }
@@ -1770,20 +1853,39 @@ mod tests {
             "inserted drop: got = {got:?}, wanted = drop reading N"
         );
         // An initializer that is not a closure written in place (a local
-        // closure passed by name): the whole holder is read, its reads
+        // closure passed by name, or one a closure in place calls, bound
+        // by name or in a pattern: a `let`'s, a `match` arm's, a `for`'s,
+        // a closure parameter): the whole holder is read, its reads
         // and its calls. Negative: a closure in place reads only itself.
         let src = "static N: AtomicU64 = AtomicU64::new(0);
             static M: AtomicU64 = AtomicU64::new(0);
             fn later(c: &OnceLock<u64>) { let init = || N.load(Relaxed); c.get_or_init(init); }
             fn later_call(c: &OnceLock<u64>) { let init = || reader(); c.get_or_init(move || init()); }
+            fn later_tuple(c: &OnceLock<u64>) { let (init,) = (|| N.load(Relaxed),); c.get_or_init(move || init()); }
+            fn later_struct(c: &OnceLock<u64>) { let Pair { a: mut init, .. }: Pair<_> = pair(|| N.load(Relaxed)); c.get_or_init(move || init()); }
+            fn later_match(c: &OnceLock<u64>) { match Some(|| N.load(Relaxed)) { Some(init) => { c.get_or_init(move || init()); } _ => {} } }
+            fn later_match_struct(c: &OnceLock<u64>) { match (Pair { a: || N.load(Relaxed) }) { Pair { a: init } => { c.get_or_init(move || init()); } } }
+            fn later_match_guard(c: &OnceLock<u64>) { match Some(|| N.load(Relaxed)) { None => {} Some(init) if { true } => { c.get_or_init(move || init()); } _ => {} } }
+            fn later_for(c: &OnceLock<u64>) { for init in [|| N.load(Relaxed)] { c.get_or_init(move || init()); } }
+            fn later_param(c: &OnceLock<u64>) { let run = |init: fn() -> u64| { c.get_or_init(move || init()); }; run(|| N.load(Relaxed)); }
             fn reader() -> u64 { M.load(Relaxed) }
             fn in_place(c: &OnceLock<u64>) { M.load(Relaxed); c.get_or_init(|| 0); }";
         let mut got = reads(src);
         got.sort();
-        let want: Vec<(String, String)> = [("later", "N"), ("reader", "M")]
-            .iter()
-            .map(|(f, i)| ((*f).to_string(), (*i).to_string()))
-            .collect();
+        let want: Vec<(String, String)> = [
+            ("later", "N"),
+            ("later_for", "N"),
+            ("later_match", "N"),
+            ("later_match_guard", "N"),
+            ("later_match_struct", "N"),
+            ("later_param", "N"),
+            ("later_struct", "N"),
+            ("later_tuple", "N"),
+            ("reader", "M"),
+        ]
+        .iter()
+        .map(|(f, i)| ((*f).to_string(), (*i).to_string()))
+        .collect();
         assert_eq!(got, want);
     }
 
