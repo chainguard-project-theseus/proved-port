@@ -14,6 +14,15 @@
 # cargo's default package selection). It first runs `cargo fetch
 # --locked`, since cargo kani takes no --locked.
 #
+# Nothing to run is a failure even where cargo kani would pass: cargo
+# kani exits 0 on a crate with no harnesses, so before a run of every
+# harness kani.sh lists them, and fails when the selected crates have
+# none. A port with no harnesses yet declares so with KANI_NONE = yes in
+# its Makefile, so its kani checks run from its first commit: kani.sh
+# then lists the harnesses, passes when there are none, and fails when
+# there are any (the declaration is stale, delete it so they run). An
+# empty selection with no declaration still fails.
+#
 # The environment says what to run; empty is the same as unset:
 #
 #   KANI_CRATES        the packages with harnesses, each run with -p;
@@ -52,8 +61,13 @@
 #                      only the per-harness lines are printed, with the
 #                      log's tail on a failure.
 #   KANI_VERSION       the release `cargo kani --version` must name
+#   KANI_NONE          `yes`: the port has no harnesses yet, and a run
+#                      passes only while that holds (above); any other
+#                      value exits 2, and so does `yes` with KANI_HARNESS
+#                      or KANI_SHARD, which pick harnesses
 #
-# Exit 0: every harness run verified; 1: one did not, or nothing ran;
+# Exit 0: every harness run verified, or KANI_NONE=yes and there are
+# none; 1: one did not, nothing ran, or KANI_NONE=yes and there are some;
 # 2: usage.
 set -eu
 
@@ -79,7 +93,13 @@ shards=${KANI_SHARDS:-}
 jobs=${KANI_JOBS:-}
 format=${KANI_FORMAT:-}
 pattern=${KANI_FAIL_PATTERN:-}
+none=${KANI_NONE:-}
 
+case "$none" in
+  '') ;;
+  yes) [ -z "$harness$shard$shards" ] || usage "KANI_NONE=yes declares no harnesses; KANI_HARNESS and KANI_SHARD pick some" ;;
+  *) usage "KANI_NONE is yes (no harnesses yet) or empty, not $none" ;;
+esac
 case "$only$exclude$harness" in
   *[[:space:]]*) usage "KANI_ONLY, KANI_EXCLUDE and KANI_HARNESS each name one" ;;
 esac
@@ -136,9 +156,11 @@ fi
 mkdir -p "$out"
 cargo fetch --locked
 
-# pflag CRATE: the -p flag for CRATE, none for `-`.
+# pflag CRATE: the -p flag for CRATE, none for `-`, as one word: cargo
+# kani's -p takes every bare word after it, so `-p CRATE list` would
+# read `list` as a second package and refuse the list flags.
 pflag() {
-  [ "$1" = - ] || echo "-p $1"
+  [ "$1" = - ] || echo "-p=$1"
 }
 
 # fname CRATE: CRATE as a file name.
@@ -149,7 +171,10 @@ fname() {
 # harnesses CRATE [ARGS]: CRATE's harnesses, `CRATE NAME` a line, from
 # the kani-list.json `cargo kani list` writes, ARGS before `list`. A
 # harness is a bare string in an array (keys end in `: [` or `: {`, file
-# paths hold `/`); the count must match the file's totals.
+# paths hold `/`); the count must match the file's totals, which must
+# give both counts, each a number on its own line, as Kani 0.68.0 writes
+# them. A file in another shape fails rather than read as no harnesses,
+# which KANI_NONE=yes would pass.
 harnesses() {
   lc=$1
   shift
@@ -160,10 +185,19 @@ harnesses() {
   awk '/^ *"[A-Za-z0-9_:]*",?$/ { n = $0; gsub(/[ ",]/, "", n); print n }' "$json" \
     | LC_ALL=C sort -u > "$out/names"
   total=$(awk '
-    /"totals"/ { t = 1 }
-    t && /"(standard|contract)-harnesses"/ { v = $0; sub(/.*: */, "", v); s += v + 0 }
+    /^ *"totals": *[{] *$/ { t = 1; next }
+    t && /^ *"(standard|contract)-harnesses": *[0-9]+,? *$/ {
+      v = $0; sub(/.*: */, "", v); s += v + 0; seen[$1] = 1; next
+    }
     t && /}/ { t = 0 }
-    END { print s + 0 }' "$json")
+    END {
+      if (!("\"standard-harnesses\":" in seen) || !("\"contract-harnesses\":" in seen)) print "-"
+      else print s + 0
+    }' "$json")
+  if [ "$total" = - ]; then
+    echo "kani: $json has no \"totals\" block giving \"standard-harnesses\" and \"contract-harnesses\", each on its own line; kani.sh reads the file Kani 0.68.0 writes" >&2
+    exit 1
+  fi
   if [ "$(wc -l < "$out/names")" -ne "$total" ]; then
     echo "kani: $json lists $total harnesses, read $(wc -l < "$out/names")" >&2
     exit 1
@@ -223,6 +257,25 @@ if [ -n "$shards" ]; then
 elif [ -n "$list" ]; then
   for c in $selected; do harnesses "$c" "$@"; done
   exit 0
+elif [ -z "$harness" ]; then
+  # A run of every harness: cargo kani passes a crate with none, so count
+  # them first. KANI_HARNESS needs no count: Kani fails a --harness that
+  # matches nothing.
+  : > "$out/all"
+  for c in $selected; do harnesses "$c" "$@" >> "$out/all"; done
+  found=$(wc -l < "$out/all" | tr -d ' ')
+  if [ -n "$none" ]; then
+    if [ "$found" -ne 0 ]; then
+      echo "kani: KANI_NONE=yes declares no harnesses, but the selected crates have $found; delete KANI_NONE from the Makefile so they run" >&2
+      exit 1
+    fi
+    echo "kani: no harnesses, as KANI_NONE=yes declares"
+    exit 0
+  fi
+  if [ "$found" -eq 0 ]; then
+    echo "kani: the selected crates ($selected ) have no harnesses, so nothing would run; a port with none yet sets KANI_NONE = yes in its Makefile" >&2
+    exit 1
+  fi
 fi
 
 status=0

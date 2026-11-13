@@ -1,11 +1,17 @@
 #!/bin/sh
-# verus/make/headers.sh [PORT_ROOT]: hold a port's template-derived
-# headers to the kit's (`make verus-headers`, verus/make/proved-port.mk).
-# Vendored from wolfi-dev/proved-port's kit/make by kit/sync.sh, which
-# copies beside it, under verus/make/templates/, each kit template of
-# verus/FLOOR, RLIMIT, REACH and MINTS and of .chainguard/ that carries a
-# `# kit: proved-port` line, as they are at the kit commit
-# verus/count/KIT records.
+# verus/make/headers.sh [PORT_ROOT]: hold a port's copies of the kit's
+# Verus files to the kit's text (`make verus-headers`,
+# verus/make/proved-port.mk). Vendored from wolfi-dev/proved-port's
+# kit/make by kit/sync.sh, which copies beside it, under
+# verus/make/templates/, the templates kit/make/VERUS-FILES names, each
+# with `.tmpl` added to its name (verus/FLOOR.tmpl), as they are at the
+# kit commit verus/count/KIT records: verus/FLOOR, RLIMIT,
+# REACH, MINTS and count.toml, .chainguard/ci/verus.yaml, miri.yaml and
+# .chainguard/reviewers.yaml, and .chainguard/review-prompt.md. The kit's
+# other templates (conformance, consumers, fuzz, test, lint, the
+# environments, develop.yaml, deps.yaml) are starting points the port
+# reshapes, and this does not hold them. The vendored copies themselves
+# (verus/count, verus/make) are kit/sync.sh --check's.
 #
 # For each of those templates the port has (one it lacks is skipped and
 # named), the header is the file's leading `#` comment lines up to its
@@ -16,6 +22,11 @@
 # comparison ignores white space and the `#` that starts each line, so a
 # filled placeholder may rewrap its paragraph. Comment lines the port
 # adds after its `# kit:` line are its own.
+#
+# .chainguard/review-prompt.md is Markdown, with no `#` header: the port's
+# prompt must hold, anywhere and ignoring white space, the template's
+# vendored-kit rule, its `- The vendored kit` list item, which says how
+# verus/count, verus/make and KIT may change. It carries no kit line.
 #
 # VERUS_FLOOR (from the environment, as proved-port.mk passes it; a path
 # under PORT_ROOT, default verus/FLOOR) is the port's ratchet file, which
@@ -51,6 +62,15 @@ trap 'rm -rf "$tmp"' EXIT
 # `# kit:` line; fails when the leading lines have none.
 header() {
   awk '!/^#/ { exit } { print } /^# kit:/ { found = 1; exit } END { exit !found }' "$1"
+}
+
+# kit_rule FILE: FILE's vendored-kit rule, the list item that starts
+# `- The vendored kit`, up to the next item, heading or blank line.
+kit_rule() {
+  awk '
+    on && (/^- / || /^#/ || /^[ \t]*$/) { exit }
+    /^- The vendored kit/ { on = 1 }
+    on { print }' "$1"
 }
 
 # version LINE: the VERSION of a `# kit: proved-port VERSION` line, with
@@ -169,7 +189,12 @@ find "$templates" -type f | LC_ALL=C sort > "$tmp/list"
 [ -s "$tmp/list" ] || { echo "headers: $templates holds no templates; re-run kit/sync.sh" >&2; exit 1; }
 drift=
 while IFS= read -r t; do
+  # src: the vendored template; rel: the kit template it copies, without
+  # the `.tmpl` kit/sync.sh adds so that no vendored path ends in the
+  # name of a file the port's code owners protect (reviewers.yaml).
+  src=verus/make/templates/${t#"$templates"/}
   rel=${t#"$templates"/}
+  rel=${rel%.tmpl}
   # path: the port's file the template rel holds.
   path=$rel
   [ "$rel" != verus/FLOOR ] || path=$floor
@@ -178,9 +203,38 @@ while IFS= read -r t; do
     echo "skip $path: the port has none"
     continue
   fi
-  header "$t" > "$tmp/t" || { echo "skip $path: the kit's template has no # kit: line"; continue; }
+  if [ "$rel" = .chainguard/review-prompt.md ]; then
+    # The rule, between placeholders that stand for the rest of the
+    # port's prompt, so match finds it anywhere in the file.
+    {
+      echo '{The port text before it}'
+      kit_rule "$t"
+      echo '{The port text after it}'
+    } > "$tmp/t.body"
+    # With no rule between them, the two placeholders match any prompt:
+    # fail rather than pass every port's.
+    if [ "$(wc -l < "$tmp/t.body")" -le 2 ]; then
+      echo "headers: $src has no \`- The vendored kit\` item; re-run kit/sync.sh" >&2
+      drift=1
+      continue
+    fi
+    if ! missing=$(match "$tmp/t.body" "$f"); then
+      echo "headers: $path: the vendored-kit rule drifted from the kit's (the \`- The vendored kit\` item of $src); it lacks: $missing" >&2
+      drift=1
+      continue
+    fi
+    echo "ok $path"
+    continue
+  fi
+  # A template with no kit line would hold nothing, so it fails rather
+  # than pass every port's copy.
+  if ! header "$t" > "$tmp/t"; then
+    echo "headers: $src has no \`# kit: proved-port\` line, so it holds nothing; re-run kit/sync.sh" >&2
+    drift=1
+    continue
+  fi
   if ! header "$f" > "$tmp/p"; then
-    echo "headers: $path: its leading comment has no \`# kit: proved-port VERSION\` line (the kit's: verus/make/templates/$rel)" >&2
+    echo "headers: $path: its leading comment has no \`# kit: proved-port VERSION\` line (the kit's: $src)" >&2
     drift=1
     continue
   fi
@@ -193,7 +247,7 @@ while IFS= read -r t; do
   sed '$d' "$tmp/t" > "$tmp/t.body"
   sed '$d' "$tmp/p" > "$tmp/p.body"
   if ! missing=$(match "$tmp/t.body" "$tmp/p.body"); then
-    echo "headers: $path: the header drifted from the kit's (verus/make/templates/$rel); it lacks: $missing" >&2
+    echo "headers: $path: the header drifted from the kit's ($src); it lacks: $missing" >&2
     drift=1
     continue
   fi

@@ -57,15 +57,20 @@ not get wrong.
   must fail on any drift (a file added, deleted or edited, an executable
   bit, a symlink target, a recorded commit that does not resolve);
   `kani.sh` must fail when a call fails, when the fail pattern appears,
-  or when the selection leaves nothing to run; `headers.sh` must fail
-  when a port's header drifts from its template. A change that lets any
-  of these pass when it should fail is Blocking.
-- Templates and their consumers. The rule text in a template header
-  (FLOOR, RLIMIT, REACH, MINTS, the `.chainguard/` files with a
-  `# kit: proved-port` line) is a contract the counter enforces and
-  `make verus-headers` holds each port's copy to, at the commit the
-  port's `verus/count/KIT` names. A change to a template, a counter rule
-  or a make target must keep `kit/count/README.md`,
+  or when the selection leaves nothing to run (a selection with no
+  harnesses included, unless `KANI_NONE=yes` declares it, and under that
+  declaration whenever it finds a harness); `headers.sh` must fail
+  when a port's copy of a Verus file drifts from its template. A change
+  that lets any of these pass when it should fail is Blocking.
+- Templates and their consumers. The rule text in the Verus files'
+  templates (those `kit/make/VERUS-FILES` names: FLOOR, RLIMIT, REACH,
+  MINTS, count.toml, verus.yaml, miri.yaml, reviewers.yaml, and the
+  vendored-kit rule of review-prompt.md) is a contract the counter
+  enforces and `make verus-headers` holds each port's copy to, at the
+  commit the port's `verus/count/KIT` names. The other templates are
+  starting points the ports reshape, and nothing holds them. A change
+  to a template, a counter rule or a make target must keep
+  `kit/count/README.md`,
   `kit/templates/README.md`, the template headers, the skill and its
   `references/` saying the same thing; a statement one of them still
   makes that the change made false is Blocking. The body must say how

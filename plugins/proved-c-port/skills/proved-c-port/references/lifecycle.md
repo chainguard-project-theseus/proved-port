@@ -29,6 +29,27 @@ sidecar with its rendered `CODEOWNERS`. The required check is not a
 file: add the repository to chainguard-dev/infra's github-iac ruleset
 (as chainguard-dev/infra#5389 does).
 
+Only the kit's Verus files stay held to the kit afterwards
+(`make verus-headers`; `kit/make/VERUS-FILES` names them): the headers
+of `verus/FLOOR`, `RLIMIT`, `REACH`, `MINTS`, `verus/count.toml`,
+`.chainguard/ci/verus.yaml`, `miri.yaml` and `reviewers.yaml`, and the
+vendored-kit rule of `review-prompt.md`. The other check files
+(conformance, consumers, fuzz, test, lint, the environments,
+`develop.yaml`, `deps.yaml`) are starting points; reshape them to the
+port's checks.
+
+Start with every Verus check name, so the check selection only grows:
+Chainguard Checks refuses a change that deselects one of its own checks
+(chainz #59 hit it), so a check dropped later cannot land. From the
+first commit the port has `verus` and `verus-main`, `kani` and
+`kani-main` when it will discharge seams with Kani, and `msrv` in
+`.chainguard/ci/test.yaml` (`kit/templates/README.md`, "The required
+Verus check set"). Each passes before the first proof: `make verus`
+passes at FLOOR 0.0 with the 0.0 badge, and `make kani` passes with no
+harnesses only when the Makefile declares `KANI_NONE = yes`; without
+the declaration a run with nothing to check fails, and with it a run
+that finds a harness fails, so the first harness deletes the line.
+
 Exit: the principles are in the repo, and the CI aggregate check
 (`Chainguard Checks (presubmit)` or equivalent) is the only required
 check.
@@ -113,8 +134,11 @@ or an open bug.
 1. Bring the Verus toolchain into CI as a pinned package first (pcre3
    landed its first theorem before the CI gate existed and paid for it
    in post-merge rlimit breaks).
-2. Bootstrap the counter with the first proof. A port at FLOOR 0.0 with
-   no counter cannot land a proof through a gate that refuses
+2. Bootstrap the counter with the first proof, unless the port already
+   has it from its setup (a port set up with `kit/sync.sh` and the
+   templates has the counter and FLOOR 0.0 in its first commit, and
+   `make verus` passes there). A
+   port at FLOOR 0.0 with no counter cannot land a proof through a gate that refuses
    unmeasured `verus!` code, and changing the gate to let one through
    reads as a CI bypass. So the first proof PR does it all at once: it
    adds `verus/count.toml` and runs the kit counter

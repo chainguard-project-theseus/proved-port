@@ -26,10 +26,19 @@
 # target (`cfg(target_arch)`, pointer width, page size) runs the proofs
 # on both, as challoc does: uncomment verus-amd64 below. A port whose
 # proofs outgrow the timeout moves up a class (pcre3: xlarge-arm64) and
-# says why here. A port with no Kani-discharged seam drops Kani: delete
-# kani and kani-main, `kani~{KANI_RELEASE}` from the packages here and in
-# .chainguard/ci/env/dev.yaml, and Kani from the toolchain entry of
-# .chainguard/deps.yaml.
+# says why here.
+#
+# Every check here is in the port from its first commit: Checks refuses
+# a change that deselects a check its run selects, so the set only grows
+# (kit/templates/README.md, "The required Verus check set"). verus and
+# verus-main pass at FLOOR 0.0 before the first proof. `make kani` fails
+# when it finds no harness to run, so until the first harness the
+# port's Makefile sets `KANI_NONE = yes`, under which it passes with
+# none and fails with any; the first harness deletes that line. A port
+# that will never discharge a seam with Kani leaves Kani out from its
+# first commit: no kani or kani-main, no `kani~{KANI_RELEASE}` in the
+# packages here or in .chainguard/ci/env/dev.yaml, and no Kani in the
+# toolchain entry of .chainguard/deps.yaml.
 #
 # verus is pinned to the release the workspace's vstd pin names
 # (Cargo.toml; bump both together, and .chainguard/ci/env/dev.yaml's),

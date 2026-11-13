@@ -23,6 +23,17 @@ commit and its version to KIT's tag (any version while KIT's tag is
 `none`). `AGENTS.md` and `CONTRIBUTING.md` point at those
 headers rather than restating them.
 
+`make verus-headers` holds only the kit's Verus files, which
+`kit/make/VERUS-FILES` names: the headers of `verus/FLOOR`, `RLIMIT`,
+`REACH`, `MINTS` and `verus/count.toml`, of `.chainguard/ci/verus.yaml`,
+`.chainguard/ci/miri.yaml` and `.chainguard/reviewers.yaml`, and the
+vendored-kit rule (the `- The vendored kit` item) of
+`.chainguard/review-prompt.md`, which carries no kit line. The vendored
+copies themselves (`verus/count/`, `verus/make/`) are
+`kit/sync.sh --check`'s. Every other template here is a starting point,
+not held: the port reshapes it to its own checks, and its copy needs no
+kit line ("Repository configuration" below).
+
 The placeholders are `{PORT}` and its kin throughout. A port started
 from rust-port-template, whose files say `__PROJECT__`, writes
 `{PORT}`'s value there too: the kit's spelling is the one these
@@ -119,6 +130,62 @@ merged) with #202 (`98588c1f`).
 | `.chainguard/review-prompt.md` | the sections the four prompts share, plus the runtime-costs-of-proof check that cites AGENTS.md; the port writes its own checks. Evidence reads the presubmit results, as chainz's does; the vendored-counter rule is pcre3's (`KIT` moves with the copy) | all four; Evidence from chainz, the counter rule from pcre3, the check from proved-c-port's "Prove the producer, not its output" (#13) |
 | `.github/codeowners.yaml` | the codeowners-gate sidecar: one gated `*` entry, the maintainers and `bot:{PORT}` | pcre3, challoc, chainz |
 | `.github/CODEOWNERS` | the sidecar's rendering, without the `bot:` owner | pcre3, challoc, chainz |
+
+Of these, the Verus files (`.chainguard/ci/verus.yaml`,
+`.chainguard/ci/miri.yaml`, `.chainguard/reviewers.yaml` and the
+vendored-kit rule of `.chainguard/review-prompt.md`) are held to the kit
+by `make verus-headers`. The rest (conformance, consumers, fuzz, test,
+lint, the environments, `develop.yaml`, `deps.yaml`, the codeowners
+files) are starting points: the port copies them, then reshapes them to
+its own checks, and nothing holds them to the kit afterwards (expat-rs
+and rust-port-template each keep a shape of their own for several,
+wolfi-dev/expat-rs#221 and wolfi-dev/rust-port-template#13). Their kit
+lines say which kit release a copy started from; a port may keep or
+drop them.
+
+### The required Verus check set
+
+A port has every Verus check name from its first commit, so its check
+selection only grows. Chainguard Checks refuses a run whose change
+deselects one of its own checks (a check key deleted or renamed, the
+way chainz#59 hit it), so a port that starts without a check and drops
+it later cannot land that change; one that adds a check later is fine,
+but has no gate there until it does. From the first commit:
+
+| file | check | trigger |
+|---|---|---|
+| `.chainguard/ci/verus.yaml` | `verus` (`make verus` against the pull request's base) | presubmit |
+| `.chainguard/ci/verus.yaml` | `verus-main` (`make verus` against `HEAD^`) | postsubmit |
+| `.chainguard/ci/verus.yaml` | `kani` (`make kani`), for a port that will discharge seams with Kani | presubmit |
+| `.chainguard/ci/verus.yaml` | `kani-main` (`make kani`), likewise | postsubmit |
+| `.chainguard/ci/test.yaml` | `msrv` (`cargo build --release` on the `rust-version` toolchain) | presubmit, postsubmit |
+
+Each passes on a port with no proofs yet:
+
+- `verus` and `verus-main` pass at FLOOR 0.0 with the 0.0 badge, on a
+  port with no `verus!` code, with the pull request's base or `HEAD^`
+  as the base and also when that base predates `verus/`. On such a
+  port `cargo verus focus` (Verus 0.2026.10.18) warns that no crate
+  opted into verification, exits 0 and writes empty statistics, which
+  the counter reads as no verified function; the counter's
+  `a_port_with_no_proofs_passes_at_floor_zero` test holds both that and
+  statistics with no module times.
+- `kani` and `kani-main` fail when the selection has no harnesses,
+  since cargo kani passes a crate with none and so would check nothing.
+  A port with no harnesses yet declares it in its Makefile, before the
+  include:
+
+  ```make
+  KANI_NONE = yes
+  include verus/make/proved-port.mk
+  ```
+
+  `make kani` then lists the harnesses, passes when there are none, and
+  fails when there are any, so the pull request that adds the first
+  harness deletes the line. `kani.sh`'s header says the same.
+
+A port that will never use Kani (expat-rs) leaves `kani` and
+`kani-main` out from its first commit, as verus.yaml's header says.
 
 Where the ports differ, a template takes the shape most of them share,
 and its comments say what a port may change: a second architecture for
