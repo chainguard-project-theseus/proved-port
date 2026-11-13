@@ -13,22 +13,23 @@ This repository holds:
 - **`kit/`**, a starter kit of the tooling the method relies on
   (coverage counter and FLOOR ratchet, seam and theorem skeletons,
   differential and fuzz harnesses, bench scripts), extracted piece by
-  piece as `kit/PLAN.md` lays out; the ports it came from consume it.
-  `kit/templates/` holds the document skeletons a new port copies.
+  piece as `kit/PLAN.md` lays out; the ports it came from consume it
+  ("How a port consumes the kit", below). `kit/templates/` holds the
+  document skeletons a new port copies.
 
-The method is distilled from two ports in this organization:
+The method is distilled from two ports:
 
-- [wolfi-dev/pcre3](https://github.com/wolfi-dev/pcre3), a PCRE2 10.49
-  replacement with a proved JIT on aarch64 and x86-64.
-- [wolfi-dev/challoc](https://github.com/wolfi-dev/challoc), a
-  `malloc` replacement.
+- [chainguard-project-theseus/challoc](https://github.com/chainguard-project-theseus/challoc),
+  a `malloc` replacement.
+- pcre3, a PCRE2 10.49 replacement with a proved JIT on aarch64 and
+  x86-64 (`wolfi-dev/pcre3`, not yet public).
 
 ## Install
 
 Add the marketplace and install the plugin in Claude Code:
 
 ```
-/plugin marketplace add wolfi-dev/proved-port
+/plugin marketplace add chainguard-project-theseus/proved-port
 /plugin install proved-c-port@proved-port
 ```
 
@@ -45,7 +46,36 @@ building a differential harness against the C original, or measuring a
 port against it.
 
 To make it available to everyone working in a repository, add the
-marketplace and plugin to that repository's `.claude/settings.json`.
+marketplace and plugin to that repository's `.claude/settings.json`,
+naming this repository, `chainguard-project-theseus/proved-port`, as the
+marketplace's GitHub source.
+
+## How a port consumes the kit
+
+A port vendors the kit rather than depending on it, since a port's CI
+cannot reach this repository:
+
+- **Vendoring.** `kit/sync.sh PORT_ROOT`, run from a clone of this
+  repository at the commit to take (a release tag where there is one),
+  copies `kit/count` (the coverage counter) into the port's
+  `verus/count/` and `kit/make` (the make targets and `kani.sh`) into
+  its `verus/make/`. It records the commit in `verus/count/KIT`, with
+  its tag, or `tag none` for a copy taken between releases.
+  `kit/sync.sh --check PORT_ROOT` fails unless both copies match that
+  commit byte for byte. Whoever changes a copy runs it, since the
+  port's CI cannot.
+- **Templates.** A new port copies `kit/templates/`: the Verus ledgers
+  (`verus/FLOOR`, `RLIMIT`, `REACH`, `MINTS`, `count.toml`), the check
+  files, the reviewer configuration and the document skeletons, with
+  the placeholders filled. Each of the kit's Verus files
+  (`kit/make/VERUS-FILES`) but `.chainguard/review-prompt.md` keeps the
+  kit's header and its `# kit: proved-port vX.Y.Z (<sha>)` line; the
+  other templates are starting points that carry no kit line.
+  `make verus-headers` holds the kit's Verus files to the templates of
+  the commit KIT records ([kit/templates/README.md](kit/templates/README.md)).
+- **Changes.** A port never edits its vendored copies. A change to the
+  counter or the make targets lands here first; the port then re-syncs
+  to a commit that has it, and moves its kit lines to that commit.
 
 ## What "proved" means here
 
