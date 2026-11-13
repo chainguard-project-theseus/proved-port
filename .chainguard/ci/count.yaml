@@ -1,6 +1,6 @@
 # The kit counter's own CI (kit/count): its tests, clippy -D warnings
 # over every target, rustfmt, and the test of kit/sync.sh, which
-# vendors it into a port. The ports' verus checks drop their
+# vendors it (and kit/make) into a port. The ports' verus checks drop their
 # `counter tests` step when they switch to the kit counter
 # (kit/PLAN.md, step 2), so these are the counter's only tests. All
 # block. Toolchain: the Wolfi rust stream pcre3's test.yaml uses (it

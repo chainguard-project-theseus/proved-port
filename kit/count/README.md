@@ -368,6 +368,12 @@ kit/sync.sh --check PORT_ROOT  # fail unless the copy matches its recorded commi
   it as Bootstrapping, step 1, says.
 - Moving to a newer kit is a port PR that re-runs the sync. Never edit
   the copy: a fix the port needs lands in `kit/count` first.
+- The same sync copies `kit/make` to `verus/make/`, which `KIT` and
+  `--check` cover too: `proved-port.mk`, which the port's Makefile
+  includes for `make verus` (the build and run above) and `make kani`;
+  their scripts; and the templates `make verus-headers` holds the
+  port's headers to. `kit/make/proved-port.mk`'s header names each
+  target and variable.
 
 ## Release
 
