@@ -127,7 +127,7 @@ pub(crate) fn exported(
                         scan(f, inner, mac, out, errs);
                     }
                 }
-                Item::Macro(m) if m.mac.path.is_ident("verus") => {
+                Item::Macro(m) if crate::verus_path(&m.mac.path) => {
                     match verus_syn::parse2::<verus_syn::File>(m.mac.tokens.clone()) {
                         Ok(v) => scan(f, &v.items, mac, out, errs),
                         Err(e) => errs.push(format!("{}: verus! block: {e}", f.display())),
@@ -489,14 +489,15 @@ mod tests {
         assert!(other.is_empty(), "{other:?}");
     }
 
-    // A block inside an inline `mod` or a `verus!` block is found too.
+    // A block inside an inline `mod` or a `verus!` block (by any path
+    // that names Verus's) is found too.
     // Negative: a file that cannot be read, or that names `exports!` and
     // does not parse, is an error, not a set of roots that drops out.
     #[test]
     fn exported_finds_nested_blocks_and_fails_closed() {
         let dir = std::env::temp_dir().join(format!("reach-n-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
-        let nested = "mod inner {\n    width::exports! { fn in_mod [a, b, c] (); }\n}\nverus! {\n    width::exports! { fn in_verus [d, e, f] (); }\n}\n";
+        let nested = "mod inner {\n    width::exports! { fn in_mod [a, b, c] (); }\n}\nverus! {\n    width::exports! { fn in_verus [d, e, f] (); }\n}\n::vstd::prelude::verus! {\n    width::exports! { fn in_path [g, h, i] (); }\n}\n";
         let _ = fs::write(dir.join("n.rs"), nested);
         let _ = fs::write(
             dir.join("bad.rs"),
@@ -511,6 +512,7 @@ mod tests {
         let want: BTreeSet<(PathBuf, String)> = [
             (PathBuf::from("n.rs"), "in_mod".to_string()),
             (PathBuf::from("n.rs"), "in_verus".to_string()),
+            (PathBuf::from("n.rs"), "in_path".to_string()),
         ]
         .into();
         assert_eq!(got, want);

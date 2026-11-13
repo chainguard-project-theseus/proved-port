@@ -49,6 +49,14 @@
 //! does not define counts as one function outside `verus!`, named
 //! `NAME!`, so no function leaves the tally for being written by a macro;
 //! one the crate defines that does not expand fails the run.
+//! `compile_error!`, which writes nothing that ships ([`STD_NO_FN`]),
+//! counts nothing where it is provably the standard library's
+//! ([`Counter::std_writes_nothing`]). `verus!` is Verus's bare or as
+//! `::vstd::prelude::verus!` / `::verus_builtin_macros::verus!`, written
+//! by the crate or by a macro it expands; a block of another path, or of
+//! one of these whose rule does not hold, that writes a function fails
+//! the run. Each form has a rule true by rustc's own semantics ([`Took`]),
+//! read from the crate's bindings rather than by resolving names.
 //!
 //! Usage: `verus-count [--config FILE] [--list] [--floor FILE [--base-rev
 //! REV | --no-base]] [--rlimit STATS] ROOT`, with ROOT the repository root (default
@@ -259,6 +267,28 @@ struct Counter {
     /// Every module of the crate, by path from its root, so that a `use`
     /// path whose first segment is one of them reads as this crate's.
     modules: std::collections::BTreeSet<Vec<String>>,
+    /// The crates a `#[macro_use] extern crate` at the crate root loads
+    /// macros from ([`macro_use_crates`]): their names are in scope in
+    /// every module, ahead of the standard library's prelude.
+    macro_use: Vec<String>,
+    /// Every binding the crate's sources write, but those only tests
+    /// build ([`Binding`]): what the rules read ([`Took`]).
+    bindings: Vec<Binding>,
+    /// Every binding a macro expansion writes, read once the crate is
+    /// walked, against what the walk took.
+    emitted: Vec<Binding>,
+    /// The crate's edition (its Cargo.toml's, or the workspace's it
+    /// inherits; 2015 when it gives none, as cargo reads it).
+    edition: u32,
+    /// Each name among `vstd`, `verus_builtin_macros`, `core`, `std` and `alloc`
+    /// that a dependency of the crate takes for another package (`vstd =
+    /// { package = "other" }`), with why.
+    renamed_deps: Vec<(String, String)>,
+    /// Each `verus!` block holding a function, and each `compile_error!`
+    /// counted as nothing, that the walk took on its rule: the form, the
+    /// place, the module and the name the rule reads. An expansion that
+    /// writes a binding breaking it fails the run once the crate is walked.
+    took: Vec<(Took, String, Vec<String>, String)>,
 }
 
 /// One path a `use` names: its segments as written (the imported item
@@ -375,6 +405,12 @@ impl Counter {
             dry: None,
             unresolved: Vec::new(),
             modules: std::collections::BTreeSet::new(),
+            macro_use: Vec::new(),
+            bindings: Vec::new(),
+            emitted: Vec::new(),
+            edition: 2015,
+            renamed_deps: Vec::new(),
+            took: Vec::new(),
             expansion: None,
             depth: 0,
         }
@@ -590,6 +626,95 @@ impl ModFiles {
 /// verified.
 const UNREAD_DECLARATION: &str = "verus_count_unread_declaration";
 
+/// The edition of the crate in `dir` (its Cargo.toml's `[package]
+/// edition`, or, with `edition.workspace = true`, `[workspace.package]
+/// edition` of `root`'s Cargo.toml; 2015 when none is given, as cargo
+/// reads it; the lowest of that and any target's own, `[lib] edition`
+/// and the like), and each of `vstd`, `verus_builtin_macros`, `core`, `std` and `alloc`
+/// that a dependency table (`[dependencies]`, `[dev-dependencies]`,
+/// `[build-dependencies]`, or a `[target.*]` one) takes for another
+/// package (`vstd = { package = "other" }`, directly or through a
+/// `{ workspace = true }` entry of `[workspace.dependencies]`), or
+/// inherits from an entry the root does not give, with why. A key with
+/// no `package` is the package of its name, as cargo requires. A
+/// manifest that does not parse gives 2015, where no `::` path is taken.
+fn crate_manifest(root: &Path, dir: &Path) -> (u32, Vec<(String, String)>) {
+    let read = |p: &Path| -> toml::Table {
+        fs::read_to_string(p.join("Cargo.toml"))
+            .ok()
+            .and_then(|t| toml::from_str(&t).ok())
+            .unwrap_or_default()
+    };
+    let manifest = read(dir);
+    let workspace = read(root);
+    let workspace = workspace.get("workspace");
+    let inherits =
+        |v: &toml::Value| v.get("workspace").and_then(toml::Value::as_bool) == Some(true);
+    let package = match manifest.get("package").and_then(|p| p.get("edition")) {
+        Some(toml::Value::String(e)) => e.parse().unwrap_or(2015),
+        Some(t @ toml::Value::Table(_)) if inherits(t) => workspace
+            .and_then(|w| w.get("package")?.get("edition")?.as_str()?.parse().ok())
+            .unwrap_or(2015),
+        _ => 2015,
+    };
+    // A target may set its own edition (`[lib] edition = "2015"`): the
+    // lowest of the package's and every target's is the crate's.
+    let targets = manifest.get("lib").into_iter().chain(
+        ["bin", "example", "test", "bench"]
+            .iter()
+            .filter_map(|k| manifest.get(*k)?.as_array())
+            .flatten(),
+    );
+    let edition = targets
+        .filter_map(|t| t.get("edition"))
+        .map(|e| e.as_str().and_then(|e| e.parse().ok()).unwrap_or(2015))
+        .fold(package, u32::min);
+    let mut tables: Vec<&toml::Value> = ["dependencies", "dev-dependencies", "build-dependencies"]
+        .iter()
+        .filter_map(|k| manifest.get(*k))
+        .collect();
+    if let Some(toml::Value::Table(targets)) = manifest.get("target") {
+        for t in targets.values() {
+            for k in ["dependencies", "dev-dependencies", "build-dependencies"] {
+                tables.extend(t.get(k));
+            }
+        }
+    }
+    let mut renamed = Vec::new();
+    for table in tables.into_iter().filter_map(toml::Value::as_table) {
+        for (key, dep) in table {
+            let name = key.replace('-', "_");
+            if !["vstd", "verus_builtin_macros", "core", "std", "alloc"].contains(&name.as_str()) {
+                continue;
+            }
+            // `{ workspace = true }` takes the workspace's entry of the key,
+            // its `package` too; one the root does not give is unknown.
+            let dep = match inherits(dep) {
+                true => match workspace.and_then(|w| w.get("dependencies")?.get(key)) {
+                    Some(d) => d,
+                    None => {
+                        renamed.push((
+                            name.clone(),
+                            format!("Cargo.toml's dependency `{key}` inherits a `[workspace.dependencies]` entry the workspace root does not give"),
+                        ));
+                        continue;
+                    }
+                },
+                false => dep,
+            };
+            if let Some(p) = dep.get("package").and_then(toml::Value::as_str)
+                && p.replace('-', "_") != name
+            {
+                renamed.push((
+                    name.clone(),
+                    format!("Cargo.toml's dependency `{key}` is the package `{p}`"),
+                ));
+            }
+        }
+    }
+    (edition, renamed)
+}
+
 /// The root files of the crate in `dir`, canonical, as its Cargo.toml
 /// declares its targets: the `[lib]` `path`, else `src/lib.rs` unless
 /// `autolib = false`; each `path` of a `[[bin]]`, `[[example]]`, `[[test]]`
@@ -752,7 +877,7 @@ fn declared_module_files(
         let mut inner = guards.to_vec();
         inner.extend(cfg_predicates(attrs));
         if let Item::Macro(m) = item {
-            if m.mac.path.is_ident("verus") {
+            if verus_path(&m.mac.path) {
                 // The walk reports a body it cannot parse.
                 if let Ok(f) = parse2::<verus_syn::File>(m.mac.tokens.clone()) {
                     declared_module_files(file, (dir, base), &f.items, &inner, atoms, out, errors);
@@ -1591,6 +1716,14 @@ fn never_holds(p: &str) -> bool {
         .all(|verus| cfg_eval(p, verus, &none).is_ok_and(|c| !c.t))
 }
 
+/// Whether `attrs` apply `#[name]` in some build: directly, or through a
+/// `cfg_attr` whatever its predicate ([`applied_attrs`]).
+fn has_applied(attrs: &[Attribute], name: &str) -> bool {
+    applied_attrs(attrs)
+        .into_iter()
+        .any(|(_, toks)| matches!(toks.first(), Some(TokenTree::Ident(i)) if i == name))
+}
+
 /// Whether `attrs` make a function external to Verus (`external_body`,
 /// `verifier::external`, `verus_verify(external..)`), read through
 /// [`applied_attrs`]. It fails closed: an attribute a `cfg_attr` applies
@@ -2203,6 +2336,56 @@ impl Counter {
 
     fn items(&mut self, items: &[Item], in_verus: bool) {
         for item in items {
+            // The bindings an expansion writes, which the rules read once
+            // the crate is walked ([`Counter::walk_crate`]).
+            if let Some(at) = self.expansion {
+                let base = Binding {
+                    module: self.module.clone(),
+                    shipped: true,
+                    verus: true,
+                    ..Binding::default()
+                };
+                let mut found = Vec::new();
+                match item {
+                    Item::Macro(m) if m.mac.path.is_ident("macro_rules") => {
+                        if let Some(i) = &m.ident {
+                            found.push(Binding {
+                                name: i.to_string(),
+                                ..base.clone()
+                            });
+                        }
+                    }
+                    Item::ExternCrate(e) if has_applied(&e.attrs, "macro_use") => {
+                        found.push(Binding {
+                            name: e.ident.to_string(),
+                            macro_use: true,
+                            ..base.clone()
+                        });
+                    }
+                    _ => {}
+                }
+                let file = self.file.clone();
+                let bind_at = BindAt {
+                    file: &file,
+                    module: self.module.clone(),
+                    guards: Vec::new(),
+                };
+                bindings_in(
+                    std::slice::from_ref(item),
+                    &bind_at,
+                    &self.atoms,
+                    &mut found,
+                );
+                // Every build may compile what an expansion writes: its
+                // `cfg`s are not read.
+                for b in &mut found {
+                    b.expanded = true;
+                    b.shipped = true;
+                    b.verus = true;
+                    b.place = format!("{}:{at}", file.display());
+                }
+                self.emitted.extend(found);
+            }
             // An expansion is walked for its functions alone
             // ([`Counter::record`]).
             if self.expansion.is_some()
@@ -2399,12 +2582,46 @@ impl Counter {
                 {
                     self.fn_ptr_rule(&m.mac.tokens);
                 }
-                Item::Macro(m) if m.mac.path.is_ident("verus") => {
+                Item::Macro(m) if verus_path(&m.mac.path) => {
                     // A `verus!` block under a `cfg` is built where it says
                     // (`#[cfg(feature = "verus")] verus! { .. }`).
                     let built = self.built(&m.attrs);
                     if built == Built::Test {
                         continue;
+                    }
+                    // One that may write a function is Verus's only by the
+                    // rule of its form ([`Took`]): bare, or a path with a
+                    // leading `::`; any other path fails the run.
+                    if holds_fn(m.mac.tokens.clone()) {
+                        let place = format!(
+                            "{}:{}",
+                            self.file.display(),
+                            m.mac.bang_token.span.start().line
+                        );
+                        let segs = segments(&m.mac.path);
+                        let colon = m.mac.path.leading_colon.is_some();
+                        let written =
+                            format!("{}{}!", if colon { "::" } else { "" }, segs.join("::"));
+                        let (kind, name) = match (colon, segs.len()) {
+                            (false, 1) => (Took::VerusBare, "verus".to_owned()),
+                            (true, _) => (Took::VerusPath, segs[0].clone()),
+                            (false, _) => {
+                                eprintln!(
+                                    "{place}: {written} may not be Verus's `verus!`: without a leading `::` its first segment may name an item of this crate; write `::{}!` or a bare `verus!`",
+                                    segs.join("::")
+                                );
+                                self.errors += 1;
+                                continue;
+                            }
+                        };
+                        if let Some(s) = self.doubt(&self.bindings, kind, &name, &self.module) {
+                            eprintln!(
+                                "{place}: {written} may not be Verus's `verus!`: {s}; remove or rename it"
+                            );
+                            self.errors += 1;
+                            continue;
+                        }
+                        self.took.push((kind, place, self.module.clone(), name));
                     }
                     let was = self.enter(built, &m.attrs);
                     match parse2::<verus_syn::File>(m.mac.tokens.clone()) {
@@ -2526,11 +2743,26 @@ impl Counter {
         // scope carries on into the module that declares them.
         let mut carried = std::collections::BTreeSet::new();
         self.modules.clear();
-        for (f, p) in files.iter().zip(&parsed) {
+        self.macro_use.clear();
+        (self.edition, self.renamed_deps) = crate_manifest(root, k);
+        let mut bindings = Vec::new();
+        for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
             let Some(Ok(file)) = p else { continue };
             let module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
             self.modules.insert(module.clone());
             macro_use_mods(&file.items, &module, (&mut carried, &mut self.modules));
+            if class(i) == Built::Test {
+                continue;
+            }
+            // rustc takes a `#[macro_use] extern crate` only at a crate
+            // root; every file's is read.
+            macro_use_crates(&file.items, &self.atoms, &mut self.macro_use);
+            let at = BindAt {
+                file: f.strip_prefix(root).unwrap_or(f),
+                module,
+                guards: classes[i].1.clone(),
+            };
+            bindings_in(&file.items, &at, &self.atoms, &mut bindings);
         }
         for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
             let Some(Ok(file)) = p else { continue };
@@ -2580,6 +2812,34 @@ impl Counter {
             }
         }
         self.follow_reexports();
+        // Beside the bindings the files write ([`bindings_in`]): the
+        // `macro_rules!` and the `#[macro_use]` crates.
+        for (name, defs) in &self.macros {
+            for d in defs.iter().filter(|d| d.built != Built::Test) {
+                bindings.push(Binding {
+                    module: d.module.clone(),
+                    name: name.clone(),
+                    place: format!("`macro_rules! {name}` at {}:{}", d.file.display(), d.line),
+                    shipped: matches!(d.built, Built::Shipped | Built::Unsure),
+                    verus: true,
+                    ..Binding::default()
+                });
+            }
+        }
+        for k in &self.macro_use {
+            bindings.push(Binding {
+                module: vec![self.krate.replace('-', "_")],
+                name: k.clone(),
+                macro_use: true,
+                place: "the crate root".to_owned(),
+                shipped: true,
+                verus: true,
+                ..Binding::default()
+            });
+        }
+        self.bindings = bindings;
+        self.emitted.clear();
+        self.took.clear();
         for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
             // A module built only for Verus is read for its rlimits alone,
             // and one Verus's build might not compile counts no function
@@ -2621,6 +2881,22 @@ impl Counter {
             if defined {
                 eprintln!(
                     "{here}: {name}! resolves to none of this crate's definitions of `{name}`, though rustc may reach one; invoke it by its definition's path, or in that definition's textual scope"
+                );
+                self.errors += 1;
+            }
+        }
+        // The walk took each `verus!` and `compile_error!` on the sources'
+        // bindings; a binding an expansion writes that breaks its rule
+        // fails the run, wherever the expansion is.
+        let took = std::mem::take(&mut self.took);
+        for (kind, at, module, name) in &took {
+            if let Some(s) = self.doubt(&self.emitted, *kind, name, module) {
+                eprintln!(
+                    "{at}: {s} may make this macro another than the {} one the counter took it for; write that binding outside the macro, or remove it",
+                    match kind {
+                        Took::StdPath | Took::StdBare => "std",
+                        Took::VerusPath | Took::VerusBare => "Verus",
+                    }
                 );
                 self.errors += 1;
             }
@@ -2681,18 +2957,21 @@ impl Counter {
     /// through `crate`, `self` or `super`, or a module beside this one or
     /// at the root.
     fn module_of(&self, segs: &[String]) -> Option<Vec<String>> {
+        self.module_from(&self.module, segs)
+    }
+
+    /// The module of the crate that `segs`, written in module `here`,
+    /// names ([`Counter::module_of`]).
+    fn module_from(&self, here: &[String], segs: &[String]) -> Option<Vec<String>> {
         let up = segs.iter().take_while(|s| *s == "super").count();
         let candidates = match segs.first().map(String::as_str) {
-            Some("crate") => vec![[self.module[..1].to_vec(), segs[1..].to_vec()].concat()],
-            Some("self") => vec![[self.module.clone(), segs[1..].to_vec()].concat()],
+            Some("crate") => vec![[here.get(..1)?, &segs[1..]].concat()],
+            Some("self") => vec![[here, &segs[1..]].concat()],
             Some("super") => {
-                let base = self.module.len().checked_sub(up)?;
-                vec![[self.module[..base].to_vec(), segs[up..].to_vec()].concat()]
+                let base = here.len().checked_sub(up)?;
+                vec![[&here[..base], &segs[up..]].concat()]
             }
-            _ => vec![
-                [self.module.clone(), segs.to_vec()].concat(),
-                [self.module[..1].to_vec(), segs.to_vec()].concat(),
-            ],
+            _ => vec![[here, segs].concat(), [here.get(..1)?, segs].concat()],
         };
         candidates.into_iter().find(|m| self.modules.contains(m))
     }
@@ -2800,11 +3079,16 @@ impl Counter {
                     }
                 }
                 if self.shipped {
-                    let mut seen = std::collections::BTreeSet::new();
-                    place(bang, &mut seen);
-                    token_lines(mac.tokens.clone(), &mut seen);
-                    place(mac.delimiter.span().close(), &mut seen);
-                    self.tally(Class::Outside, format!("{name}!"), at, seen.len());
+                    if let Some((kind, read)) = self.std_writes_nothing(&name, &mac.path) {
+                        self.took
+                            .push((kind, here.clone(), self.module.clone(), read));
+                    } else {
+                        let mut seen = std::collections::BTreeSet::new();
+                        place(bang, &mut seen);
+                        token_lines(mac.tokens.clone(), &mut seen);
+                        place(mac.delimiter.span().close(), &mut seen);
+                        self.tally(Class::Outside, format!("{name}!"), at, seen.len());
+                    }
                 }
             }
             _ if self.depth >= MAX_DEPTH => {
@@ -3072,6 +3356,77 @@ impl Counter {
             .collect()
     }
 
+    /// Why the rule of `kind` ([`Took`]) does not hold for `name` (the
+    /// leading `::` segment, or the bare macro's name) invoked in module
+    /// `at`, given `bindings`, if it does not: for a leading `::`, an
+    /// edition before 2018 (where `::name` is this crate's root) or a
+    /// dependency renamed to `name` ([`Counter::renamed_deps`]); then the
+    /// first binding that breaks it ([`breaks`]), read in Verus's build for
+    /// `verus!` and a shipped build for `compile_error!`.
+    fn doubt(&self, bindings: &[Binding], kind: Took, name: &str, at: &[String]) -> Option<String> {
+        if matches!(kind, Took::VerusPath | Took::StdPath) {
+            if self.edition < 2018 {
+                return Some(format!(
+                    "the crate's edition is {}, where `::{name}` names this crate's root module",
+                    self.edition
+                ));
+            }
+            if let Some((_, why)) = self.renamed_deps.iter().find(|(n, _)| n == name) {
+                return Some(why.clone());
+            }
+        }
+        // A bare `verus!` comes from Verus's crates (`vstd::prelude::*`,
+        // `#[macro_use] extern crate vstd;`): one renamed to another
+        // package may bring another `verus`.
+        if kind == Took::VerusBare
+            && let Some((_, why)) = self
+                .renamed_deps
+                .iter()
+                .find(|(n, _)| matches!(n.as_str(), "vstd" | "verus_builtin_macros"))
+        {
+            return Some(why.clone());
+        }
+        // A bare `compile_error!` comes from the prelude of the crate the
+        // name `std` (or `core`) loads: one renamed to another package
+        // (cargo passes it as `--extern std=..`) brings its own.
+        if kind == Took::StdBare
+            && let Some((_, why)) = self
+                .renamed_deps
+                .iter()
+                .find(|(n, _)| matches!(n.as_str(), "std" | "core" | "alloc"))
+        {
+            return Some(why.clone());
+        }
+        bindings
+            .iter()
+            .filter(|b| match kind {
+                Took::StdPath | Took::StdBare => b.shipped,
+                Took::VerusPath | Took::VerusBare => b.verus,
+            })
+            .find(|b| breaks(b, kind, name, at))
+            .map(Binding::describe)
+    }
+
+    /// How item macro `name`, invoked by `path` and defined nowhere in the
+    /// crate, is one of the standard library's that write nothing that
+    /// ships ([`STD_NO_FN`]), if it is: by `::core::` or `::std::`, or by
+    /// its bare name, where the rule of that form holds ([`Took`]).
+    /// Anything else counts as a function.
+    fn std_writes_nothing(&self, name: &str, path: &verus_syn::Path) -> Option<(Took, String)> {
+        let (_, paths) = STD_NO_FN.iter().find(|(n, _)| *n == name)?;
+        let segs = segments(path);
+        let (kind, read) = if segs.len() == 1 && path.leading_colon.is_none() {
+            (Took::StdBare, name.to_owned())
+        } else if path.leading_colon.is_some() && one_of(&segs, paths) {
+            (Took::StdPath, segs[0].clone())
+        } else {
+            return None;
+        };
+        self.doubt(&self.bindings, kind, &read, &self.module)
+            .is_none()
+            .then_some((kind, read))
+    }
+
     /// Whether `path`, a non-`*` `use` path in this module, names something
     /// of this crate: it starts at `crate`, `self` or `super`, or at a
     /// module of the crate, beside this one or at the root.
@@ -3105,6 +3460,9 @@ impl Counter {
         self.tallies = tallies;
         self.limits.truncate(limits);
         self.unresolved.truncate(unresolved);
+        // The bindings each candidate writes, and the blocks it took on
+        // their rules, are kept: any of them may be the one rustc
+        // expands, so each is checked once the crate is walked.
         self.errors = errors;
         self.verus_fns = verus_fns;
         self.macros = macros;
@@ -3216,16 +3574,327 @@ struct DefsAt<'a> {
     scope: Vec<String>,
 }
 
-/// Whether `attrs` has `#[name]`.
+/// Whether `attrs` has `#[name]` itself, not through a `cfg_attr`: the
+/// expander's markers (`#[macro_use] mod`, `#[macro_export]`), where one a
+/// `cfg_attr` applies only in some build would carry definitions into
+/// scope in the others ([`has_applied`] reads those, for the rules,
+/// where reading more fails closed).
 fn has_attr(attrs: &[Attribute], name: &str) -> bool {
     attrs.iter().any(|a| a.path().is_ident(name))
+}
+
+/// The paths of more than one segment that name Verus's `verus!`: its
+/// crate's, and `vstd::prelude`'s re-export of it.
+const VERUS_PATHS: [&[&str]; 2] = [
+    &["vstd", "prelude", "verus"],
+    &["verus_builtin_macros", "verus"],
+];
+
+/// The standard library's item macros that write nothing that ships,
+/// each with the paths of more than one segment that name it: only
+/// `compile_error!`, which stops the build, and is in the prelude. The
+/// rest of std's and core's macros are left out: `global_asm!` can write
+/// executable code (a symbol Rust calls through an `extern` block) that
+/// the counter cannot tell from a directive, `thread_local!` writes
+/// statics (read as such), `include!` writes whatever its file holds, and
+/// the others (`asm!`, `concat!`, `env!`, ...) are expressions, which
+/// rustc refuses in item position. An item macro not named here counts
+/// as a function.
+const STD_NO_FN: [(&str, &[&[&str]]); 1] = [(
+    "compile_error",
+    &[&["core", "compile_error"], &["std", "compile_error"]],
+)];
+
+/// The names whose items the rules read ([`Took`]): the items of these
+/// names are gathered as bindings.
+const SHADOW_NAMES: [&str; 6] = [
+    "vstd",
+    "verus_builtin_macros",
+    "verus",
+    "compile_error",
+    "core",
+    "std",
+];
+
+/// The forms of a macro the walk takes as Verus's or std's, each by a
+/// rule that holds by rustc's own semantics rather than by resolving
+/// names ([`Counter::doubt`]); the bindings a macro expansion writes are
+/// held to the same rule once the crate is walked.
+#[derive(Clone, Copy, PartialEq)]
+enum Took {
+    /// `::vstd::prelude::verus!` or `::verus_builtin_macros::verus!`: in
+    /// edition 2018 and later a leading `::` names an extern crate, so
+    /// only an `extern crate .. as` of the name or a dependency renamed to
+    /// it can make it another.
+    VerusPath,
+    /// A bare `verus!`: no binding of `vstd`, `verus_builtin_macros` or
+    /// `verus` but Verus's own, and no `#[macro_use] extern crate` but
+    /// Verus's or std's.
+    VerusBare,
+    /// `::core::compile_error!` or `::std::compile_error!`, by the rule
+    /// for a leading `::`.
+    StdPath,
+    /// A bare `compile_error!`: nothing in the crate binds the name (an
+    /// item, `macro_rules!`, `use` or `extern crate`), no `#[macro_use]
+    /// extern crate` but std's, and no `*` in its module.
+    StdBare,
+}
+
+/// A name the crate binds, in `module`, at `place`: an item or module of
+/// that name (`path` empty), a `use` or `extern crate` of `path` as
+/// `name`, a `*` of `path` (`glob`), or a `#[macro_use] extern crate
+/// name` (`macro_use`); `expanded` when a macro expansion writes it.
+/// `shipped` and `verus` say whether a shipped build and Verus's may
+/// compile it.
+#[derive(Clone, Debug, Default)]
+struct Binding {
+    module: Vec<String>,
+    path: Vec<String>,
+    glob: bool,
+    macro_use: bool,
+    name: String,
+    place: String,
+    expanded: bool,
+    shipped: bool,
+    verus: bool,
+    /// An `extern crate path as name;`.
+    extern_crate: bool,
+}
+
+impl Binding {
+    /// The binding, as a message names it.
+    fn describe(&self) -> String {
+        let what = if self.macro_use {
+            format!("`#[macro_use] extern crate {};`", self.name)
+        } else if self.glob {
+            format!("`use {}::*;`", self.path.join("::"))
+        } else if self.path.is_empty() {
+            format!("an item or module named `{}`", self.name)
+        } else if self.extern_crate {
+            format!("`extern crate {} as {};`", self.path.join("::"), self.name)
+        } else {
+            format!("`use {} as {};`", self.path.join("::"), self.name)
+        };
+        let by = if self.expanded {
+            ", which a macro expansion writes"
+        } else {
+            ""
+        };
+        format!("{what} ({}{by})", self.place)
+    }
+}
+
+/// Whether binding `b` breaks the rule of `kind` ([`Took`]) for `name`
+/// (the leading `::` segment, or the bare macro's name) invoked in module
+/// `at`. For a leading `::`: an `extern crate` that puts another crate in
+/// the extern prelude under `name`. For a bare `verus!`: a binding of
+/// `vstd`, `verus_builtin_macros` or `verus` but the crate itself or the
+/// macro's own path (`use vstd::prelude::verus;`), or a `#[macro_use]` of
+/// another crate. For a bare `compile_error!`: any binding of the name,
+/// a `#[macro_use]` of another crate, or a `*` in module `at`.
+fn breaks(b: &Binding, kind: Took, name: &str, at: &[String]) -> bool {
+    match kind {
+        Took::VerusPath | Took::StdPath => b.extern_crate && b.name == name && b.path != [name],
+        Took::VerusBare => {
+            if b.macro_use {
+                return !matches!(
+                    b.name.as_str(),
+                    "vstd" | "verus_builtin_macros" | "std" | "core" | "alloc"
+                );
+            }
+            !b.glob
+                && matches!(b.name.as_str(), "vstd" | "verus_builtin_macros" | "verus")
+                && b.path != [b.name.as_str()]
+                && !one_of(&b.path, &VERUS_PATHS)
+        }
+        Took::StdBare => {
+            if b.macro_use {
+                return !matches!(b.name.as_str(), "std" | "core" | "alloc");
+            }
+            match b.glob {
+                true => b.module == at,
+                false => b.name == name,
+            }
+        }
+    }
+}
+
+/// Where [`bindings_in`] reads: the file, the module, and the `cfg`s of
+/// the file and the items around.
+struct BindAt<'a> {
+    file: &'a Path,
+    module: Vec<String>,
+    guards: Vec<String>,
+}
+
+/// Adds to `out` the bindings among `items` (in inline modules and
+/// `verus!` blocks too) that the rules read ([`Took`]): every `use`,
+/// `extern crate` and `*`, and every item or module named one of
+/// [`SHADOW_NAMES`] (an enum's variants among them), each with whether a
+/// shipped build and Verus's may compile it, under its `cfg`s and those
+/// around it.
+fn bindings_in(items: &[Item], at: &BindAt, atoms: &Atoms, out: &mut Vec<Binding>) {
+    for item in items {
+        let attrs: &[Attribute] = match item {
+            Item::Use(u) => &u.attrs,
+            Item::ExternCrate(e) => &e.attrs,
+            Item::Mod(m) => &m.attrs,
+            Item::Macro(m) => &m.attrs,
+            Item::Fn(f) => &f.attrs,
+            Item::Struct(s) => &s.attrs,
+            Item::Enum(e) => &e.attrs,
+            Item::Union(u) => &u.attrs,
+            Item::Type(t) => &t.attrs,
+            Item::Const(c) => &c.attrs,
+            Item::Static(s) => &s.attrs,
+            Item::Trait(t) => &t.attrs,
+            Item::TraitAlias(t) => &t.attrs,
+            _ => &[],
+        };
+        let mut guards = at.guards.clone();
+        guards.extend(cfg_predicates(attrs));
+        let sees = |verus: bool| {
+            guards
+                .iter()
+                .all(|p| cfg_eval(p, verus, atoms).map_or(true, |c| c.t))
+        };
+        let (shipped, verus) = (sees(false), sees(true));
+        let base = Binding {
+            module: at.module.clone(),
+            shipped,
+            verus,
+            ..Binding::default()
+        };
+        let line = |s: proc_macro2::Span| format!("{}:{}", at.file.display(), s.start().line);
+        match item {
+            Item::Use(u) => {
+                let mut targets = Vec::new();
+                use_paths(&u.tree, &mut Vec::new(), &mut targets);
+                out.extend(targets.into_iter().map(|(path, glob, name)| Binding {
+                    path,
+                    glob,
+                    name,
+                    place: line(u.use_token.span),
+                    ..base.clone()
+                }));
+            }
+            Item::ExternCrate(e) => out.push(Binding {
+                path: vec![e.ident.to_string()],
+                name: e.rename.as_ref().map_or(&e.ident, |(_, r)| r).to_string(),
+                place: line(e.extern_token.span),
+                extern_crate: true,
+                ..base.clone()
+            }),
+            _ => {}
+        }
+        let mut idents: Vec<&proc_macro2::Ident> = Vec::new();
+        match item {
+            Item::Mod(m) => idents.push(&m.ident),
+            Item::Fn(f) => idents.push(&f.sig.ident),
+            Item::Struct(s) => idents.push(&s.ident),
+            Item::Enum(e) => {
+                idents.push(&e.ident);
+                idents.extend(e.variants.iter().map(|v| &v.ident));
+            }
+            Item::Union(u) => idents.push(&u.ident),
+            Item::Type(t) => idents.push(&t.ident),
+            Item::Const(c) => idents.push(&c.ident),
+            Item::Static(s) => idents.push(&s.ident),
+            Item::Trait(t) => idents.push(&t.ident),
+            Item::TraitAlias(t) => idents.push(&t.ident),
+            _ => {}
+        }
+        for i in idents
+            .into_iter()
+            .filter(|i| SHADOW_NAMES.iter().any(|n| *i == n))
+        {
+            out.push(Binding {
+                name: i.to_string(),
+                place: line(i.span()),
+                ..base.clone()
+            });
+        }
+        let inner = |module: Vec<String>| BindAt {
+            file: at.file,
+            module,
+            guards: guards.clone(),
+        };
+        match item {
+            Item::Mod(m) => {
+                if let Some((_, items)) = &m.content {
+                    let module = [&at.module[..], &[m.ident.to_string()]].concat();
+                    bindings_in(items, &inner(module), atoms, out);
+                }
+            }
+            Item::Macro(m) if verus_path(&m.mac.path) => {
+                if let Ok(f) = parse2::<verus_syn::File>(m.mac.tokens.clone()) {
+                    bindings_in(&f.items, &inner(at.module.clone()), atoms, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether `tokens` hold a `fn` at any depth: a `verus!` block that may
+/// write a function.
+fn holds_fn(tokens: TokenStream) -> bool {
+    tokens.into_iter().any(|t| match t {
+        TokenTree::Ident(i) => i == "fn",
+        TokenTree::Group(g) => holds_fn(g.stream()),
+        _ => false,
+    })
+}
+
+/// The segments of `path`, as written.
+fn segments(path: &verus_syn::Path) -> Vec<String> {
+    path.segments.iter().map(|s| s.ident.to_string()).collect()
+}
+
+/// Whether `segs` is one of `paths`.
+fn one_of(segs: &[String], paths: &[&[&str]]) -> bool {
+    paths
+        .iter()
+        .any(|p| segs.iter().map(String::as_str).eq(p.iter().copied()))
+}
+
+/// Adds to `out` the crate of each `#[macro_use] extern crate` among
+/// `items` (`macro_use` applied directly or through a `cfg_attr`), in
+/// `verus!` blocks too, but those built only for tests.
+fn macro_use_crates(items: &[Item], atoms: &Atoms, out: &mut Vec<String>) {
+    for item in items {
+        match item {
+            Item::ExternCrate(e)
+                if has_applied(&e.attrs, "macro_use")
+                    && attrs_built(&e.attrs, atoms) != Ok(Built::Test) =>
+            {
+                out.push(e.ident.to_string());
+            }
+            Item::Macro(m) if verus_path(&m.mac.path) => {
+                if let Ok(f) = parse2::<verus_syn::File>(m.mac.tokens.clone()) {
+                    macro_use_crates(&f.items, atoms, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether an item macro invoked by `path` is Verus's `verus!` by the
+/// path's shape: a bare `verus`, or one of [`VERUS_PATHS`] with or
+/// without a leading `::`. The walk takes a block that writes a function
+/// only bare or with a leading `::`, by the rule of that form ([`Took`]),
+/// and fails the run on any other.
+pub(crate) fn verus_path(path: &verus_syn::Path) -> bool {
+    let segs = segments(path);
+    (path.leading_colon.is_none() && segs == ["verus"]) || one_of(&segs, &VERUS_PATHS)
 }
 
 /// The modules among `items` (in `module`, and in its inline modules)
 /// that `#[macro_use] mod name;` declares in a file of their own, into
 /// `carried`: the textual scope of a definition at such a file's top
 /// carries on into the module that declares it. Every module `items`
-/// declares goes into `all`.
+/// declares goes into `all`, one declared inside a `verus!` block too.
 fn macro_use_mods(
     items: &[Item],
     module: &[String],
@@ -3235,6 +3904,13 @@ fn macro_use_mods(
     ),
 ) {
     for item in items {
+        if let Item::Macro(v) = item
+            && verus_path(&v.mac.path)
+            && let Ok(f) = parse2::<verus_syn::File>(v.mac.tokens.clone())
+        {
+            macro_use_mods(&f.items, module, (carried, all));
+            continue;
+        }
         let Item::Mod(m) = item else { continue };
         let mut inner = module.to_vec();
         inner.push(m.ident.to_string());
@@ -3350,7 +4026,7 @@ fn macro_defs(
                         .map(|(p, glob, named)| (p, glob, named, b)),
                 );
             }
-            Item::Macro(m) if m.mac.path.is_ident("verus") => {
+            Item::Macro(m) if verus_path(&m.mac.path) => {
                 if let Ok(f) = parse2::<verus_syn::File>(m.mac.tokens.clone()) {
                     let inner_at = DefsAt {
                         file: at.file,
@@ -4443,6 +5119,15 @@ fn base_limits(
     ));
     let _ = fs::remove_dir_all(&scratch);
     let read = (|| -> Result<(), String> {
+        // The revision's root Cargo.toml, whose `[workspace]` tables a
+        // crate inherits its edition and dependencies from
+        // ([`crate_manifest`]), when the revision has one.
+        let shown = git(&["show", &format!("{rev}:Cargo.toml")])?;
+        if shown.status.success() {
+            fs::create_dir_all(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
+            fs::write(scratch.join("Cargo.toml"), &shown.stdout)
+                .map_err(|e| format!("{}: {e}", scratch.display()))?;
+        }
         for (krate, src) in &srcs {
             let kdir = src.parent().unwrap_or(Path::new("")).to_path_buf();
             let listed = git(&[
@@ -6490,6 +7175,107 @@ mod tests {
         c
     }
 
+    /// The rules ([`breaks`]) over every kind of binding, for each form: a
+    /// leading `::` is broken only by an `extern crate .. as` of its name;
+    /// a bare `verus!` by a binding of a Verus name but the crate itself or
+    /// the macro's own path, or a `#[macro_use]` of another crate; a bare
+    /// `compile_error!` by any binding of the name, a `#[macro_use]` of
+    /// another crate, or a `*` in its module (`k`), not in another (`k::s`).
+    #[test]
+    fn a_binding_breaks_only_its_forms_rule() {
+        use Took::{StdBare as S, StdPath as SP, VerusBare as B, VerusPath as P};
+        // Each row: the binding (`item NAME`, `use NAME <- PATH`, `extern
+        // NAME <- CRATE`, `glob [s] PATH` (in `k::s` with `s`), `macro_use
+        // CRATE`), the form, and whether it breaks the form's rule for
+        // `vstd` (P), `verus` (B), `core` (SP) or `compile_error` (S).
+        #[rustfmt::skip]
+        let rows = [
+            ("item vstd", P, false),
+            ("use vstd <- other", P, false),
+            ("glob other", P, false),
+            ("macro_use other", P, false),
+            ("extern vstd <- other", P, true),
+            ("extern vstd <- vstd", P, false),
+            ("extern core <- asmkit", SP, true),
+            ("extern std <- asmkit", SP, false),
+            ("item verus", B, true),
+            ("item vstd", B, true),
+            ("use vstd <- vstd", B, false),
+            ("use verus <- vstd::prelude::verus", B, false),
+            ("use verus <- other::verus", B, true),
+            ("extern vstd <- other", B, true),
+            ("glob other", B, false),
+            ("macro_use other", B, true),
+            ("macro_use vstd", B, false),
+            ("macro_use std", B, false),
+            ("item compile_error", S, true),
+            ("use compile_error <- core::compile_error", S, true),
+            ("use compile_error <- asmkit::compile_error", S, true),
+            ("use core <- asmkit", S, false),
+            ("glob core::ptr", S, true),
+            ("glob vstd::prelude", S, true),
+            ("glob s other", S, false),
+            ("macro_use std", S, false),
+            ("macro_use vstd", S, true),
+        ];
+        for (row, kind, want) in rows {
+            let name = match kind {
+                P => "vstd",
+                B => "verus",
+                SP => "core",
+                S => "compile_error",
+            };
+            let (what, rest) = row.split_once(' ').expect("a row");
+            let split = |p: &str| -> Vec<String> {
+                p.trim_start_matches("::")
+                    .split("::")
+                    .map(str::to_owned)
+                    .collect()
+            };
+            let k = vec!["k".to_owned()];
+            let b = match what {
+                "item" => Binding {
+                    name: rest.into(),
+                    module: k.clone(),
+                    ..Binding::default()
+                },
+                "use" | "extern" => {
+                    let (name, path) = rest.split_once(" <- ").expect("a use");
+                    Binding {
+                        name: name.into(),
+                        path: split(path),
+                        extern_crate: what == "extern",
+                        module: k.clone(),
+                        ..Binding::default()
+                    }
+                }
+                "glob" => {
+                    let (module, path) = match rest.strip_prefix("s ") {
+                        Some(p) => (vec!["k".to_owned(), "s".to_owned()], p),
+                        None => (k.clone(), rest),
+                    };
+                    Binding {
+                        path: split(path),
+                        glob: true,
+                        module,
+                        ..Binding::default()
+                    }
+                }
+                _ => Binding {
+                    name: rest.into(),
+                    macro_use: true,
+                    module: k.clone(),
+                    ..Binding::default()
+                },
+            };
+            let got = breaks(&b, kind, name, &k);
+            assert!(
+                got == want,
+                "{row} (for {name}): got = {got}, wanted = {want}"
+            );
+        }
+    }
+
     /// pcre3-capi's `width::fn_ptr!`, as width.rs defines it.
     const FN_PTR_RULE: &str = r#"
 macro_rules! fn_ptr {
@@ -7875,6 +8661,97 @@ verus! {
             let (ok, report) = fig.lowering(&head, &base);
             assert_eq!(ok, want, "{text:?}: got = {ok}, wanted = {want}\n{report}");
         }
+    }
+
+    /// A crate's edition is its own, the workspace's it inherits, or 2015
+    /// (none given, a workspace that gives none, a manifest that does not
+    /// parse); a dependency key among `vstd`, `verus_builtin_macros`,
+    /// `core` and `std` (hyphens read as `_`) whose `package` is another
+    /// is renamed, in any dependency table, a `[target.*]` one too.
+    #[test]
+    fn the_manifest_gives_the_edition_and_renamed_dependencies() {
+        let root =
+            std::env::temp_dir().join(format!("verus-count-manifest-{}", std::process::id()));
+        let k = root.join("crates/k");
+        fs::create_dir_all(&k).unwrap();
+        for (ws, krate, edition, renamed) in [
+            ("", "[package]\nedition = \"2024\"\n", 2024, vec![]),
+            ("", "[package]\nname = \"k\"\n", 2015, vec![]),
+            ("", "[package\n", 2015, vec![]),
+            (
+                "[workspace.package]\nedition = \"2021\"\n",
+                "[package]\nedition.workspace = true\n",
+                2021,
+                vec![],
+            ),
+            (
+                "[workspace]\n",
+                "[package]\nedition.workspace = true\n",
+                2015,
+                vec![],
+            ),
+            (
+                "",
+                "[package]\nedition = \"2024\"\n[dependencies]\nvstd = { package = \"other\" }\nfoo = { package = \"vstd\" }\n",
+                2024,
+                vec!["vstd"],
+            ),
+            (
+                "",
+                "[package]\nedition = \"2024\"\n[target.'cfg(unix)'.dev-dependencies]\nverus-builtin-macros = { package = \"x\" }\n",
+                2024,
+                vec!["verus_builtin_macros"],
+            ),
+            (
+                "",
+                "[package]\nedition = \"2024\"\n[dependencies]\nvstd = { package = \"vstd\" }\nverus-builtin-macros = { package = \"verus_builtin_macros\" }\n",
+                2024,
+                vec![],
+            ),
+            // Through `[workspace.dependencies]`: renamed there, the same
+            // package, or an entry the root does not give.
+            (
+                "[workspace.dependencies]\nvstd = { package = \"other\", path = \"x\" }\n",
+                "[package]\nedition = \"2024\"\n[dependencies]\nvstd = { workspace = true }\n",
+                2024,
+                vec!["vstd"],
+            ),
+            (
+                "[workspace.dependencies]\nvstd = { version = \"1\" }\n",
+                "[package]\nedition = \"2024\"\n[target.'cfg(unix)'.dependencies]\nvstd.workspace = true\n",
+                2024,
+                vec![],
+            ),
+            (
+                "[workspace]\n",
+                "[package]\nedition = \"2024\"\n[dependencies]\nvstd = { workspace = true }\n",
+                2024,
+                vec!["vstd"],
+            ),
+            // A target's own edition, the lowest one.
+            (
+                "",
+                "[package]\nedition = \"2024\"\n[lib]\nedition = \"2015\"\n",
+                2015,
+                vec![],
+            ),
+            (
+                "",
+                "[package]\nedition = \"2024\"\n[[bin]]\nname = \"b\"\nedition = \"2021\"\n",
+                2021,
+                vec![],
+            ),
+        ] {
+            fs::write(root.join("Cargo.toml"), ws).unwrap();
+            fs::write(k.join("Cargo.toml"), krate).unwrap();
+            let (got, deps) = crate_manifest(&root, &k);
+            let got_renamed: Vec<&str> = deps.iter().map(|(n, _)| n.as_str()).collect();
+            assert!(
+                got == edition && got_renamed == renamed,
+                "{krate:?}: got = {got}, {got_renamed:?}; wanted = {edition}, {renamed:?}"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// The crates come from the configuration: `dir`'s subdirectories with a

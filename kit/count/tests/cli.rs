@@ -1401,7 +1401,7 @@ fn crate_of(name: &str, files: &[(&str, &str)]) -> PathBuf {
     fs::create_dir_all(dir.join("verus")).expect("mkdir");
     fs::write(
         dir.join("crates/a/Cargo.toml"),
-        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
     )
     .expect("write");
     fs::write(dir.join("verus/count.toml"), PLAIN).expect("write");
@@ -1459,6 +1459,493 @@ fn a_function_a_macro_writes_under_an_unsure_cfg_is_trusted() {
     assert!(
         got == 0 && rows == want,
         "rows: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// challoc's `verified_export_pair!` shape: a macro that writes its
+/// `extern "C"` pairs into `::vstd::prelude::verus! { .. }`.
+const EXPORT_PAIR: &str = "use vstd::prelude::*;
+macro_rules! verified_export_pair {
+    ($($name:ident / $je:ident($($arg:ident: $ty:ty),*) { $($body:tt)* })*) => {
+        ::vstd::prelude::verus! {
+        $(
+            #[unsafe(no_mangle)]
+            pub extern \"C\" fn $name($($arg: $ty),*) { $($body)* }
+            #[unsafe(no_mangle)]
+            pub extern \"C\" fn $je($($arg: $ty),*) { $($body)* }
+        )*
+        } // verus!
+    };
+}
+verified_export_pair! {
+    free / je_free(p: usize) { let _ = p; }
+    sdallocx / je_sdallocx(p: usize, n: usize) { let _ = (p, n); }
+}
+::vstd::prelude::verus! { pub fn b() {} }
+::verus_builtin_macros::verus! { pub fn c() {} }
+::verus_builtin_macros::verus! { pub fn d() {} }
+verus! { pub fn e() {} }
+other::verus! { pub fn f() {} }
+::verus! { pub fn g() {} }
+::vstd::prelude::verus! { macro_rules! inside { () => { pub fn h() {} }; } }
+inside!();
+vstd::prelude::verus! { pub mod inner; }
+";
+
+/// `verus!` is Verus's by any path that names it, written by the crate
+/// or by a macro it expands (challoc's `verified_export_pair!`), so the
+/// functions in it are verified, a `macro_rules!` in it defines its macro
+/// (`inside!`), and a module it declares is read; another crate's
+/// `other::verus!` and `::verus!` each count as one function outside. A
+/// `verus!` that writes a function exits 1 by any path without a leading
+/// `::`; with one, where a root `extern crate .. as` of the name (in the
+/// sources, or in either candidate of a macro's expansion), edition 2015
+/// or a renamed dependency may make it another; bare, where a binding of
+/// `vstd`, `verus_builtin_macros` or `verus` or another crate's
+/// `#[macro_use]` may. Every shape the review rounds named is a row; with
+/// a leading `::`, the crate's items, `use`s and `*`s change nothing, nor
+/// do test-only bindings, nor anything for a block that writes no
+/// function.
+#[test]
+fn a_path_qualified_verus_is_verus() {
+    let dir = crate_of(
+        "verus-path",
+        &[
+            ("lib.rs", EXPORT_PAIR),
+            ("inner.rs", "pub fn i() {}\nverus! { pub fn j() {} }\n"),
+        ],
+    );
+    let (got, out, err) = count(&dir, &["--list"]);
+    let rows: Vec<(String, String)> = list_rows(&out)
+        .into_iter()
+        .map(|(class, _, name, _)| (class, name))
+        .collect();
+    let want: Vec<(String, String)> = [
+        ("Outside", "i"),
+        ("Verified", "j"),
+        ("Verified", "free"),
+        ("Verified", "je_free"),
+        ("Verified", "sdallocx"),
+        ("Verified", "je_sdallocx"),
+        ("Verified", "b"),
+        ("Verified", "c"),
+        ("Verified", "d"),
+        ("Verified", "e"),
+        ("Outside", "verus!"),
+        ("Outside", "verus!"),
+        ("Outside", "h"),
+    ]
+    .iter()
+    .map(|(c, n)| ((*c).to_owned(), (*n).to_owned()))
+    .collect();
+    assert!(
+        got == 0 && rows == want,
+        "rows: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+    );
+    let lib = dir.join("crates/a/src/lib.rs");
+    fs::remove_file(dir.join("crates/a/src/inner.rs")).expect("remove");
+    const SHADOWED: &str = "may not be Verus's `verus!`";
+    const EMITTED: &str = "may make this macro another than the Verus one";
+    #[rustfmt::skip]
+    let cases = [
+        // A bare `verus!`: a crate `macro_rules! verus`, a `use` of another
+        // `verus`, a binding of `vstd`, a `#[macro_use]` of another crate
+        // (directly or through a `cfg_attr`).
+        ("macro_rules! verus { ($($t:tt)*) => { $($t)* }; }\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("use other::verus;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("use other as vstd;\nuse vstd::prelude::verus;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("use other as vstd;\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("#[macro_use]\nextern crate other;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("#[cfg_attr(unix, macro_use)]\nextern crate other;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("extern crate other as vstd;\nmod m { use vstd::prelude::verus; verus! { pub fn f() {} } }\n", SHADOWED),
+        // A path: another crate's `*`, a binding of `vstd` anywhere (a
+        // module, in a `verus!` block too; a `use` or `extern crate`, at
+        // the root or in another module; one a crate module's `*` carries),
+        // a crate `macro_rules! verus`, a renamed `core` globbed, `::vstd`
+        // beside any of them.
+        ("use other::*;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("mod m { pub use other as vstd; }\nuse m::*;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("mod m { pub use n::*; mod n { pub mod vstd {} } }\nuse m::*;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("mod vstd { pub mod prelude {} }\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("use other as vstd;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("mod m { extern crate other as vstd; vstd::prelude::verus! { pub fn f() {} } }\n", SHADOWED),
+        ("extern crate vstd;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("verus_builtin_macros::verus! { pub fn f() {} }\n", SHADOWED),
+        // A leading `::` names an extern crate: only an `extern crate .. as`
+        // of the name makes it another.
+        ("extern crate other as vstd;\n::vstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("extern crate other as verus_builtin_macros;\n::verus_builtin_macros::verus! { pub fn f() {} }\n", SHADOWED),
+        ("extern crate self as vstd;\n::vstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("extern crate other as vstd;\nmod m { ::vstd::prelude::verus! { pub fn f() {} } }\n", SHADOWED),
+        ("extern crate other as vstd;\nmod m { vstd::prelude::verus! { pub fn f() {} } }\n", SHADOWED),
+        ("mod m { use other as core; pub use core::*; }\nuse m::*;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("verus! { mod vstd { pub mod prelude {} } }\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("enum Op { vstd }\nuse Op::*;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        // A `::` glob names an extern crate, whatever module or type of the
+        // crate shares its name.
+        ("mod other {}\nuse ::other::*;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("enum other { A }\nuse ::other::*;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        // Verus's build decides: a binding only it compiles counts.
+        ("#[cfg(verus_keep_ghost)]\nuse other as vstd;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("#[cfg(verus_keep_ghost)]\nuse other::verus;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("#[cfg(verus_keep_ghost)]\nuse other::*;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        // What a macro expansion writes: a path without `::` as above, and
+        // an `extern crate .. as vstd;` beside a `::vstd` block, before or
+        // after it, in the same expansion or another, in either candidate
+        // of a definition under a `cfg` the counter cannot settle.
+        ("macro_rules! mk { () => { use other as vstd; vstd::prelude::verus! { pub fn f() {} } }; }\nmk!();\n", SHADOWED),
+        ("macro_rules! mk { () => { mod vstd { pub mod prelude { pub use other::verus; } } vstd::prelude::verus! { pub fn f() {} } }; }\nmk!();\n", SHADOWED),
+        ("macro_rules! mk { () => { mod m { use other as vstd; vstd::prelude::verus! { pub fn f() {} } } }; }\nmk!();\n", SHADOWED),
+        ("macro_rules! mk { () => { extern crate other as vstd; ::vstd::prelude::verus! { pub fn f() {} } }; }\nmk!();\n", EMITTED),
+        ("::vstd::prelude::verus! { pub fn f() {} }\nmacro_rules! mk { () => { extern crate other as vstd; }; }\nmk!();\n", EMITTED),
+        ("#[cfg(unix)]\nmacro_rules! mk { () => { extern crate other as vstd; ::vstd::prelude::verus! { pub fn f() {} } }; }\n#[cfg(not(unix))]\nmacro_rules! mk { () => { ::vstd::prelude::verus! { pub fn f() {} } }; }\nmk!();\n", EMITTED),
+        ("#[cfg(not(unix))]\nmacro_rules! mk { () => { ::vstd::prelude::verus! { pub fn f() {} } }; }\n#[cfg(unix)]\nmacro_rules! mk { () => { extern crate other as vstd; ::vstd::prelude::verus! { pub fn f() {} } }; }\nmk!();\n", EMITTED),
+        ("verus! { pub fn f() {} }\nmacro_rules! mk { () => { use other::verus; }; }\nmk!();\n", EMITTED),
+    ];
+    for (src, want) in cases {
+        fs::write(&lib, src).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 1 && err.contains(want),
+            "{src}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+        );
+    }
+    // A `verus!` that writes no function needs no precondition.
+    fs::write(&lib, "use other::*;\nvstd::prelude::verus! { struct S; }\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "no function: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    // With a leading `::`, the crate's items and `*`s cannot make the path
+    // another: rustc reads `::vstd` from the extern prelude alone.
+    for src in [
+        "extern crate vstd;\n::vstd::prelude::verus! { pub fn f() {} }\n",
+        "mod vstd { pub mod prelude {} }\n::vstd::prelude::verus! { pub fn f() {} }\n",
+        "macro_rules! verus { ($($t:tt)*) => { $($t)* }; }\n::vstd::prelude::verus! { pub fn f() {} }\n",
+        "use other::*;\nuse other as vstd;\n::vstd::prelude::verus! { pub fn f() {} }\n",
+        "mod other {}\nmod s { use other::*; ::vstd::prelude::verus! { pub fn f() {} } }\n",
+        "#[macro_use]\nextern crate other;\n::vstd::prelude::verus! { pub fn f() {} }\n",
+        "#[cfg_attr(unix, macro_use)]\nextern crate core;\n::vstd::prelude::verus! { pub fn f() {} }\n",
+        "#[macro_use]\nextern crate vstd;\nverus! { pub fn f() {} }\n",
+        "#[macro_use]\nextern crate std;\nverus! { pub fn f() {} }\n",
+        "use other::*;\nverus! { pub fn f() {} }\n",
+        "#[cfg(test)]\n#[macro_use]\nextern crate other;\nverus! { pub fn f() {} }\n",
+        "#[cfg(test)]\nmacro_rules! verus { ($($t:tt)*) => { $($t)* }; }\nverus! { pub fn f() {} }\n",
+        "#[cfg(test)]\nextern crate other as vstd;\n::vstd::prelude::verus! { pub fn f() {} }\n",
+    ] {
+        fs::write(&lib, src).expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<(String, String)> = list_rows(&out)
+            .into_iter()
+            .map(|(class, _, name, _)| (class, name))
+            .collect();
+        let want = vec![("Verified".to_owned(), "f".to_owned())];
+        assert!(
+            got == 0 && rows == want,
+            "{src}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+    }
+    // In edition 2015 a leading `::` is this crate's root, and a
+    // dependency of the name may be another package: each exits 1.
+    // A target's own 2015 edition, a renamed dependency inherited from the
+    // workspace, and (for a bare `verus!`, which comes from Verus's
+    // crates) any renamed `vstd`: each exits 1. An inherited dependency of
+    // the same package is Verus's.
+    let manifest = dir.join("crates/a/Cargo.toml");
+    let workspace = dir.join("Cargo.toml");
+    let path_form = "::vstd::prelude::verus! { pub fn f() {} }\n";
+    let package = "[package]\nname = \"a\"\nversion = \"0.0.0\"\n";
+    #[rustfmt::skip]
+    let cases = [
+        ("", package.to_string(), path_form, Some("the crate's edition is 2015")),
+        ("", format!("{package}edition = \"2015\"\n"), path_form, Some("the crate's edition is 2015")),
+        ("", format!("{package}edition = \"2024\"\n[lib]\nedition = \"2015\"\n"), path_form, Some("the crate's edition is 2015")),
+        ("", format!("{package}edition = \"2024\"\n[dependencies]\nvstd = {{ package = \"other\", path = \"x\" }}\n"), path_form, Some("Cargo.toml's dependency `vstd` is the package `other`")),
+        ("", format!("{package}edition = \"2024\"\n[target.'cfg(unix)'.dependencies]\nvstd = {{ package = \"other\", path = \"x\" }}\n"), path_form, Some("Cargo.toml's dependency `vstd` is the package `other`")),
+        ("[workspace.dependencies]\nvstd = { package = \"fakevstd\", path = \"fake\" }\n", format!("{package}edition = \"2024\"\n[dependencies]\nvstd = {{ workspace = true }}\n"), path_form, Some("Cargo.toml's dependency `vstd` is the package `fakevstd`")),
+        ("[workspace.dependencies]\nvstd = { version = \"1\" }\n", format!("{package}edition.workspace = true\n[dependencies]\nvstd.workspace = true\n"), path_form, Some("the crate's edition is 2015")),
+        ("[workspace.package]\nedition = \"2024\"\n[workspace.dependencies]\nvstd = { version = \"1\" }\n", format!("{package}edition.workspace = true\n[dependencies]\nvstd.workspace = true\n"), path_form, None),
+        ("", format!("{package}edition = \"2024\"\n[dependencies]\nvstd = {{ package = \"other\", path = \"x\" }}\n"), "use vstd::prelude::*;\nverus! { pub fn f() {} }\n", Some("Cargo.toml's dependency `vstd` is the package `other`")),
+    ];
+    for (ws, toml, src, want) in cases {
+        fs::write(&workspace, ws).expect("write");
+        fs::write(&manifest, &toml).expect("write");
+        fs::write(&lib, src).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        match want {
+            Some(want) => assert!(
+                got == 1 && err.contains(want),
+                "{ws}{toml}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+            ),
+            None => assert!(
+                got == 0,
+                "{ws}{toml}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+            ),
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The base revision's walk reads the edition a crate inherits from the
+/// workspace at that revision: with `--base-rev`, a `::vstd` block under
+/// an inherited 2024 edition reads the same on the base as on the head.
+#[test]
+fn the_base_walk_reads_the_workspace_manifest() {
+    let dir = crate_of(
+        "base-workspace",
+        &[(
+            "lib.rs",
+            "::vstd::prelude::verus! {\n#[verifier::rlimit(10)]\npub fn f() {}\n}\n",
+        )],
+    );
+    fs::write(
+        dir.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/a\"]\n[workspace.package]\nedition = \"2024\"\n",
+    )
+    .expect("write");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition.workspace = true\n",
+    )
+    .expect("write");
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}[rlimit]\npath = \"verus/RLIMIT\"\n"),
+    )
+    .expect("write");
+    fs::write(dir.join("verus/RLIMIT"), "max-share 65\n").expect("write");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "Cargo.toml", "crates", "verus"]);
+    git(&dir, &["commit", "-q", "-m", "base"]);
+    let stats = dir.join("stats.json");
+    fs::write(&stats, ratchet_stats(3_000_000).replace("a::v", "a::f")).expect("write");
+    let s = stats.to_string_lossy().into_owned();
+    let (got, out, err) = count(&dir, &["--rlimit", &s, "--base-rev", "HEAD"]);
+    assert!(
+        got == 0,
+        "base walk: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// challoc's crate root: `compile_error!`s under a `vstd::prelude::*`.
+const STD_MACROS_LIB: &str = "use vstd::prelude::*;
+mod tls;
+mod lglob;
+mod sync;
+mod asm;
+#[cfg(not(target_pointer_width = \"64\"))]
+compile_error!(\"challoc needs a 64-bit target\");
+core::compile_error!(\"never\");
+::std::compile_error!(\"never\");
+other::compile_error!(\"\");
+include!(\"gen.rs\");
+verus! { pub fn v() {} }
+";
+
+/// `compile_error!`, which writes nothing that ships, counts nothing as
+/// `::std::compile_error!` (unless an `extern crate .. as std` breaks the
+/// rule), or bare where no binding of the name, `#[macro_use]` of another
+/// crate, or `*` in its module is (so challoc's root, under `use
+/// vstd::prelude::*;`, counts its four, as `sys/tls.rs` beside `use
+/// core::ffi::*;` counts its one). `core::compile_error!` without `::`
+/// always counts; a breaking binding a macro expansion writes fails the
+/// run. `global_asm!` always counts (it may write code), as
+/// challoc's `sys/tls.rs` imports it, and by every path; so does
+/// `include!`, which writes what its file holds.
+#[test]
+fn std_item_macros_write_no_function() {
+    let dir = crate_of(
+        "std-macros",
+        &[
+            ("lib.rs", STD_MACROS_LIB),
+            (
+                "tls.rs",
+                "use core::arch::{asm, global_asm};\nuse core::ffi::*;\nglobal_asm!(\".globl y\");\n#[cfg(not(unix))]\ncompile_error!(\"unix only\");\n",
+            ),
+            (
+                "lglob.rs",
+                "mod q { pub struct X; }\nuse q::*;\ncompile_error!(\"\");\n",
+            ),
+            (
+                "sync.rs",
+                "#[cfg(loom)]\npub use loom::sync::*;\ncompile_error!(\"\");\n",
+            ),
+            (
+                "asm.rs",
+                "core::arch::global_asm!(\"\");\n::std::arch::global_asm!(\"\");\nuse core::arch::*;\nglobal_asm!(\"\");\n",
+            ),
+        ],
+    );
+    let (got, out, err) = count(&dir, &["--list"]);
+    let mut rows: Vec<(String, String, String)> = list_rows(&out)
+        .into_iter()
+        .map(|(class, place, name, _)| (class, place, name))
+        .collect();
+    rows.sort();
+    let row = |class: &str, place: &str, name: &str| (class.into(), place.into(), name.into());
+    let want: Vec<(String, String, String)> = vec![
+        row("Outside", "crates/a/src/asm.rs:1", "global_asm!"),
+        row("Outside", "crates/a/src/asm.rs:2", "global_asm!"),
+        row("Outside", "crates/a/src/asm.rs:4", "global_asm!"),
+        row("Outside", "crates/a/src/lglob.rs:3", "compile_error!"),
+        row("Outside", "crates/a/src/lib.rs:10", "compile_error!"),
+        row("Outside", "crates/a/src/lib.rs:11", "include!"),
+        row("Outside", "crates/a/src/lib.rs:7", "compile_error!"),
+        row("Outside", "crates/a/src/lib.rs:8", "compile_error!"),
+        row("Outside", "crates/a/src/sync.rs:3", "compile_error!"),
+        row("Outside", "crates/a/src/tls.rs:3", "global_asm!"),
+        row("Outside", "crates/a/src/tls.rs:5", "compile_error!"),
+        row("Verified", "crates/a/src/lib.rs:12", "v"),
+    ];
+    assert!(
+        got == 0 && rows == want,
+        "rows: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // A crate whose root holds one binding, then a bare `compile_error!`
+    // there, and in module `t` one by `core::` (always a row: without a
+    // leading `::` its first segment may be the crate's), one by
+    // `::std::` and one by `::core::`. The bare one counts where any
+    // binding of the name, a `#[macro_use]` of another crate, or a `*` in
+    // its module is; a leading `::` path counts where an `extern crate ..
+    // as` takes its name.
+    let rows_at = |lib: Option<&str>, t: &[u8]| {
+        let mut v: Vec<(String, String, String)> = lib
+            .into_iter()
+            .map(|l| {
+                row(
+                    "Outside",
+                    &format!("crates/a/src/lib.rs:{l}"),
+                    "compile_error!",
+                )
+            })
+            .collect();
+        v.extend(t.iter().map(|l| {
+            row(
+                "Outside",
+                &format!("crates/a/src/t.rs:{l}"),
+                "compile_error!",
+            )
+        }));
+        v
+    };
+    #[rustfmt::skip]
+    let cases = [
+        ("use asmkit::compile_error;", rows_at(Some("3"), &[1])),
+        ("use core::compile_error;", rows_at(Some("3"), &[1])),
+        ("mod core {}", rows_at(None, &[1])),
+        ("use asmkit as core;", rows_at(None, &[1])),
+        ("extern crate asmkit as core;", rows_at(None, &[1, 3])),
+        ("extern crate asmkit as std;", rows_at(None, &[1, 2])),
+        ("use asmkit as std;\nuse std::*;", rows_at(Some("4"), &[1])),
+        ("#[macro_use]\nextern crate asmkit;", rows_at(Some("4"), &[1])),
+        ("#[cfg_attr(unix, macro_use)]\nextern crate asmkit;", rows_at(Some("4"), &[1])),
+        ("::vstd::prelude::verus! { #[macro_use] extern crate asmkit; }", rows_at(Some("3"), &[1])),
+        ("use asmkit::*;", rows_at(Some("3"), &[1])),
+        ("use core::ptr::*;", rows_at(Some("3"), &[1])),
+        ("mod q { pub use asmkit::*; }\nuse q::*;", rows_at(Some("4"), &[1])),
+        ("mod asmkit {}\nmod s { use asmkit::*; compile_error!(\"\"); }", {
+            let mut v = rows_at(None, &[1]);
+            v.push(row("Outside", "crates/a/src/lib.rs:2", "compile_error!"));
+            v.sort();
+            v
+        }),
+        ("#[macro_use]\nextern crate std;", rows_at(None, &[1])),
+        ("#[cfg_attr(unix, macro_use)]\nextern crate core;", rows_at(None, &[1])),
+        ("extern crate std;", rows_at(None, &[1])),
+        ("#[cfg(test)]\nuse asmkit::*;", rows_at(None, &[1])),
+    ];
+    for (binding, want) in cases {
+        let lib = format!("{binding}\nmod t;\ncompile_error!(\"x\");\n");
+        let t = "core::compile_error!(\"\");\n::std::compile_error!(\"\");\n::core::compile_error!(\"\");\n";
+        let dir = crate_of("std-macro-use", &[("lib.rs", &lib), ("t.rs", t)]);
+        let (got, out, err) = count(&dir, &["--list"]);
+        let mut rows: Vec<(String, String, String)> = list_rows(&out)
+            .into_iter()
+            .map(|(class, place, name, _)| (class, place, name))
+            .collect();
+        rows.sort();
+        assert!(
+            got == 0 && rows == want,
+            "{lib}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A dependency renamed to `std`, `core` or `alloc` (directly or
+    // inherited from the workspace) may bring its own prelude: a bare
+    // `compile_error!` and the `::std` / `::core` forms count.
+    for (ws, deps) in [
+        ("", "std = { package = \"other\", path = \"x\" }"),
+        ("", "core = { package = \"other\", path = \"x\" }"),
+        ("", "alloc = { package = \"other\", path = \"x\" }"),
+        (
+            "[workspace.dependencies]\nstd = { package = \"other\", path = \"x\" }\n",
+            "std = { workspace = true }",
+        ),
+    ] {
+        let dir = crate_of(
+            "std-renamed",
+            &[(
+                "lib.rs",
+                "compile_error!(\"x\");\n::std::compile_error!(\"y\");\n",
+            )],
+        );
+        fs::write(dir.join("Cargo.toml"), ws).expect("write");
+        fs::write(
+            dir.join("crates/a/Cargo.toml"),
+            format!("[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[dependencies]\n{deps}\n"),
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<String> = list_rows(&out).into_iter().map(|r| r.1).collect();
+        let want = if deps.starts_with("std") {
+            vec!["crates/a/src/lib.rs:1", "crates/a/src/lib.rs:2"]
+        } else {
+            vec!["crates/a/src/lib.rs:1"]
+        };
+        assert!(
+            got == 0 && rows == want,
+            "{deps}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A shadowing binding a macro expansion writes, once a `compile_error!`
+    // was counted as nothing: the run fails.
+    let lib = "compile_error!(\"x\");\nmacro_rules! mk { () => { use asmkit::compile_error; }; }\nmk!();\n";
+    let dir = crate_of("std-emitted", &[("lib.rs", lib)]);
+    let (got, out, err) = count(&dir, &[]);
+    let want = "may make this macro another than the std one";
+    assert!(
+        got == 1 && err.contains(want),
+        "emitted: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // A `#[macro_use] mod` only a `cfg_attr` marks, under a predicate only
+    // test builds meet, carries nothing into the shipped walk: the `n!` the
+    // shipped build takes from `other` stays a row, and the crate's own
+    // `n` beside it fails the run rather than stand in for it.
+    let lib =
+        "#[macro_use]\nextern crate other;\n#[cfg_attr(test, macro_use)]\nmod helpers;\nn!();\n";
+    let dir = crate_of(
+        "macro-use-mod",
+        &[
+            ("lib.rs", lib),
+            ("helpers.rs", "macro_rules! n { () => {} }\n"),
+        ],
+    );
+    let (got, out, err) = count(&dir, &["--list"]);
+    let rows: Vec<(String, String)> = list_rows(&out)
+        .into_iter()
+        .map(|(class, _, name, _)| (class, name))
+        .collect();
+    let want = "n! resolves to none of this crate's definitions of `n`";
+    let row_n = vec![("Outside".to_owned(), "n!".to_owned())];
+    assert!(
+        got == 1 && rows == row_n && err.contains(want),
+        "macro_use mod: got = exit {got}, {rows:?}, {err:?}; wanted = exit 1, {row_n:?}, {want:?}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
