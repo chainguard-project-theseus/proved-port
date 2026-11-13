@@ -1,6 +1,7 @@
 # Lint of the kit's shell scripts: shellcheck (the pinned upstream
 # release kit/shellcheck.sh fetches) over every kit/*.sh file git
-# tracks. Blocks.
+# tracks, and kit/internal-test.sh: no file a port vendors or copies
+# names anything internal. Both block.
 version: 1
 
 environment:
@@ -24,3 +25,13 @@ checks:
         - release-assets.githubusercontent.com
         - objects.githubusercontent.com
     cmd: [sh, kit/shellcheck.sh]
+
+  internal:
+    description: >-
+      kit/internal-test.sh: no file a port vendors (kit/count, kit/make)
+      or copies (kit/templates), nor the verus/count/KIT header
+      kit/sync.sh writes, names an internal repository, tool, URL or
+      person, and each marker it lists is found when planted.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [sh, kit/internal-test.sh]

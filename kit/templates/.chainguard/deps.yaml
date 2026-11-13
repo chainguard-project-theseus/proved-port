@@ -11,14 +11,13 @@
 # pull request by its opener, adds `chainguard: 107423345` to the
 # `github.app` list of the group its member subring trusts (challoc's
 # `bots`); without it those pull requests run at ring 0, hermetic checks
-# only, and cannot reach crates.io (mono ai-cicd/sandbox/docs/identities.md,
-# "Trust policy"). A port with no trust section needs nothing.
+# only, and cannot reach crates.io. A port with no trust section needs
+# nothing.
 #
 # Pins no entry moves:
 # - verus/count and verus/make: the port's copies of the proved-port kit
-#   counter and make targets. They change only by re-running
-#   wolfi-dev/proved-port's kit/sync.sh, which the agent's guest cannot
-#   reach (that repository is internal).
+#   counter and make targets. They change only by re-running the kit's
+#   kit/sync.sh, which the agent's guest cannot reach.
 # - {Any other pin that moves only with a person's run or decision (a
 #   bench baseline, a workload), and why; or delete this item.}
 #

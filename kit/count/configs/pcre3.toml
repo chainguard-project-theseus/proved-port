@@ -1,4 +1,4 @@
-# wolfi-dev/pcre3's verus/count.toml: the configuration under which the
+# pcre3's verus/count.toml: the configuration under which the
 # kit counter's output is identical to pcre3's in-tree verus/count
 # (kit/count/README.md, "Parity").
 
@@ -53,7 +53,7 @@ roots = [
 lazy = true
 describe = "Regex::new, serialize::encode_as and the lazy builders"
 
-# From wolfi-dev/pcre3#1065 (P15) on; leave it out before then.
+# From pcre3's P15 on; leave it out before then.
 [mints]
 path = "verus/MINTS"
 mint = "c_mint"

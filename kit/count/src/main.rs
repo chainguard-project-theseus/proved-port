@@ -6393,7 +6393,7 @@ mod tests {
                 ],
                 true,
             ),
-            // Features that forward it, on by default or not (#668's fourth
+            // Features that forward it, on by default or not (found in
             // review: pcre3-capi's `hardened`, which docs/design.md, ci/abi.sh
             // and ci/consumers.sh build with, is not on by default), or name it
             // by default.
@@ -6431,7 +6431,7 @@ mod tests {
                 ],
                 true,
             ),
-            // The forms a manifest scanner missed (#668's reviews): single
+            // The forms a manifest scanner missed (found in review): single
             // quotes, a `#` inside them, and a globbed member.
             (
                 vec![(

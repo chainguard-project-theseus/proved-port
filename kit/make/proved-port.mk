@@ -1,6 +1,6 @@
 # verus/make/proved-port.mk: the proof targets every proved port shares.
 # kit/sync.sh vendors it, with kani.sh, headers.sh and templates/, from
-# wolfi-dev/proved-port's kit/make into a port's verus/make/, beside the
+# the proved-port kit's kit/make into a port's verus/make/, beside the
 # counter it vendors into verus/count/; verus/count/KIT records the kit
 # commit of both, and kit/sync.sh --check covers both. Do not edit the
 # copy: change kit/make there, then re-sync.

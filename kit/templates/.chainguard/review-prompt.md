@@ -47,7 +47,7 @@ a change cites. The checks below are what a change must not get wrong.
   proof pull request, which brings the counter.
 - The vendored kit (`verus/count/`, the counter, and `verus/make/`, the
   make targets, Kani runner and header lint with their templates).
-  Every file in either comes from `kit/sync.sh` in wolfi-dev/proved-port,
+  Every file in either comes from `kit/sync.sh` in the proved-port kit,
   at the commit `verus/count/KIT` names, and `kit/sync.sh --check`
   covers both. A change to a file in either must also move `KIT` to a
   new proved-port commit. `kit/sync.sh` rewrites `KIT` on every run, so

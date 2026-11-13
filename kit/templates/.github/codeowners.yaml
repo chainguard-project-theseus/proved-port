@@ -1,8 +1,7 @@
-# codeowners-gate sidecar for wolfi-dev/{PORT}: the source of truth for
-# .github/CODEOWNERS, which renders it without the bot: owners. Change both
-# with a change request and the codeowners-gate tool's apply step (a
-# Chainguard-internal tool), run from the root of this repository. GitHub
-# reads the rendering with last match wins.
+# The source of truth for {PORT}'s .github/CODEOWNERS, which renders it
+# without the bot: owners. Change ownership here and render CODEOWNERS
+# again in the same change. GitHub reads the rendering with last match
+# wins.
 #
 # The Chainguard Checks review gate reads this file from the default
 # branch. bot:{PORT} is the reviewer declared in .chainguard/reviewers.yaml:

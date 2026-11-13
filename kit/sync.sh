@@ -193,7 +193,7 @@ rm -rf "$dest" "$make"
 extract "$sha" "$dest"
 extract_make "$sha" "$make"
 cat > "$kit" <<EOF
-# kit: verus-count and verus/make vendored from wolfi-dev/proved-port
+# kit: verus-count and verus/make vendored from the proved-port kit's
 # kit/count and kit/make by kit/sync.sh. Do not edit either directory:
 # change kit/count or kit/make there, then re-run kit/sync.sh PORT_ROOT,
 # and check both with kit/sync.sh --check.

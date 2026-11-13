@@ -1313,7 +1313,7 @@ home = "crates/pcre3-capi/src/object.rs"
         }
         // The path comparison holds under any name, both ways between `dir`
         // and members: a base member (here unshipped) moved onto a crate of
-        // the base's `dir` that shipped by its Cargo.toml (tcnghia), and a
+        // the base's `dir` that shipped by its Cargo.toml, and a
         // member with `ships = true` handed to a `dir` that reads it with
         // `ships` unset. Negative: a member handed to a `dir` with `ships`
         // unset before and after is only the drop.
@@ -1470,8 +1470,8 @@ home = "crates/pcre3-capi/src/object.rs"
                 "{text:?}: got = {got:?}, wanted = named {named:?}, {unnamed} unnamed, {stale} stale"
             );
         }
-        // tcnghia's renamed member: a line for the drop leaves the shipping
-        // change unnamed.
+        // A renamed member: a line for the drop leaves the shipping change
+        // unnamed.
         let renamed = FULL.replacen(
             "{ name = \"extra\", path = \"extra\", ships = true }",
             "{ name = \"renamed\", path = \"extra\", ships = false }",
