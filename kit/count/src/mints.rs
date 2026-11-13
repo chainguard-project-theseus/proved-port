@@ -501,7 +501,7 @@ impl Scan {
                         self.items(file, inner, "");
                     }
                 }
-                Item::Macro(m) if m.mac.path.is_ident("verus") => {
+                Item::Macro(m) if crate::verus_path(&m.mac.path) => {
                     match verus_syn::parse2::<verus_syn::File>(m.mac.tokens.clone()) {
                         Ok(v) => self.items(file, &v.items, owner),
                         Err(e) => self.errors.push(format!("{file}: verus! block: {e}")),
@@ -1030,6 +1030,7 @@ pub(crate) unsafe fn c_object_mut<'a, T: Object>(ptr: *mut T) -> (r: Tracked<&'a
         );
         fails_with("fn (", LIST, "crates/pcre3-capi/src/object.rs:1");
         fails_with("verus! { fn () }", LIST, "verus! block");
+        fails_with("::vstd::prelude::verus! { fn () }", LIST, "verus! block");
     }
 
     // The names come from the configuration: under other names the clean

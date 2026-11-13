@@ -504,6 +504,42 @@ body). chainz, pcre3 and expat-rs come nowhere near the bounds (at most
 41 iterations of one repetition, and an expansion two deep).
 `thread_local!` writes statics, and counts nothing.
 
+`compile_error!`, which writes nothing that ships, counts nothing
+either, but only by a rule true by rustc's own semantics. The counter
+does not resolve names; it reads the crate's bindings (its sources' and
+every macro expansion's, in a shipped build, `#[macro_use]` read through
+`cfg_attr`s too):
+
+- `::core::compile_error!` and `::std::compile_error!`: in edition 2018
+  and later a leading `::` names an extern crate, so these count nothing
+  unless the crate's edition is 2015 (cargo's default when none is
+  given; the lowest of the package's, the workspace's it inherits, and
+  any target's own, `[lib] edition`), a root `extern crate .. as core`
+  (or `std`) puts another crate under the name, or a Cargo.toml
+  dependency of the name is another package (`std = { package = "other"
+  }`, in any dependency table, or inherited by `{ workspace = true }`
+  from `[workspace.dependencies]`; one the root does not give is taken
+  as another). A `--base-rev` walk reads the root Cargo.toml of that
+  revision;
+- a bare `compile_error!`: counts nothing where nothing in the crate
+  binds the name (an item, `macro_rules!`, `use` or `extern crate`, std's
+  own `use core::compile_error;` too), no `#[macro_use] extern crate` but
+  `std`, `core` or `alloc` is in the crate, no dependency named `std`,
+  `core` or `alloc` is another package (whose prelude it would be), and
+  no `*` is in its module;
+- any other path (`core::compile_error!` without `::`) counts as a
+  function.
+
+A binding a macro expansion writes that breaks the rule fails the run
+(exit 1), from every candidate definition the counter compares (a pair
+under `cfg`s it cannot settle), not only the one it walks. Every other
+std macro in item position counts as a function. `global_asm!` always
+counts
+as one: it can write executable code (a symbol Rust calls through an
+`extern` block), which the counter cannot tell from a directive.
+`include!` writes what its file holds, and the expression macros
+(`asm!`, `concat!`) are not items.
+
 One case stays quiet: a `*` that would bring a crate macro's name in
 only through a further `*` the counter cannot follow (`pub use
 me::w::*;` through an `extern crate self as me;`). The invocation then
@@ -520,7 +556,27 @@ its FLOOR. Lowering FLOOR is not the way to adopt a counter change.
 
 To raise the share, put the functions a macro writes inside `verus!`
 by writing them there, or have the macro write a `verus! { .. }` block,
-which is read as one.
+which is read as one. The block may name Verus's macro by its path
+with a leading `::` (`::vstd::prelude::verus!`,
+`::verus_builtin_macros::verus!`), as challoc's `verified_export_pair!`
+does. A `verus!` block that may write a function (it holds `fn`) is
+Verus's, read in Verus's build:
+
+- with a leading `::`, by the rule above for `vstd` or
+  `verus_builtin_macros` (edition 2018 or later, no root `extern crate ..
+  as` of the name, no dependency of the name that is another package);
+- bare, where nothing in the crate binds `vstd`, `verus_builtin_macros` or
+  `verus` but the crate itself (`extern crate vstd;`) or the macro's own
+  path (`use vstd::prelude::verus;`), and no `#[macro_use] extern crate`
+  but `vstd`, `verus_builtin_macros`, `std`, `core` or `alloc` is in it,
+  and no dependency named `vstd` or `verus_builtin_macros` is another
+  package (another crate's `*`, the usual way the name comes in, is
+  allowed);
+- by any other path (`vstd::prelude::verus!` without `::`) never: the run
+  fails (exit 1), as it does where a rule does not hold, naming why.
+
+Any other path ending in `verus` (`other::verus!`, `::verus!`) is
+another crate's macro.
 
 ## Parity
 
