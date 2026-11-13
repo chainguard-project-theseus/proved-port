@@ -2019,6 +2019,12 @@ fn a_confirming_import_holds_under_its_combined_guards() {
         "mod q { pub use other::*; #[cfg(target_arch = \"x86_64\")] pub use vstd::prelude::*; }\nuse q::*;\nverus! { pub fn f() {} }\n",
         // A module guard that every run meets forces no architecture.
         "#[cfg(any(target_arch = \"x86_64\", not(target_arch = \"x86_64\")))]\nmod m {\n    use other::*;\n    #[cfg(target_arch = \"x86_64\")]\n    use vstd::prelude::verus;\n    verus! { pub fn f() {} }\n}\n",
+        // Two inline modules of one name, one per architecture, share a
+        // path but not an instance: one's import of Verus's does not settle
+        // the other's `*`, which the other run compiles.
+        "#[cfg(target_arch = \"x86_64\")]\nmod q { pub use vstd::prelude::*; }\n#[cfg(target_arch = \"aarch64\")]\nmod q { pub use other::*; }\nuse q::*;\nverus! { pub fn f() {} }\n",
+        "#[cfg(target_arch = \"aarch64\")]\nmod q { pub use other::*; }\n#[cfg(target_arch = \"x86_64\")]\nmod q { pub use vstd::prelude::*; }\nuse q::*;\nverus! { pub fn f() {} }\n",
+        "#[cfg(target_arch = \"x86_64\")]\nmod arch { use other::*; use vstd::prelude::*; }\n#[cfg(target_arch = \"aarch64\")]\nmod arch { use other::*; verus! { pub fn f() {} } }\n",
     ];
     for src in never {
         fs::write(&lib, src).expect("write");
@@ -2036,6 +2042,12 @@ fn a_confirming_import_holds_under_its_combined_guards() {
         "#[cfg(target_arch = \"x86_64\")]\nmod m { use other::*; #[cfg(target_arch = \"x86_64\")] use vstd::prelude::*; verus! { pub fn f() {} } }\n",
         "#[cfg(target_arch = \"x86_64\")]\nmod m { use other::*; verus! { use vstd::prelude::*; pub fn f() {} } }\n",
         "#[cfg(any(target_arch = \"x86_64\", test))]\nmod m { use other::*; #[cfg(target_arch = \"x86_64\")] use vstd::prelude::verus; verus! { pub fn f() {} } }\n",
+        // Each instance of a same-named module settles its own `*`s.
+        "#[cfg(target_arch = \"x86_64\")]\nmod q { pub use vstd::prelude::*; }\n#[cfg(target_arch = \"aarch64\")]\nmod q { pub use other::*; pub use vstd::prelude::*; }\nuse q::*;\nverus! { pub fn f() {} }\n",
+        "#[cfg(target_arch = \"x86_64\")]\nmod arch { use other::*; use vstd::prelude::*; }\n#[cfg(target_arch = \"aarch64\")]\nmod arch { use other::*; use vstd::prelude::*; verus! { pub fn f() {} } }\n",
+        // A `*` a macro writes is in the instance it is invoked in, which
+        // that instance's import of Verus's settles.
+        "macro_rules! mk { () => { use other::*; }; }\n#[cfg(target_arch = \"x86_64\")]\nmod m { use vstd::prelude::*; mk!(); verus! { pub fn f() {} } }\n",
     ];
     for src in settled {
         fs::write(&lib, src).expect("write");
@@ -2049,6 +2061,95 @@ fn a_confirming_import_holds_under_its_combined_guards() {
             got == 0 && rows == want,
             "{src}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
         );
+    }
+    // The review's case through an expansion: the `*` a macro writes is
+    // in the instance it is invoked in, the aarch64 `q`, not the x86_64
+    // one beside it. The bindings an expansion writes are held by their
+    // own check, which names the `*` as the expansion's.
+    const EMITTED: &str = "which a macro expansion writes) may bring another crate's `verus`";
+    fs::write(
+        &lib,
+        "macro_rules! mk { () => { pub use other::*; }; }\n#[cfg(target_arch = \"x86_64\")]\nmod q { pub use vstd::prelude::*; }\n#[cfg(target_arch = \"aarch64\")]\nmod q { mk!(); }\nuse q::*;\nverus! { pub fn f() {} }\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains(EMITTED),
+        "an expansion's `*`: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {EMITTED:?}"
+    );
+    // A `mod` an expansion writes carries the spans of the macro's
+    // definition: here `q` in m.rs, at line 4, column 12, where lib.rs's
+    // own `mod q` also is. It is still an instance of its own, so the
+    // source `q`'s import of Verus's does not settle its `*`. (lib.rs
+    // declares `q` for both architectures, so that `use q::*;` reads as
+    // this crate's; rustc would refuse the second aarch64 `q`, but the
+    // counter reads what is written.)
+    let m = dir.join("crates/a/src/m.rs");
+    fs::write(
+        &m,
+        "macro_rules! mk {\n    () => {\n        #[cfg(target_arch = \"aarch64\")]\n        mod q { pub use other::*; }\n    };\n}\n",
+    )
+    .expect("write");
+    fs::write(
+        &lib,
+        "#[macro_use]\nmod m;\n#[cfg(target_arch = \"x86_64\")]\n        mod q { pub use vstd::prelude::*; }\n#[cfg(target_arch = \"aarch64\")]\nmod q {}\nmk!();\nuse q::*;\nverus! { pub fn f() {} }\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains(EMITTED),
+        "a mod an expansion writes: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {EMITTED:?}"
+    );
+    fs::remove_file(&m).expect("remove");
+    // A bare `use other::*;` names a module of this crate only where every
+    // proof run has one: beside a test-only `mod other`, or a file
+    // src/other.rs that no `mod` declares, the proof build takes another
+    // crate's `other`, whose `verus` may be its own.
+    let other = dir.join("crates/a/src/other.rs");
+    #[rustfmt::skip]
+    let absent = [
+        ("#[cfg(test)]\nmod other {}\nuse other::*;\nverus! { pub fn f() {} }\n", None),
+        ("#[cfg(target_arch = \"x86_64\")]\nmod other {}\nuse other::*;\nverus! { pub fn f() {} }\n", None),
+        ("#[cfg(test)]\nmod other;\nuse other::*;\nverus! { pub fn f() {} }\n", Some("")),
+        ("use other::*;\nverus! { pub fn f() {} }\n", Some("")),
+    ];
+    for (src, file) in absent {
+        if let Some(text) = file {
+            fs::write(&other, text).expect("write");
+        }
+        fs::write(&lib, src).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 1 && err.contains(SHADOWED),
+            "{src} (src/other.rs: {file:?}): got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {SHADOWED:?}"
+        );
+        let _ = fs::remove_file(&other);
+    }
+    // One every run has settles as before: declared outright, from a file,
+    // or once for each architecture.
+    #[rustfmt::skip]
+    let present = [
+        ("mod other {}\nuse other::*;\nuse vstd::prelude::verus;\nverus! { pub fn f() {} }\n", None),
+        ("mod other {}\nuse other::*;\nverus! { pub fn f() {} }\n", None),
+        ("mod other;\nuse other::*;\nverus! { pub fn f() {} }\n", Some("")),
+        ("#[cfg(target_arch = \"x86_64\")]\nmod other {}\n#[cfg(target_arch = \"aarch64\")]\nmod other {}\nuse other::*;\nverus! { pub fn f() {} }\n", None),
+    ];
+    for (src, file) in present {
+        if let Some(text) = file {
+            fs::write(&other, text).expect("write");
+        }
+        fs::write(&lib, src).expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<(String, String)> = list_rows(&out)
+            .into_iter()
+            .map(|(class, _, name, _)| (class, name))
+            .collect();
+        let want = vec![("Verified".to_owned(), "f".to_owned())];
+        assert!(
+            got == 0 && rows == want,
+            "{src} (src/other.rs: {file:?}): got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_file(&other);
     }
     // With both oses declared too, an import under one os and one arch
     // needs two runs' atoms at once: it may be built only on a host no

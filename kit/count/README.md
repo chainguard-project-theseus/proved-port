@@ -610,7 +610,18 @@ Verus's, read in Verus's build:
   import force the key's value. With challoc's two architectures,
   `#[cfg(target_arch = "x86_64")] use vstd::prelude::*;` settles nothing,
   since the aarch64 run compiles the invocation without it, while the
-  same import in a `#[cfg(target_arch = "x86_64")] mod` does;
+  same import in a `#[cfg(target_arch = "x86_64")] mod` does. The import
+  settles only the `*`s of its own module instance: two inline modules of
+  one name under exclusive `cfg`s (`#[cfg(target_arch = "x86_64")] mod q`
+  and `#[cfg(target_arch = "aarch64")] mod q`) share a path, but one's
+  import of Verus's does not settle the other's `*`, and a `*` a macro
+  writes is in the instance the macro is invoked in (a `mod` it writes
+  is an instance of its own). A bare path (`use other::*;`, edition
+  2018 on) names a module of the crate only where every proof run has
+  one: declared by a `mod` under `cfg`s that run meets, in a module it
+  has. Beside a `#[cfg(test)] mod other`, one declared for one
+  architecture, or a file `src/other.rs` no `mod` declares, it names
+  another crate's `other`;
 - by any other path (`vstd::prelude::verus!` without `::`) never: the run
   fails (exit 1), as it does where a rule does not hold, naming why.
 

@@ -215,6 +215,10 @@ struct Counter {
     /// crate (`pcre3_syntax`), then each module of the file's path and of
     /// any inline `mod` around the item.
     module: Vec<String>,
+    /// The instance of `module` [`Counter::items`] is walking
+    /// ([`Binding::scope`]): the file, or the innermost inline `mod` around
+    /// the item.
+    scope: String,
     /// Every function's `#[verifier::rlimit]`, ghost ones too, for the
     /// headroom check ([`rlimit::shares`]): Verus-only code's too, which
     /// Verus checks.
@@ -280,6 +284,13 @@ struct Counter {
     /// Every module of the crate, by path from its root, so that a `use`
     /// path whose first segment is one of them reads as this crate's.
     modules: std::collections::BTreeSet<Vec<String>>,
+    /// The modules every proof run compiles: the crate root, and each
+    /// module a declaration (`mod name;` or `mod name { .. }`) in one of
+    /// them declares under `cfg`s that every run meets, or that some
+    /// declaration meets in each run ([`every_run_has`]). A file no
+    /// declaration names, or a module only a test build or some runs
+    /// declare, is not among them.
+    proof_modules: std::collections::BTreeSet<Vec<String>>,
     /// The crates a `#[macro_use] extern crate` at the crate root loads
     /// macros from ([`macro_use_crates`]): their names are in scope in
     /// every module, ahead of the standard library's prelude.
@@ -403,6 +414,7 @@ impl Counter {
             traits: std::collections::BTreeSet::new(),
             owner: String::new(),
             module: Vec::new(),
+            scope: String::new(),
             limits: Vec::new(),
             verus_fns: BTreeMap::new(),
             shipped: true,
@@ -419,6 +431,7 @@ impl Counter {
             dry: None,
             unresolved: Vec::new(),
             modules: std::collections::BTreeSet::new(),
+            proof_modules: std::collections::BTreeSet::new(),
             macro_use: Vec::new(),
             bindings: Vec::new(),
             emitted: Vec::new(),
@@ -2673,6 +2686,8 @@ impl Counter {
                     module: self.module.clone(),
                     guards: Vec::new(),
                     shared: 0,
+                    scope: self.scope.clone(),
+                    expansion: Some(at),
                 };
                 bindings_in(
                     std::slice::from_ref(item),
@@ -2812,7 +2827,11 @@ impl Counter {
                     {
                         let was = self.enter(built, &m.attrs);
                         self.module.push(m.ident.to_string());
+                        let instance =
+                            mod_instance(&self.file, self.expansion, m.ident.span().start());
+                        let outer = std::mem::replace(&mut self.scope, instance);
                         self.items(inner, in_verus);
+                        self.scope = outer;
                         self.module.pop();
                         self.leave(was);
                     }
@@ -3064,6 +3083,8 @@ impl Counter {
         }
         expand::set_edition(walked[0]);
         let mut bindings = Vec::new();
+        let mut decls: std::collections::BTreeMap<Vec<String>, Vec<Vec<String>>> =
+            std::collections::BTreeMap::new();
         for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
             let Some(Ok(file)) = p else { continue };
             let module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
@@ -3075,13 +3096,29 @@ impl Counter {
             // rustc takes a `#[macro_use] extern crate` only at a crate
             // root; every file's is read.
             macro_use_crates(&file.items, &self.atoms, &mut self.macro_use);
+            let rel = f.strip_prefix(root).unwrap_or(f);
             let at = BindAt {
-                file: f.strip_prefix(root).unwrap_or(f),
+                file: rel,
                 module,
                 guards: classes[i].1.clone(),
                 shared: classes[i].1.len(),
+                scope: rel.display().to_string(),
+                expansion: None,
             };
             bindings_in(&file.items, &at, &self.atoms, &mut bindings);
+            mod_decls(&file.items, &at.module, &at.guards, &mut decls);
+        }
+        // The crate root is in every run; a declared module is where its
+        // parent is and some declaration of it holds in each run.
+        self.proof_modules
+            .insert(vec![self.krate.replace('-', "_")]);
+        for (path, guards) in &decls {
+            let parent = &path[..path.len() - 1];
+            if self.proof_modules.contains(parent)
+                && every_run_has(guards, &self.atoms).unwrap_or(false)
+            {
+                self.proof_modules.insert(path.clone());
+            }
         }
         for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
             let Some(Ok(file)) = p else { continue };
@@ -3175,6 +3212,7 @@ impl Counter {
                 self.files.push((self.krate.clone(), self.file.clone()));
             }
             self.module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
+            self.scope = self.file.display().to_string();
             match p {
                 Some(Ok(file)) => self.items(&file.items, false),
                 Some(Err(e)) => {
@@ -3766,30 +3804,37 @@ impl Counter {
             .collect();
         // A `*` that may bring another `verus` is read where Verus's build
         // may compile it; an import that settles the name, only where that
-        // build is sure to.
-        let confirmed = here.iter().any(|b| {
-            b.verus_sure
-                && match b.glob {
-                    true => one_of(&b.path, &VERUS_GLOBS),
-                    false => b.name == "verus" && one_of(&b.path, &VERUS_PATHS),
-                }
-        });
-        if confirmed {
-            return None;
-        }
-        for b in here
-            .into_iter()
-            .filter(|b| b.glob && !one_of(&b.path, &VERUS_GLOBS))
-        {
+        // build is sure to, and only for the `*`s of its own module instance
+        // ([`Binding::scope`]): two inline modules of one name under
+        // exclusive `cfg`s share a path, and one's import is not in the
+        // runs that compile the other.
+        let confirmed: std::collections::BTreeSet<&str> = here
+            .iter()
+            .filter(|b| {
+                b.verus_sure
+                    && match b.glob {
+                        true => one_of(&b.path, &VERUS_GLOBS),
+                        false => b.name == "verus" && one_of(&b.path, &VERUS_PATHS),
+                    }
+            })
+            .map(|b| b.scope.as_str())
+            .collect();
+        for b in here.into_iter().filter(|b| {
+            b.glob && !one_of(&b.path, &VERUS_GLOBS) && !confirmed.contains(b.scope.as_str())
+        }) {
             // Without `crate`, `self` or `super`, a path names a module of
             // this crate only beside `at`, and with a leading `::` never
             // (it names an extern crate); in edition 2015 either is from the
-            // crate root. Any other is another crate's.
+            // crate root. Any other is another crate's. A bare path names
+            // the module beside `at` only in a run that has it, and another
+            // crate's in a run that does not (a `#[cfg(test)] mod`, or a file
+            // no `mod` declares), so it reads as this crate's only where
+            // every proof run has the module ([`Counter::proof_modules`]).
             let local = match b.path.first().map(String::as_str) {
                 Some("crate" | "self" | "super") if !b.absolute => self.module_from(at, &b.path),
                 _ if self.edition < 2018 => Some([&at[..1], &b.path[..]].concat()),
                 _ if b.absolute => None,
-                _ => Some([at, &b.path[..]].concat()),
+                _ => Some([at, &b.path[..]].concat()).filter(|m| self.proof_modules.contains(m)),
             }
             .filter(|m| self.modules.contains(m));
             match local {
@@ -4061,6 +4106,11 @@ struct Binding {
     /// Whether Verus's build is sure to compile it (`verus` says only that
     /// it may); a binding written by an expansion is never taken as sure.
     verus_sure: bool,
+    /// The instance of `module` it is in: its file (root-relative), or the
+    /// inline `mod` item that holds it, by that item's file, line and
+    /// column. Two inline modules of one name under exclusive `cfg`s share
+    /// a path but not an instance.
+    scope: String,
     /// An `extern crate path as name;`.
     extern_crate: bool,
     /// A `use ::path..;`, whose path names an extern crate.
@@ -4129,12 +4179,119 @@ fn breaks(b: &Binding, kind: Took, name: &str, at: &[String]) -> bool {
 /// Where [`bindings_in`] reads: the file, the module, and the `cfg`s of
 /// the file and the items around, of which the first `shared` are the
 /// module's own (the file's and the modules' around), which every item
-/// in the module is under ([`every_run_sure`]).
+/// in the module is under ([`every_run_sure`]), the module instance,
+/// `scope` ([`Binding::scope`]), and the line of the invocation whose
+/// expansion the items are, if they are one ([`mod_instance`]).
 struct BindAt<'a> {
     file: &'a Path,
     module: Vec<String>,
     guards: Vec<String>,
     shared: usize,
+    scope: String,
+    expansion: Option<usize>,
+}
+
+/// Adds to `decls` each module `items` declare (`mod name;` or an inline
+/// `mod name { .. }`, in inline modules and `verus!` blocks too), by its
+/// path under `module`, with the `cfg`s it is declared under: `guards`,
+/// those of the items around it, and its own. A module declared more than
+/// once (under exclusive `cfg`s) has a list for each declaration.
+fn mod_decls(
+    items: &[Item],
+    module: &[String],
+    guards: &[String],
+    decls: &mut std::collections::BTreeMap<Vec<String>, Vec<Vec<String>>>,
+) {
+    for item in items {
+        match item {
+            Item::Mod(m) => {
+                let mut under = guards.to_vec();
+                under.extend(cfg_predicates(&m.attrs));
+                let path = [module, &[m.ident.to_string()]].concat();
+                decls.entry(path.clone()).or_default().push(under.clone());
+                if let Some((_, inner)) = &m.content {
+                    mod_decls(inner, &path, &under, decls);
+                }
+            }
+            Item::Macro(m) if verus_path(&m.mac.path) => {
+                if let Ok(f) = parse2::<verus_syn::File>(m.mac.tokens.clone()) {
+                    let mut under = guards.to_vec();
+                    under.extend(cfg_predicates(&m.attrs));
+                    mod_decls(&f.items, module, &under, decls);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether, in each proof run, Verus's build is sure to compile one of
+/// `decls` (each a list of `cfg`s, read as one conjunction): where
+/// `verus_sets` holds several values of a single-valued key
+/// ([`SINGLE_VALUED`]), each run sets one of them and never the others, so
+/// `#[cfg(target_arch = "x86_64")]` and `#[cfg(target_arch = "aarch64")]`
+/// declarations of one module together hold in every run, while either
+/// alone does not.
+fn every_run_has(decls: &[Vec<String>], atoms: &Atoms) -> Result<bool, String> {
+    let key = |a: &str| a.split_once('=').map(|(k, _)| k.trim().to_owned());
+    let mut values: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for a in &atoms.sets {
+        if let Some(k) = key(a)
+            && SINGLE_VALUED.contains(&k.as_str())
+        {
+            values.entry(k).or_default().push(a.clone());
+        }
+    }
+    values.retain(|_, v| v.len() > 1);
+    let mut base = atoms.clone();
+    base.sets
+        .retain(|a| key(a).is_none_or(|k| !values.contains_key(&k)));
+    let mut runs = vec![base];
+    for vals in values.values() {
+        runs = runs
+            .into_iter()
+            .flat_map(|r| {
+                vals.iter().map(move |v| {
+                    let mut run = r.clone();
+                    run.sets.push(v.clone());
+                    run.never.extend(vals.iter().filter(|o| *o != v).cloned());
+                    run
+                })
+            })
+            .collect();
+    }
+    for run in &runs {
+        let mut any = false;
+        for d in decls {
+            if guarded_verus_sure(d, run)? {
+                any = true;
+                break;
+            }
+        }
+        if !any {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The module instance ([`Binding::scope`]) of an inline `mod` whose name
+/// starts at `start` in `file`. An expansion's `mod` carries the spans of
+/// the macro's definition, which may be in another file at the line and
+/// column of a `mod` there, so its instance names the invocation
+/// (`expansion`, its line) instead, in a form no `mod` in a source file
+/// takes.
+fn mod_instance(file: &Path, expansion: Option<usize>, start: proc_macro2::LineColumn) -> String {
+    match expansion {
+        None => format!("{}:{}:{}", file.display(), start.line, start.column),
+        Some(at) => format!(
+            "{}:{at}: a mod the expansion writes, at {}:{}",
+            file.display(),
+            start.line,
+            start.column
+        ),
+    }
 }
 
 /// Adds to `out` the bindings among `items` (in inline modules and
@@ -4175,6 +4332,7 @@ fn bindings_in(items: &[Item], at: &BindAt, atoms: &Atoms, out: &mut Vec<Binding
             verus,
             verus_sure: every_run_sure(&guards[..at.shared], &guards[at.shared..], atoms)
                 .unwrap_or(false),
+            scope: at.scope.clone(),
             ..Binding::default()
         };
         let line = |s: proc_macro2::Span| format!("{}:{}", at.file.display(), s.start().line);
@@ -4227,24 +4385,29 @@ fn bindings_in(items: &[Item], at: &BindAt, atoms: &Atoms, out: &mut Vec<Binding
                 ..base.clone()
             });
         }
-        let inner = |module: Vec<String>, shared: usize| BindAt {
+        let inner = |module: Vec<String>, shared: usize, scope: String| BindAt {
             file: at.file,
             module,
             guards: guards.clone(),
             shared,
+            scope,
+            expansion: at.expansion,
         };
         match item {
-            // An inline module's `cfg`s are its own items' shared ones; a
-            // `verus!` block's cover only what it holds.
+            // An inline module's `cfg`s are its own items' shared ones, and
+            // it is a module instance of its own; a `verus!` block's `cfg`s
+            // cover only what it holds, in the instance around it.
             Item::Mod(m) => {
                 if let Some((_, items)) = &m.content {
                     let module = [&at.module[..], &[m.ident.to_string()]].concat();
-                    bindings_in(items, &inner(module, guards.len()), atoms, out);
+                    let scope = mod_instance(at.file, at.expansion, m.ident.span().start());
+                    bindings_in(items, &inner(module, guards.len(), scope), atoms, out);
                 }
             }
             Item::Macro(m) if verus_path(&m.mac.path) => {
                 if let Ok(f) = parse2::<verus_syn::File>(m.mac.tokens.clone()) {
-                    bindings_in(&f.items, &inner(at.module.clone(), at.shared), atoms, out);
+                    let block = inner(at.module.clone(), at.shared, at.scope.clone());
+                    bindings_in(&f.items, &block, atoms, out);
                 }
             }
             _ => {}
