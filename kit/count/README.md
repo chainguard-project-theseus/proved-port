@@ -342,8 +342,8 @@ gives verus/FLOOR's functions and lines figures`. A missing file fails
 too (exit 1), and a `path` that is not relative, has a `..` or passes
 through a symlink exits 2, as a `[floor] path` through one does. The
 badge follows FLOOR, not the counted shares, so it moves only when FLOOR
-does: the pull request that raises FLOOR, one of its own (FLOOR's
-header), updates the badge too, pasting what `verus-count --badge .`
+does: the pull request that raises FLOOR, one of its own but for the
+port's first proof pull request (FLOOR's header), updates the badge too, pasting what `verus-count --badge .`
 prints. Without `--floor` the badge
 is not checked. Removing `[badge]` or moving its `path` is a narrowing
 (Configuration, above). The link is `verus/README.md#coverage` wherever
@@ -721,6 +721,13 @@ proof PR (the skill's lifecycle.md, phase 4):
 4. Add `[badge]` to `verus/count.toml` and put the line
    `verus-count --badge .` prints on the README's third line, under
    its title (The badge, above).
+
+A port that landed the counter before its first proof, with FLOOR at
+0.0 (one set up from the kit's templates, or one that adopted the
+counter in a PR of its own), skips steps 1, 2 and 4. Its first proof
+PR may still raise FLOOR, and the badge with it, from 0.0 to the
+figures the counter names on that PR, in the same PR (step 3). Every
+later raise is a PR of its own.
 
 A port with a `verus/floor/` directory names the FLOOR file something
 else (chainz: `verus/SHARES`), since `verus/FLOOR` and `verus/floor/`

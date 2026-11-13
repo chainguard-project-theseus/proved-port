@@ -12,8 +12,14 @@
 # splits them; kani.sh's header says how). The two share nothing,
 # so they are separate checks that run at once.
 #
-# Every run compares with a base, and none skips it: verus takes the pull
-# request's base, verus-main the commit before the one under test. Where
+# Every run compares with a base, and none skips it, and both checks take
+# the one Checks sets (CHAINGUARD_BASE_REVISION). On a pull request,
+# verus takes the pull request's base. On main, verus-main takes the
+# start of the push the run covers: Checks settles a burst of pushes into
+# one run at the last, and names as its base the tip its previous run
+# planned (when that is a first-parent ancestor, else the first parent).
+# HEAD^ would be the merge before the last one, and a merge inside the
+# burst would never be compared with main before it. Where
 # verus/FLOOR exists, `make verus` passes `--base-rev "$(VERUS_BASE)"` to
 # the counter and fails when VERUS_BASE is empty; it never prints SKIP and
 # passes, since a run that skips the comparison lets FLOOR fall on main
@@ -74,9 +80,10 @@ checks:
         cmd:
           - sh
           - -c
-          # Checks sets the base on every pull request run
-          # (CHAINGUARD_BASE_REVISION, a reserved variable); a run without
-          # one fails rather than skip the comparison.
+          # Checks sets the base on every run, a pull request's and
+          # main's (CHAINGUARD_BASE_REVISION, a reserved variable); a run
+          # without one fails rather than skip the comparison. verus-main
+          # runs these same steps.
           - make verus VERUS_THREADS="${CG_CPUS:-}" VERUS_BASE="${CHAINGUARD_BASE_REVISION:?no base revision to compare verus/FLOOR with}"
 
   # The multi-architecture variant: the same steps on amd64, beside verus.
@@ -100,21 +107,20 @@ checks:
     network: *crates
     cmd: &kani [make, kani]
 
-  # On main, squash-merged, the commit before the one under test is the
-  # base; the counter fails when it does not resolve. This check must fail,
-  # never SKIP, when it has no base to compare verus/FLOOR with.
+  # On main, the base is the start of the push the run covers, which
+  # Checks sets as for a pull request; the counter fails when it does not
+  # resolve. This check must fail, never SKIP, when it has no base to
+  # compare verus/FLOOR with.
   verus-main:
     description: >-
       make verus on main: verus/count's tests, the proofs, the coverage
-      floor and rlimit headroom, against the commit before this one.
+      floor and rlimit headroom, against main before the push this run
+      covers.
     trigger: [postsubmit]
     resources: large-arm64
     timeout: 60m
     network: *crates
-    steps:
-      - *counter-tests
-      - name: proofs and coverage floor
-        cmd: [sh, -c, 'make verus VERUS_THREADS="${CG_CPUS:-}" VERUS_BASE=HEAD^']
+    steps: *verus-steps
 
   kani-main:
     description: "make kani on main: the Kani harnesses."

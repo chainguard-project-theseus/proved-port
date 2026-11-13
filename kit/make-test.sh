@@ -707,4 +707,43 @@ grep -q 'headers: verus/SHARES: the header drifted' "$tmp/out" ||
 echo "ok make verus-headers fails a drifted VERUS_FLOOR (verus/SHARES)"
 cp "$tmp/keep" "$port/verus/SHARES"
 
+# --- the verus checks' base ------------------------------------------------
+# Both verus checks run the same steps (verus-main's `steps: *verus-steps`),
+# and the proofs step passes CHAINGUARD_BASE_REVISION as VERUS_BASE, so on
+# main the base is the start of the settled push, not HEAD^; with the
+# variable unset, the step fails before make runs.
+yaml=kit/templates/.chainguard/ci/verus.yaml
+# check_block NAME: the lines of check NAME in verus.yaml.
+check_block() {
+  awk -v name="  $1:" '$0 == name { on = 1; next } on && /^  [a-z#]/ { exit } on { print }' "$yaml"
+}
+check_block verus | grep -q '^    steps: &verus-steps$' || fail "verus.yaml: verus does not define &verus-steps"
+[ "$(check_block verus-main | grep -c '^    steps:')" -eq 1 ] || fail "verus.yaml: verus-main has no steps line"
+check_block verus-main | grep -q '^    steps: \*verus-steps$' \
+  || { check_block verus-main >&2; fail "verus.yaml: verus-main does not run verus's steps (steps: *verus-steps)"; }
+# The proofs step's shell command, the list item after its `- -c`.
+proofs_cmd=$(check_block verus | awk '/^          - -c$/ { on = 1; next } on && /^          - / { sub(/^          - /, ""); print; exit }')
+# shellcheck disable=SC2016  # the literal text of the step's command
+base_arg='VERUS_BASE="${CHAINGUARD_BASE_REVISION:?'
+case $proofs_cmd in
+  *"$base_arg"*) ;;
+  *) fail "verus.yaml: the proofs step does not pass CHAINGUARD_BASE_REVISION as VERUS_BASE: $proofs_cmd" ;;
+esac
+mkdir "$tmp/stubmake"
+printf '#!/bin/sh\necho "make $*" >> "%s"\n' "$tmp/stubmake.log" > "$tmp/stubmake/make"
+chmod +x "$tmp/stubmake/make"
+: > "$tmp/stubmake.log"
+PATH=$tmp/stubmake:$PATH CG_CPUS=8 CHAINGUARD_BASE_REVISION=0123abc sh -c "$proofs_cmd" \
+  || fail "the verus proofs step, with a base: got = failure, want = success"
+grep -qx 'make verus VERUS_THREADS=8 VERUS_BASE=0123abc' "$tmp/stubmake.log" \
+  || { cat "$tmp/stubmake.log" >&2; fail "the verus proofs step: got = another make line, want = VERUS_BASE=0123abc"; }
+: > "$tmp/stubmake.log"
+if (unset CHAINGUARD_BASE_REVISION; PATH=$tmp/stubmake:$PATH sh -c "$proofs_cmd") 2> "$tmp/nobase.err"; then
+  fail "the verus proofs step, no base: got = success, want = failure"
+fi
+[ ! -s "$tmp/stubmake.log" ] || { cat "$tmp/stubmake.log" >&2; fail "the verus proofs step, no base: got = make ran, want = it fails first"; }
+grep -q 'no base revision to compare verus/FLOOR with' "$tmp/nobase.err" \
+  || { cat "$tmp/nobase.err" >&2; fail "the verus proofs step, no base: the message does not say so"; }
+echo "ok verus and verus-main pass CHAINGUARD_BASE_REVISION as VERUS_BASE, and fail without it"
+
 echo "PASS"

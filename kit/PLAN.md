@@ -87,7 +87,7 @@ config file replaces hard-coded crate names, paths or ids), **high**
 
 | tool | path | what it does | coupling | to make generic |
 |---|---|---|---|---|
-| verus check | pcre3 `.chainguard/ci/verus.yaml`; challoc `verus.yaml` | pinned `verus~` and `kani~` packages, proofs and counter against `CHAINGUARD_BASE_REVISION`, main postsubmit against the previous commit, arm64 for Z3 speed | low | package pins and `make` target names |
+| verus check | pcre3 `.chainguard/ci/verus.yaml`; challoc `verus.yaml` | pinned `verus~` and `kani~` packages, proofs and counter against `CHAINGUARD_BASE_REVISION`, main postsubmit against the previous commit (the kit's template takes `CHAINGUARD_BASE_REVISION` there too, the start of the settled push), arm64 for Z3 speed | low | package pins and `make` target names |
 | comparison legs | pcre3 `.chainguard/ci/{conformance,fuzz,consumers}.yaml` | per-arch checks, on-request legs by label | medium | leg names and scripts |
 | test matrix | pcre3 `test.yaml`; challoc `test.yaml`, `floor.yaml`, `tlscheck.yaml` | arch by build-variant cells; old-kernel floor cells on GCE | medium | matrix as data |
 | lint | pcre3 `lint.yaml`, `ci/shellcheck.sh`; challoc `lint.yaml`, `ci/shellcheck.sh` | fmt, clippy `-D warnings`, source rules, shellcheck pinned by SHA-256, msrv | low | the shellcheck fetcher and its pin move; the check files stay per port |
