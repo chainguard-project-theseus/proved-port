@@ -928,6 +928,27 @@ fn shipped_targets_across_2024_fail() {
         );
         let _ = fs::remove_dir_all(&dir);
     }
+    // A binary-only package (no `src/lib.rs`) has no library's edition: a
+    // 2021 `[[bin]]` beside the package's 2024 is its one target, by
+    // `autobins = false` or `autolib = false`, and the run passes.
+    for (i, keys) in ["autobins = false\n", "autolib = false\nautobins = false\n"]
+        .into_iter()
+        .enumerate()
+    {
+        let dir = crate_of(&format!("edition-bin-only-{i}"), &[("lib.rs", lib)]);
+        fs::remove_file(dir.join("crates/a/src/lib.rs")).expect("remove");
+        fs::write(dir.join("crates/a/src/main.rs"), "fn main() {}\n").expect("write");
+        let manifest = format!(
+            "{package}{keys}[[bin]]\nname = \"a\"\npath = \"src/main.rs\"\nedition = \"2021\"\n"
+        );
+        fs::write(dir.join("crates/a/Cargo.toml"), &manifest).expect("write");
+        let (got, _, err) = count(&dir, &["--list"]);
+        assert!(
+            got == 0,
+            "{manifest:?}: got = exit {got}, {err:?}; wanted = exit 0"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
 
 /// Every shipped file is scanned for export blocks, whether or not it
@@ -1795,6 +1816,28 @@ fn a_path_qualified_verus_is_verus() {
         ("#[macro_use]\nextern crate other;\nverus! { pub fn f() {} }\n", SHADOWED),
         ("#[cfg_attr(unix, macro_use)]\nextern crate other;\nverus! { pub fn f() {} }\n", SHADOWED),
         ("extern crate other as vstd;\nmod m { use vstd::prelude::verus; verus! { pub fn f() {} } }\n", SHADOWED),
+        // Another crate's `*` in the module, which may bring its own
+        // `verus`, with no import of Verus's there to settle the name (one
+        // in another module, or a `#[macro_use]`, does not).
+        ("use other::*;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("#[macro_use]\nextern crate vstd;\nuse other::*;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("use vstd::prelude::*;\nmod m { use other::*; verus! { pub fn f() {} } }\n", SHADOWED),
+        ("#[cfg(verus_keep_ghost)]\nuse other::*;\nverus! { pub fn f() {} }\n", SHADOWED),
+        // An import of Verus's that Verus's build only may compile settles
+        // nothing.
+        ("use other::*;\n#[cfg(feature = \"x\")]\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("use other::*;\n#[cfg(feature = \"x\")]\nuse vstd::prelude::verus;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("use other::*;\n#[cfg(unix)]\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("mod q { pub use other::*; #[cfg(feature = \"x\")] pub use vstd::prelude::*; }\nuse q::*;\nverus! { pub fn f() {} }\n", SHADOWED),
+        // A `*` of a module of the crate where such a `*` is.
+        ("use other::*;\nmod s { use super::*; verus! { pub fn f() {} } }\n", SHADOWED),
+        ("mod q { pub use other::*; }\nuse crate::q::*;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("mod q { pub use self::r::*; mod r { pub use other::*; } }\nuse q::*;\nverus! { pub fn f() {} }\n", SHADOWED),
+        // A `::` glob names an extern crate, whatever module of the crate
+        // shares its name.
+        ("mod other {}\nuse ::other::*;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("mod other { pub use vstd::prelude::*; }\nuse ::other::*;\nverus! { pub fn f() {} }\n", SHADOWED),
+        ("mod s { mod other {} use ::other::*; verus! { pub fn f() {} } }\n", SHADOWED),
         // A path: another crate's `*`, a binding of `vstd` anywhere (a
         // module, in a `verus!` block too; a `use` or `extern crate`, at
         // the root or in another module; one a crate module's `*` carries),
@@ -1869,7 +1912,14 @@ fn a_path_qualified_verus_is_verus() {
         "#[cfg_attr(unix, macro_use)]\nextern crate core;\n::vstd::prelude::verus! { pub fn f() {} }\n",
         "#[macro_use]\nextern crate vstd;\nverus! { pub fn f() {} }\n",
         "#[macro_use]\nextern crate std;\nverus! { pub fn f() {} }\n",
-        "use other::*;\nverus! { pub fn f() {} }\n",
+        "use other::*;\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n",
+        "use other::*;\nuse vstd::prelude::verus;\nverus! { pub fn f() {} }\n",
+        "mod s { use other::*; }\nverus! { pub fn f() {} }\n",
+        "use vstd::prelude::*;\nmod s { use super::*; verus! { pub fn f() {} } }\n",
+        "use other::*;\nuse vstd::prelude::*;\nmod s { use super::*; verus! { pub fn f() {} } }\n",
+        "mod q { pub use vstd::prelude::*; }\nuse q::*;\nverus! { pub fn f() {} }\n",
+        "use other::*;\n#[cfg(verus_keep_ghost)]\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n",
+        "#[cfg(test)]\nuse other::*;\nverus! { pub fn f() {} }\n",
         "#[cfg(test)]\n#[macro_use]\nextern crate other;\nverus! { pub fn f() {} }\n",
         "#[cfg(test)]\nmacro_rules! verus { ($($t:tt)*) => { $($t)* }; }\nverus! { pub fn f() {} }\n",
         "#[cfg(test)]\nextern crate other as vstd;\n::vstd::prelude::verus! { pub fn f() {} }\n",

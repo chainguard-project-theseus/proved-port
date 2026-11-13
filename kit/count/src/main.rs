@@ -742,7 +742,9 @@ fn package_edition(manifest: &toml::Table, workspace: Option<&toml::Value>) -> u
 
 /// The editions of the crate's targets whose files the walk reads, by
 /// which its macros are matched ([`expand::set_edition`]): the library's
-/// (`[lib] edition`, else the package's) and each binary's (`[[bin]]
+/// (`[lib] edition`, else the package's), where the package has a library
+/// (a `[lib] path`, or `src/lib.rs` unless `autolib = false` and no
+/// `[lib]`), and each binary's (`[[bin]]
 /// edition`, else the package's), with workspace inheritance as
 /// [`crate_manifest`] reads it. The binaries are the `[[bin]]` tables and,
 /// unless `autobins = false`, those cargo finds as [`crate_roots`] does
@@ -767,7 +769,18 @@ fn walked_editions(root: &Path, dir: &Path) -> Vec<u32> {
             e.as_str().and_then(|e| e.parse().ok()).unwrap_or(2015)
         })
     };
-    let mut out = vec![manifest.get("lib").map_or(package, own)];
+    let lib = manifest.get("lib");
+    let autolib = manifest
+        .get("package")
+        .and_then(|p| p.get("autolib"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(true);
+    let has_lib = lib.is_some_and(|l| l.get("path").is_some())
+        || ((lib.is_some() || autolib) && dir.join("src/lib.rs").is_file());
+    let mut out: Vec<u32> = has_lib
+        .then(|| lib.map_or(package, own))
+        .into_iter()
+        .collect();
     let bins: Vec<&toml::Value> = manifest
         .get("bin")
         .and_then(toml::Value::as_array)
@@ -841,6 +854,10 @@ fn walked_editions(root: &Path, dir: &Path) -> Vec<u32> {
                 .filter(|(name, file)| !declared(name, file))
                 .map(|_| package),
         );
+    }
+    // A package with no target the walk reads matches by its own edition.
+    if out.is_empty() {
+        out.push(package);
     }
     out
 }
@@ -2430,10 +2447,26 @@ impl Counter {
         // An item is kept, and an inline module's items, and those in a
         // `const` or `static`'s initializer (`const _: () = { .. };`), are
         // read too; a function's own body is read where it is recorded.
-        struct BodyItems<'a>(Vec<&'a Item>);
+        // Each is kept with the `cfg`s of the items around it in the body
+        // and its own.
+        struct BodyItems<'a> {
+            found: Vec<(&'a Item, Vec<String>)>,
+            guards: Vec<String>,
+        }
         impl<'a> Visit<'a> for BodyItems<'a> {
             fn visit_item(&mut self, i: &'a Item) {
-                self.0.push(i);
+                let attrs: &[Attribute] = match i {
+                    Item::Fn(f) => &f.attrs,
+                    Item::Mod(m) => &m.attrs,
+                    Item::Impl(m) => &m.attrs,
+                    Item::Trait(t) => &t.attrs,
+                    Item::Const(c) => &c.attrs,
+                    Item::Static(s) => &s.attrs,
+                    _ => &[],
+                };
+                let was = self.guards.len();
+                self.guards.extend(cfg_predicates(attrs));
+                self.found.push((i, self.guards.clone()));
                 match i {
                     Item::Mod(m) => {
                         for inner in m.content.iter().flat_map(|(_, items)| items) {
@@ -2452,13 +2485,17 @@ impl Counter {
                     }
                     _ => {}
                 }
+                self.guards.truncate(was);
             }
         }
-        let mut found = BodyItems(Vec::new());
+        let mut found = BodyItems {
+            found: Vec::new(),
+            guards: Vec::new(),
+        };
         for s in stmts {
             found.visit_stmt(s);
         }
-        for item in found.0 {
+        for (item, guards) in found.found {
             let (owner, fns): (String, Vec<NestedFn>) = match item {
                 Item::Fn(g) => (String::new(), vec![(&g.attrs[..], &g.sig, &*g.block)]),
                 Item::Impl(i) => (
@@ -2487,6 +2524,16 @@ impl Counter {
                 _ => continue,
             };
             for (attrs, sig, block) in fns {
+                // One built only for tests (by its own `cfg`, or one of an
+                // item around it) ships nothing, and is not recorded; the
+                // `cfg`s go on to the functions in its body.
+                let was = self.guards.len();
+                self.guards.extend(guards.iter().cloned());
+                if self.built(attrs) == Built::Test {
+                    self.guards.truncate(was);
+                    continue;
+                }
+                self.guards.extend(cfg_predicates(attrs));
                 let body: TokenStream = block.stmts.iter().map(ToTokens::to_token_stream).collect();
                 let mut calls = Vec::new();
                 let names = inputs::body(body.clone());
@@ -2507,6 +2554,7 @@ impl Counter {
                     entry,
                 });
                 self.nested(&block.stmts, class);
+                self.guards.truncate(was);
             }
         }
     }
@@ -2559,6 +2607,7 @@ impl Counter {
                     b.expanded = true;
                     b.shipped = true;
                     b.verus = true;
+                    b.verus_sure = false;
                     b.place = format!("{}:{at}", file.display());
                 }
                 self.emitted.extend(found);
@@ -3590,14 +3639,88 @@ impl Counter {
         {
             return Some(why.clone());
         }
-        bindings
+        let broken = bindings
             .iter()
             .filter(|b| match kind {
                 Took::StdPath | Took::StdBare => b.shipped,
                 Took::VerusPath | Took::VerusBare => b.verus,
             })
             .find(|b| breaks(b, kind, name, at))
-            .map(Binding::describe)
+            .map(Binding::describe);
+        if broken.is_some() || kind != Took::VerusBare {
+            return broken;
+        }
+        self.unsettled(bindings, at, &mut std::collections::BTreeSet::new())
+            .map(|b| {
+                format!(
+                    "{} may bring another crate's `verus`, and no import of Verus's (`use vstd::prelude::*;` or `use vstd::prelude::verus;`) beside it settles the name",
+                    b.describe()
+                )
+            })
+    }
+
+    /// The `*` a bare `verus!` in module `at` may take another crate's
+    /// `verus` through (a dependency's own macro of that name), if any,
+    /// among the crate's bindings and `extra`'s, read in Verus's build: a
+    /// `*` of another crate, or of a module of this one where such a `*`
+    /// is, unless the module that holds it also imports Verus's where
+    /// Verus's build is sure to compile the import. A `use`
+    /// of Verus's by name shadows a `*`, and a `*` of Verus's beside one
+    /// that brought another would make the name ambiguous, which rustc
+    /// refuses. `seen` holds the modules already read.
+    fn unsettled<'a>(
+        &'a self,
+        extra: &'a [Binding],
+        at: &[String],
+        seen: &mut std::collections::BTreeSet<Vec<String>>,
+    ) -> Option<&'a Binding> {
+        if !seen.insert(at.to_vec()) {
+            return None;
+        }
+        let here: Vec<&Binding> = self
+            .bindings
+            .iter()
+            .chain(extra)
+            .filter(|b| b.verus && b.module == at)
+            .collect();
+        // A `*` that may bring another `verus` is read where Verus's build
+        // may compile it; an import that settles the name, only where that
+        // build is sure to.
+        let confirmed = here.iter().any(|b| {
+            b.verus_sure
+                && match b.glob {
+                    true => one_of(&b.path, &VERUS_GLOBS),
+                    false => b.name == "verus" && one_of(&b.path, &VERUS_PATHS),
+                }
+        });
+        if confirmed {
+            return None;
+        }
+        for b in here
+            .into_iter()
+            .filter(|b| b.glob && !one_of(&b.path, &VERUS_GLOBS))
+        {
+            // Without `crate`, `self` or `super`, a path names a module of
+            // this crate only beside `at`, and with a leading `::` never
+            // (it names an extern crate); in edition 2015 either is from the
+            // crate root. Any other is another crate's.
+            let local = match b.path.first().map(String::as_str) {
+                Some("crate" | "self" | "super") if !b.absolute => self.module_from(at, &b.path),
+                _ if self.edition < 2018 => Some([&at[..1], &b.path[..]].concat()),
+                _ if b.absolute => None,
+                _ => Some([at, &b.path[..]].concat()),
+            }
+            .filter(|m| self.modules.contains(m));
+            match local {
+                Some(m) => {
+                    if let Some(far) = self.unsettled(extra, &m, seen) {
+                        return Some(far);
+                    }
+                }
+                None => return Some(b),
+            }
+        }
+        None
     }
 
     /// How item macro `name`, invoked by `path` and defined nowhere in the
@@ -3783,6 +3906,9 @@ const VERUS_PATHS: [&[&str]; 2] = [
     &["verus_builtin_macros", "verus"],
 ];
 
+/// The modules of [`VERUS_PATHS`], whose `*` imports Verus's `verus!`.
+const VERUS_GLOBS: [&[&str]; 2] = [&["vstd", "prelude"], &["verus_builtin_macros"]];
+
 /// The standard library's item macros that write nothing that ships,
 /// each with the paths of more than one segment that name it: only
 /// `compile_error!`, which stops the build, and is in the prelude. The
@@ -3821,8 +3947,9 @@ enum Took {
     /// it can make it another.
     VerusPath,
     /// A bare `verus!`: no binding of `vstd`, `verus_builtin_macros` or
-    /// `verus` but Verus's own, and no `#[macro_use] extern crate` but
-    /// Verus's or std's.
+    /// `verus` but Verus's own, no `#[macro_use] extern crate` but
+    /// Verus's or std's, and no `*` in its module but Verus's unless the
+    /// module imports Verus's too (`use vstd::prelude::*;`).
     VerusBare,
     /// `::core::compile_error!` or `::std::compile_error!`, by the rule
     /// for a leading `::`.
@@ -3850,8 +3977,13 @@ struct Binding {
     expanded: bool,
     shipped: bool,
     verus: bool,
+    /// Whether Verus's build is sure to compile it (`verus` says only that
+    /// it may); a binding written by an expansion is never taken as sure.
+    verus_sure: bool,
     /// An `extern crate path as name;`.
     extern_crate: bool,
+    /// A `use ::path..;`, whose path names an extern crate.
+    absolute: bool,
 }
 
 impl Binding {
@@ -3860,7 +3992,8 @@ impl Binding {
         let what = if self.macro_use {
             format!("`#[macro_use] extern crate {};`", self.name)
         } else if self.glob {
-            format!("`use {}::*;`", self.path.join("::"))
+            let root = if self.absolute { "::" } else { "" };
+            format!("`use {root}{}::*;`", self.path.join("::"))
         } else if self.path.is_empty() {
             format!("an item or module named `{}`", self.name)
         } else if self.extern_crate {
@@ -3952,10 +4085,14 @@ fn bindings_in(items: &[Item], at: &BindAt, atoms: &Atoms, out: &mut Vec<Binding
                 .all(|p| cfg_eval(p, verus, atoms).map_or(true, |c| c.t))
         };
         let (shipped, verus) = (sees(false), sees(true));
+        let verus_sure = guards
+            .iter()
+            .all(|p| cfg_eval(p, true, atoms).is_ok_and(|c| !c.f));
         let base = Binding {
             module: at.module.clone(),
             shipped,
             verus,
+            verus_sure,
             ..Binding::default()
         };
         let line = |s: proc_macro2::Span| format!("{}:{}", at.file.display(), s.start().line);
@@ -3967,6 +4104,7 @@ fn bindings_in(items: &[Item], at: &BindAt, atoms: &Atoms, out: &mut Vec<Binding
                     path,
                     glob,
                     name,
+                    absolute: u.leading_colon.is_some(),
                     place: line(u.use_token.span),
                     ..base.clone()
                 }));
@@ -7365,6 +7503,27 @@ mod tests {
             ),
             ["i: i -> i", "j: j -> j", "k: k -> k"]
         );
+        // A nested function built only for tests ships nothing: by its own
+        // `cfg`, a local module's, an `impl`'s, or an enclosing nested
+        // function's. One built otherwise (`not(test)`, a feature) is still
+        // reported, beside the gated ones.
+        assert_eq!(
+            recursing(
+                "fn outer() { if true { #[cfg(test)] fn helper() { helper(); } } \
+                 #[cfg(test)] mod t { fn in_mod() { in_mod(); } } \
+                 struct S; #[cfg(test)] impl S { fn m(&self) { self.m() } } \
+                 #[cfg(test)] fn wrap() { fn deep() { deep(); } } \
+                 #[cfg(not(test))] fn shipped() { shipped(); } \
+                 #[cfg(feature = \"x\")] mod f { fn featured() { featured(); } } \
+                 { fn plain() { plain(); } } }",
+                false
+            ),
+            [
+                "shipped: shipped -> shipped",
+                "featured: featured -> featured",
+                "plain: plain -> plain"
+            ]
+        );
         assert_eq!(
             recursing(
                 "fn a() { b() } fn b() { if x() { a() } } fn x() -> bool { true }",
@@ -9005,8 +9164,9 @@ verus! {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// The editions macros match by are the library's and each binary's,
-    /// their own or the package's (inherited from the workspace too), and
+    /// The editions macros match by are the library's (where the package
+    /// has one) and each binary's, their own or the package's (inherited
+    /// from the workspace too), and
     /// those of the tests, benches and examples whose `path` is a file
     /// under `src/`; one with no `path`, or a path outside `src/`, is not
     /// read.
@@ -9017,8 +9177,20 @@ verus! {
         fs::create_dir_all(k.join("src")).unwrap();
         fs::create_dir_all(k.join("tests")).unwrap();
         fs::write(k.join("src/legacy.rs"), "").unwrap();
+        fs::write(k.join("src/lib.rs"), "").unwrap();
         fs::write(k.join("tests/t.rs"), "").unwrap();
         for (ws, krate, want) in [
+            // `autolib = false` leaves `src/lib.rs` out, but not a `[lib]`.
+            (
+                "",
+                "[package]\nedition = \"2024\"\nautolib = false\n[[bin]]\nname = \"a\"\npath = \"src/legacy.rs\"\nedition = \"2021\"\n",
+                vec![2021],
+            ),
+            (
+                "",
+                "[package]\nedition = \"2024\"\nautolib = false\n[lib]\nedition = \"2021\"\n",
+                vec![2021],
+            ),
             (
                 "",
                 "[package]\nedition = \"2024\"\n[[test]]\nname = \"t\"\npath = \"src/legacy.rs\"\nedition = \"2021\"\n",
@@ -9053,6 +9225,31 @@ verus! {
             ),
         ] {
             fs::write(root.join("Cargo.toml"), ws).unwrap();
+            fs::write(k.join("Cargo.toml"), krate).unwrap();
+            let got = walked_editions(&root, &k);
+            assert_eq!(got, want, "{krate:?}: got = {got:?}, wanted = {want:?}");
+        }
+        // With no `src/lib.rs`, a package has a library only by a `[lib]
+        // path`: a binary-only one gives its binaries' editions alone, and
+        // one with no target the package's.
+        fs::remove_file(k.join("src/lib.rs")).unwrap();
+        fs::write(k.join("src/main.rs"), "").unwrap();
+        for (krate, want) in [
+            (
+                "[package]\nname = \"k\"\nedition = \"2024\"\nautobins = false\n[[bin]]\nname = \"k\"\npath = \"src/main.rs\"\nedition = \"2021\"\n",
+                vec![2021],
+            ),
+            ("[package]\nname = \"k\"\nedition = \"2021\"\n", vec![2021]),
+            (
+                "[package]\nname = \"k\"\nedition = \"2024\"\nautobins = false\n[lib]\npath = \"src/legacy.rs\"\nedition = \"2021\"\n",
+                vec![2021],
+            ),
+            (
+                "[package]\nname = \"k\"\nedition = \"2018\"\nautobins = false\n",
+                vec![2018],
+            ),
+        ] {
+            fs::write(root.join("Cargo.toml"), "").unwrap();
             fs::write(k.join("Cargo.toml"), krate).unwrap();
             let got = walked_editions(&root, &k);
             assert_eq!(got, want, "{krate:?}: got = {got:?}, wanted = {want:?}");

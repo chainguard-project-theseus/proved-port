@@ -444,7 +444,8 @@ The fragments match by the crate's edition, as rustc's do. An
 and below edition 2024 an `expr` is an `expr_2021`; below 2021 a `pat`
 is a `pat_param`, which takes no top-level `|`. The edition is that of
 the targets whose files the counter reads: the library (`[lib] edition`,
-else the package's), each binary (each `[[bin]]`'s, else the package's,
+else the package's), where there is one (a `[lib] path`, or
+`src/lib.rs` unless `autolib = false` with no `[lib]`), each binary (each `[[bin]]`'s, else the package's,
 and those cargo finds under `autobins`), and any `[[test]]`, `[[bench]]`
 or `[[example]]` whose `path` is under `src/`, with `edition.workspace =
 true` followed and 2015 when no key is given. The counter does not split
@@ -462,7 +463,8 @@ code outside expansions, with `[reach]`'s `exports_macro` and
 exports macro's blocks, found by their tokens (the name, plain or raw,
 then `!` and a delimited group, so `exports != n` is none), and fails
 closed: a file that does not lex or parse, one that imports the macro
-under another name (`use width::exports as wrap;`), and one whose
+under another name (`use width::exports as wrap;`; a cast such as
+`exports as u32` is no import), and one whose
 invocations outnumber the blocks the scan reads (an invocation inside
 another macro, a function body or an initializer) each fail the run.
 Write each block at the top of a module or `verus!` block, under the
@@ -592,8 +594,12 @@ Verus's, read in Verus's build:
   path (`use vstd::prelude::verus;`), and no `#[macro_use] extern crate`
   but `vstd`, `verus_builtin_macros`, `std`, `core` or `alloc` is in it,
   and no dependency named `vstd` or `verus_builtin_macros` is another
-  package (another crate's `*`, the usual way the name comes in, is
-  allowed);
+  package; and where no `*` in its module may bring another crate's
+  `verus` (a dependency can export its own): a `*` of another crate,
+  or of a module of the crate where such a `*` is (`use super::*;`),
+  is allowed only beside an import of Verus's in the same module (`use
+  vstd::prelude::*;` or `use vstd::prelude::verus;`), which settles the
+  name;
 - by any other path (`vstd::prelude::verus!` without `::`) never: the run
   fails (exit 1), as it does where a rule does not hold, naming why.
 
