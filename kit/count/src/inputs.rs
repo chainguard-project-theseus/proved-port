@@ -1,10 +1,14 @@
 //! The compile-inputs check (`[inputs]` in the configuration; pcre3's
 //! verus/theorems/CD1.md): no function reachable from the configured
 //! roots (pcre3's `Regex::new` and `serialize::encode_as`), or, with
-//! `lazy`, from a lazy builder (a function that calls `get_or_init`),
+//! `lazy`, from a lazy builder (a function a `get_or_init` calls),
 //! reads an input other than its arguments unless the configured table
-//! names it with a reason. A configured root that matches no function of
-//! the configured crates fails the check, since no walk starts from it.
+//! names it with a reason; with `lazy`, nor does a `get_or_init`
+//! initializer in place (a closure's body, or for an argument that is not
+//! a closure written there, such as a local `init`, the whole body that
+//! holds it), whatever function holds it.
+//! A configured root that matches no function of the configured crates
+//! fails the check, since no walk starts from it.
 //!
 //! A hidden input is a read of:
 //! - a `static` whose type can change after it is made (an atomic, a
@@ -12,7 +16,9 @@
 //!   `RwLock` or `UnsafeCell`, or a `static mut`). A static of plain data
 //!   (the Unicode and character tables) is a constant and is not one.
 //! - a `thread_local!` static.
-//! - the environment (`env::` or `std::env`).
+//! - the environment (`env::` or `std::env`, an imported `std::env`
+//!   function, or a `use .. as` name of `env` or of one of its functions,
+//!   through chains of renames).
 //! - a `HashMap`, `HashSet` or `RandomState`, whose iteration order is
 //!   seeded per process.
 //!
@@ -107,6 +113,11 @@ pub(crate) struct Body {
     /// The calls in the argument of a `get_or_init` (the builder of a part
     /// the pattern keeps), which the check takes as roots.
     pub(crate) lazy: Vec<Site>,
+    /// What each `get_or_init`'s argument reads in place (a closure's
+    /// body; for any other argument, the whole body that holds it), which
+    /// the check reads with `lazy` though no root reaches the function
+    /// that holds it.
+    pub(crate) inline: Vec<Body>,
 }
 
 /// A `static` item: its name, whether it is a hidden input whatever its
@@ -332,13 +343,21 @@ fn collect_idents(tokens: TokenStream, out: &mut BTreeSet<String>, env: &mut boo
 /// when a local has its name: the check does not reason about bindings, so
 /// a local named like a function costs an extra edge, never a missing one.
 pub(crate) fn body(tokens: TokenStream) -> Body {
+    let mut b = calls(tokens.clone());
+    collect_lazy(tokens.clone(), &mut b.lazy);
+    collect_inline(tokens.clone(), &tokens, &mut b.inline);
+    b
+}
+
+/// [`body`] but for the `get_or_init` initializers: the calls, the
+/// inserted ones too, and the names.
+fn calls(tokens: TokenStream) -> Body {
     let mut b = Body::default();
     collect_idents(tokens.clone(), &mut b.idents, &mut b.env);
     collect_sites(tokens.clone(), &mut b.sites);
     let mut sites = std::mem::take(&mut b.sites);
-    collect_inserted(tokens.clone(), &mut sites, &mut b);
+    collect_inserted(tokens, &mut sites, &mut b);
     b.sites = sites;
-    collect_lazy(tokens, &mut b.lazy);
     // Every body may drop a value and auto-deref one, which call `drop`,
     // `deref` and `deref_mut` with no syntax of their own.
     for m in ["drop", "deref", "deref_mut"] {
@@ -579,6 +598,74 @@ fn collect_lazy(tokens: TokenStream, out: &mut Vec<Site>) {
     }
 }
 
+/// The bodies of the arguments of each `get_or_init` in `tokens`, a part
+/// of `holder`, the body of the function that holds them. An argument
+/// that is not a closure written in place (`get_or_init(init)`, a local
+/// closure or a value made elsewhere in `holder`), or a closure that
+/// calls a name `holder` binds with `let` (`move || init()`), has its body
+/// somewhere the argument's tokens do not show, so it stands for all of
+/// `holder`.
+fn collect_inline(tokens: TokenStream, holder: &TokenStream, out: &mut Vec<Body>) {
+    let toks: Vec<TokenTree> = tokens.into_iter().collect();
+    for (i, t) in toks.iter().enumerate() {
+        match t {
+            TokenTree::Ident(id) if id == "get_or_init" => {
+                if let Some(TokenTree::Group(g)) = toks.get(i + 1)
+                    && g.delimiter() == Delimiter::Parenthesis
+                {
+                    let mut bound = BTreeSet::new();
+                    let_bound(holder.clone(), &mut bound);
+                    let arg = body(g.stream());
+                    let local = arg
+                        .sites
+                        .iter()
+                        .any(|s| matches!(s, Site::Free(n, _) if bound.contains(n)));
+                    out.push(if is_closure(g.stream()) && !local {
+                        arg
+                    } else {
+                        calls(holder.clone())
+                    });
+                }
+            }
+            TokenTree::Group(g) => collect_inline(g.stream(), holder, out),
+            _ => {}
+        }
+    }
+}
+
+/// The names `tokens` bind with `let NAME` or `let mut NAME`, at any depth.
+fn let_bound(tokens: TokenStream, out: &mut BTreeSet<String>) {
+    let toks: Vec<TokenTree> = tokens.into_iter().collect();
+    for (i, t) in toks.iter().enumerate() {
+        match t {
+            TokenTree::Ident(l) if l == "let" => {
+                let name = match toks.get(i + 1) {
+                    Some(TokenTree::Ident(m)) if m == "mut" => toks.get(i + 2),
+                    n => n,
+                };
+                if let Some(TokenTree::Ident(n)) = name {
+                    out.insert(n.to_string());
+                }
+            }
+            TokenTree::Group(g) => let_bound(g.stream(), out),
+            _ => {}
+        }
+    }
+}
+
+/// Whether `tokens` are a closure expression: `|..| ..`, `|| ..`, or
+/// either after `move`.
+fn is_closure(tokens: TokenStream) -> bool {
+    let mut toks = tokens.into_iter();
+    match toks.next() {
+        Some(TokenTree::Punct(p)) => p.as_char() == '|',
+        Some(TokenTree::Ident(m)) if m == "move" => {
+            matches!(toks.next(), Some(TokenTree::Punct(p)) if p.as_char() == '|')
+        }
+        _ => false,
+    }
+}
+
 fn collect_sites(tokens: TokenStream, out: &mut Vec<Site>) {
     sites_in(tokens, false, out);
 }
@@ -775,17 +862,67 @@ pub(crate) fn aliases_in(tokens: TokenStream, out: &mut Aliases) {
 
 /// The renames in a `use` tree's tokens: each `B as C`, in nested groups too.
 fn renames(toks: &[TokenTree], out: &mut Aliases) {
+    renames_under(toks, None, out);
+}
+
+/// [`renames`] in a `use` group whose path ends in `parent` (`env` for
+/// `std::env::{..}`): a `self as name` there renames `parent`. A `self`
+/// whose parent the tokens do not show is kept as `self`. One of
+/// `std::env`'s functions imported from a path ending in `env` under its
+/// own name (`use std::env::var;`, `{var, args}`, `*`) stands for itself,
+/// so a call of that name reads the environment even beside a function
+/// of the crate's own by that name.
+fn renames_under(toks: &[TokenTree], parent: Option<&str>, out: &mut Aliases) {
+    let punct =
+        |k: usize, c: char| matches!(toks.get(k), Some(TokenTree::Punct(p)) if p.as_char() == c);
+    // Whether the segment at `i` follows `env::`, or begins a group under `env`.
+    let under_env = |i: usize| {
+        if i >= 3 && punct(i - 1, ':') && punct(i - 2, ':') {
+            matches!(&toks[i - 3], TokenTree::Ident(s) if s == "env")
+        } else {
+            parent == Some("env") && (i == 0 || punct(i - 1, ','))
+        }
+    };
     for (i, t) in toks.iter().enumerate() {
         match t {
-            TokenTree::Group(g) => renames(&g.stream().into_iter().collect::<Vec<_>>(), out),
+            TokenTree::Ident(n)
+                if ENV_FNS.contains(&n.to_string().as_str())
+                    && under_env(i)
+                    && !matches!(toks.get(i + 1), Some(TokenTree::Ident(a)) if a == "as") =>
+            {
+                out.entry(n.to_string()).or_default().insert(n.to_string());
+            }
+            TokenTree::Punct(p) if p.as_char() == '*' && under_env(i) => {
+                for n in ENV_FNS {
+                    out.entry(n.to_owned()).or_default().insert(n.to_owned());
+                }
+            }
+            TokenTree::Group(g) => {
+                // The segment before the group's `::`.
+                let before = match (
+                    i.checked_sub(3).map(|p| &toks[p]),
+                    i.checked_sub(1).map(|p| &toks[p]),
+                ) {
+                    (Some(TokenTree::Ident(seg)), Some(TokenTree::Punct(p)))
+                        if p.as_char() == ':' =>
+                    {
+                        Some(seg.to_string())
+                    }
+                    _ => None,
+                };
+                let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                renames_under(&inner, before.as_deref(), out);
+            }
             TokenTree::Ident(kw) if kw == "as" => {
                 if let (Some(TokenTree::Ident(from)), Some(TokenTree::Ident(to))) =
                     (i.checked_sub(1).and_then(|p| toks.get(p)), toks.get(i + 1))
                     && to != "_"
                 {
-                    out.entry(to.to_string())
-                        .or_default()
-                        .insert(from.to_string());
+                    let from = match (from.to_string().as_str(), parent) {
+                        ("self", Some(p)) => p.to_owned(),
+                        (f, _) => f.to_owned(),
+                    };
+                    out.entry(to.to_string()).or_default().insert(from);
                 }
             }
             _ => {}
@@ -1011,7 +1148,15 @@ pub(crate) fn walk(
         }
     }
     for &i in compile.iter().filter(|_| lazy) {
-        for s in &fns[i].body.lazy {
+        // Each initializer's calls: those it names (a builder passed by
+        // name too) and every call its body makes in place, the ones the
+        // compiler inserts (an operator's `add`, a `drop`) included.
+        let b = fns[i].body;
+        for s in b
+            .lazy
+            .iter()
+            .chain(b.inline.iter().flat_map(|inl| inl.sites.iter()))
+        {
             for t in resolve(&fns[i], s) {
                 if let std::collections::btree_map::Entry::Vacant(e) = parent.entry(t) {
                     e.insert(None);
@@ -1065,18 +1210,32 @@ pub(crate) fn findings(
         .filter(|f| f.owner.is_empty() && roots.crates.contains(&f.krate))
         .map(|f| f.name)
         .collect();
-    for &i in parent.keys() {
-        let b = fns[i].body;
+    // The names a `use .. as` gives `std::env` or one of its functions
+    // (`use std::env as process;`, `use std::env::var as get;`), through
+    // chains of renames. The alias table keeps no paths, so a rename of
+    // any `env` or `var` counts: it fails closed.
+    let env_mod = renamed_to(aliases, &["env"]);
+    let env_fns = renamed_to(aliases, &ENV_FNS);
+    let inputs_of = |b: &Body| -> Vec<String> {
         let mut inputs: Vec<String> = b
             .idents
             .iter()
             .filter(|n| hidden.contains(n.as_str()) || SEEDED.contains(&n.as_str()))
             .cloned()
             .collect();
-        let imported_env = b.sites.iter().any(|s| {
-            matches!(s, Site::Free(n, _) if ENV_FNS.contains(&n.as_str()) && !free.contains(n.as_str()))
+        // A call of a `std::env` function, by its name or a rename, free
+        // (`get(..)`) or by a path (`reads::var(..)`, `self::get(..)`,
+        // through a module that re-exports or globs it), called or passed
+        // by name; a name the crates define for a free function of their
+        // own is theirs, unless a `use` imports it from `env` under that
+        // name ([`renames_under`]).
+        let env_call = |n: &str| (ENV_FNS.contains(&n) && !free.contains(n)) || env_fns.contains(n);
+        let imported_env = b.sites.iter().any(|s| match s {
+            Site::Free(n, _) | Site::Path(_, n, _) => env_call(n),
+            _ => false,
         });
-        if b.env || imported_env {
+        let renamed_env = b.idents.iter().any(|n| env_mod.contains(n.as_str()));
+        if b.env || imported_env || renamed_env {
             inputs.push("std::env".to_string());
         }
         if b.clock {
@@ -1085,15 +1244,18 @@ pub(crate) fn findings(
         if b.address {
             inputs.push("pointer address".to_string());
         }
-        for input in inputs {
-            let at_ = |k: usize| {
-                format!(
-                    "{} ({}:{})",
-                    fns[k].name,
-                    fns[k].file.display(),
-                    fns[k].line
-                )
-            };
+        inputs
+    };
+    let at_ = |k: usize| {
+        format!(
+            "{} ({}:{})",
+            fns[k].name,
+            fns[k].file.display(),
+            fns[k].line
+        )
+    };
+    for &i in parent.keys() {
+        for input in inputs_of(fns[i].body) {
             let mut chain = vec![at_(i)];
             let mut at = parent[&i];
             while let Some(p) = at {
@@ -1108,7 +1270,48 @@ pub(crate) fn findings(
             });
         }
     }
+    // With `lazy`, what a `get_or_init` initializer reads in place (a
+    // closure's body, not a builder it calls, which the walk roots) is
+    // read on first use, by whichever caller gets there first: each read
+    // is the calling function's, though no root reaches it.
+    if roots.lazy {
+        for i in (0..fns.len()).filter(|i| roots.crates.contains(&fns[*i].krate)) {
+            if parent.contains_key(&i) {
+                continue;
+            }
+            let found: BTreeSet<String> = fns[i].body.inline.iter().flat_map(inputs_of).collect();
+            for input in found {
+                out.push(Finding {
+                    func: i,
+                    input,
+                    chain: vec![format!("{} (a get_or_init initializer)", at_(i))],
+                });
+            }
+        }
+    }
     out
+}
+
+/// The names `aliases` maps, through any chain of renames, to one of
+/// `names`.
+fn renamed_to<'a>(aliases: &'a Aliases, names: &[&str]) -> BTreeSet<&'a str> {
+    let mut out: BTreeSet<&str> = BTreeSet::new();
+    loop {
+        let more: Vec<&str> = aliases
+            .iter()
+            .filter(|(n, targets)| {
+                !out.contains(n.as_str())
+                    && targets
+                        .iter()
+                        .any(|t| names.contains(&t.as_str()) || out.contains(t.as_str()))
+            })
+            .map(|(n, _)| n.as_str())
+            .collect();
+        if more.is_empty() {
+            return out;
+        }
+        out.extend(more);
+    }
 }
 
 /// The rows of CD1.md's allowlist table that allow no finding: a stale
@@ -1208,8 +1411,15 @@ mod tests {
                     forced: false,
                     ty: verus_syn::__private::ToTokens::to_token_stream(&*s.ty),
                 }),
-                Item::Struct(_) | Item::Mod(_) => {
-                    collect_types(std::slice::from_ref(item), &mut types)
+                Item::Struct(_) => collect_types(std::slice::from_ref(item), &mut types),
+                // A module's types, and its `use`s, as the walk reads an
+                // inline module's.
+                Item::Mod(_) => {
+                    collect_types(std::slice::from_ref(item), &mut types);
+                    aliases_in(
+                        verus_syn::__private::ToTokens::to_token_stream(item),
+                        &mut aliases,
+                    );
                 }
                 Item::Use(_) | Item::Type(_) => aliases_in(
                     verus_syn::__private::ToTokens::to_token_stream(item),
@@ -1487,6 +1697,153 @@ mod tests {
             fn later(c: &OnceLock<u8>) { c.get_or_init(build); }
             fn build() -> u8 { N.load(Relaxed) as u8 }";
         assert_eq!(reads(src), vec![("build".to_string(), "N".to_string())]);
+    }
+
+    /// What a `get_or_init` initializer reads in place (a closure's body)
+    /// is the holding function's read, though no root reaches it: a hidden
+    /// static and the environment. A reached function's initializer is
+    /// read once, with the rest of its body.
+    #[test]
+    fn an_initializer_read_in_place_is_reported() {
+        let src = "static N: AtomicU64 = AtomicU64::new(0);
+            fn later(c: &OnceLock<u64>) { c.get_or_init(|| N.load(Relaxed)); }
+            fn env_later(c: &OnceLock<u8>) { c.get_or_init(|| { std::env::var(\"X\"); 0 }); }
+            impl Regex { fn new(p: u8) { C.get_or_init(|| N.load(Relaxed)); } }";
+        let mut got = reads(src);
+        got.sort();
+        let want: Vec<(String, String)> = [("env_later", "std::env"), ("later", "N"), ("new", "N")]
+            .iter()
+            .map(|(f, i)| ((*f).to_string(), (*i).to_string()))
+            .collect();
+        assert_eq!(got, want);
+        // Every call an initializer makes in place roots the walk, the ones
+        // the compiler inserts too: `Foo + Foo` reaches `add`.
+        let src = "static N: AtomicU64 = AtomicU64::new(0);
+            fn later(c: &OnceLock<u64>) { c.get_or_init(|| Foo + Foo); }
+            struct Foo;
+            impl std::ops::Add for Foo { type Output = u64; fn add(self, _: Self) -> u64 { N.load(Relaxed) } }";
+        let got = reads(src);
+        assert!(
+            got.contains(&("add".to_string(), "N".to_string())),
+            "inserted call: got = {got:?}, wanted = add reading N"
+        );
+        // A guard the initializer builds and drops: its `Drop` is reached.
+        let src = "static N: AtomicU64 = AtomicU64::new(0);
+            fn later(c: &OnceLock<u64>) { c.get_or_init(|| { let _g = Guard; 0 }); }
+            struct Guard;
+            impl Drop for Guard { fn drop(&mut self) { N.load(Relaxed); } }";
+        let got = reads(src);
+        assert!(
+            got.contains(&("drop".to_string(), "N".to_string())),
+            "inserted drop: got = {got:?}, wanted = drop reading N"
+        );
+        // An initializer that is not a closure written in place (a local
+        // closure passed by name): the whole holder is read, its reads
+        // and its calls. Negative: a closure in place reads only itself.
+        let src = "static N: AtomicU64 = AtomicU64::new(0);
+            static M: AtomicU64 = AtomicU64::new(0);
+            fn later(c: &OnceLock<u64>) { let init = || N.load(Relaxed); c.get_or_init(init); }
+            fn later_call(c: &OnceLock<u64>) { let init = || reader(); c.get_or_init(move || init()); }
+            fn reader() -> u64 { M.load(Relaxed) }
+            fn in_place(c: &OnceLock<u64>) { M.load(Relaxed); c.get_or_init(|| 0); }";
+        let mut got = reads(src);
+        got.sort();
+        let want: Vec<(String, String)> = [("later", "N"), ("reader", "M")]
+            .iter()
+            .map(|(f, i)| ((*f).to_string(), (*i).to_string()))
+            .collect();
+        assert_eq!(got, want);
+    }
+
+    /// The environment read under a `use .. as` name, of a function or of
+    /// `std::env` itself, through a chain of renames too. Negative: a call
+    /// of the crate's own function of that name, with no rename.
+    #[test]
+    fn a_renamed_environment_read_is_reported() {
+        for (src, want) in [
+            (
+                "use std::env::var as get; impl Regex { fn new(p: u8) { let _ = get(\"X\"); } }",
+                true,
+            ),
+            (
+                "use std::env as process; impl Regex { fn new(p: u8) { process::var(\"X\"); } }",
+                true,
+            ),
+            (
+                "use std::env as e1; use e1 as e2; impl Regex { fn new(p: u8) { e2::var(\"X\"); } }",
+                true,
+            ),
+            // A grouped `self as` rename, and a qualified call of a renamed
+            // function a module re-exports.
+            (
+                "use std::env::{self as cfg}; impl Regex { fn new(p: u8) { cfg::var(\"X\"); } }",
+                true,
+            ),
+            (
+                "use std::env::{self as cfg}; impl Regex { fn new(p: u8) { cfg::current_exe(); } }",
+                true,
+            ),
+            (
+                "mod reads { pub use std::env::var as get; } impl Regex { fn new(p: u8) { reads::get(\"X\"); } }",
+                true,
+            ),
+            // No rename: a module that re-exports or globs `std::env`'s
+            // functions, called by a path; and a rename called through
+            // `self::` or `crate::`, or passed by name.
+            (
+                "mod reads { pub use std::env::var; } impl Regex { fn new(p: u8) { reads::var(\"X\"); } }",
+                true,
+            ),
+            (
+                "mod cfg { pub use std::env::*; } impl Regex { fn new(p: u8) { cfg::var(\"X\"); } }",
+                true,
+            ),
+            (
+                "use std::env::var as get; impl Regex { fn new(p: u8) { self::get(\"X\"); } }",
+                true,
+            ),
+            (
+                "use std::env::var as get; impl Regex { fn new(p: u8) { crate::get(\"X\"); } }",
+                true,
+            ),
+            (
+                "mod reads { pub use std::env::var as get; } impl Regex { fn new(p: u8) { p.map(reads::get); } }",
+                true,
+            ),
+            (
+                "impl Regex { fn new(p: u8) { get(1); } } fn get(x: u8) {}",
+                false,
+            ),
+            // An import of `env`'s function under its own name, beside an
+            // unrelated function of that name: the import decides.
+            (
+                "mod reads { pub use std::env::var; } fn var() {} impl Regex { fn new(p: u8) { reads::var(\"X\"); } }",
+                true,
+            ),
+            (
+                "mod reads { pub use std::env::{args, var}; } fn var() {} impl Regex { fn new(p: u8) { reads::var(\"X\"); } }",
+                true,
+            ),
+            (
+                "mod reads { pub use std::env::*; } fn var() {} impl Regex { fn new(p: u8) { reads::var(\"X\"); } }",
+                true,
+            ),
+            // The crate's own `ENV_FNS`-named function, with no import of
+            // `env`'s, or with it imported only under another name.
+            (
+                "fn var(x: u8) {} impl Regex { fn new(p: u8) { var(1); } }",
+                false,
+            ),
+            (
+                "use std::env::var as get; fn var(x: u8) {} impl Regex { fn new(p: u8) { var(1); } }",
+                false,
+            ),
+        ] {
+            let got = reads(src)
+                .iter()
+                .any(|(f, i)| f == "new" && i == "std::env");
+            assert!(got == want, "{src}: got = {got}, wanted = {want}");
+        }
     }
 
     #[test]

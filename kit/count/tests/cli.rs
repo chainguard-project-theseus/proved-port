@@ -774,6 +774,208 @@ fn a_reach_section_needs_its_file() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A crate's edition sets how its macros match: in edition 2021 an
+/// `$e:expr` begins at neither `_` nor `const`, so `m!(_)` takes the
+/// fallback and its function counts; in 2024 it takes the first rule. The
+/// edition is the library's (`[lib]`'s own, else the package's), never a
+/// test's, bench's or example's.
+#[test]
+fn the_edition_sets_what_an_expr_matches() {
+    let lib = "macro_rules! m { ($e:expr) => {}; ($t:tt) => { pub fn unproved() {} }; }\nm!(_);\n";
+    for (i, (targets, want)) in [
+        ("edition = \"2021\"\n", vec!["unproved".to_owned()]),
+        ("edition = \"2024\"\n", vec![]),
+        (
+            "edition = \"2024\"\n[[test]]\nname = \"t\"\nedition = \"2021\"\n[[bench]]\nname = \"b\"\nedition = \"2021\"\n[[example]]\nname = \"e\"\nedition = \"2021\"\n",
+            vec![],
+        ),
+        (
+            "edition = \"2021\"\n[[bench]]\nname = \"b\"\nedition = \"2024\"\n",
+            vec!["unproved".to_owned()],
+        ),
+        ("edition = \"2021\"\n[lib]\nedition = \"2024\"\n", vec![]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let dir = crate_of(&format!("edition-{i}"), &[("lib.rs", lib)]);
+        fs::write(
+            dir.join("crates/a/Cargo.toml"),
+            format!("[package]\nname = \"a\"\nversion = \"0.0.0\"\n{targets}"),
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+        assert!(
+            got == 0 && names == want,
+            "{targets:?}: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // Below edition 2021 a `pat` takes no top-level `|`, so `m!(A | B)`
+    // takes the fallback; with no `edition` key the crate is 2015.
+    let lib =
+        "macro_rules! m { ($p:pat) => {}; ($($t:tt)*) => { pub fn unproved() {} }; }\nm!(A | B);\n";
+    for (i, (targets, want)) in [
+        ("edition = \"2018\"\n", vec!["unproved".to_owned()]),
+        ("", vec!["unproved".to_owned()]),
+        ("edition = \"2021\"\n", vec![]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let dir = crate_of(&format!("edition-pat-{i}"), &[("lib.rs", lib)]);
+        fs::write(
+            dir.join("crates/a/Cargo.toml"),
+            format!("[package]\nname = \"a\"\nversion = \"0.0.0\"\n{targets}"),
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+        assert!(
+            got == 0 && names == want,
+            "pat {targets:?}: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// Targets whose files are read on both sides of 2024 read `expr`
+/// differently, and on both sides of 2021 `pat`, and the counter does not
+/// split the files it reads by target: the run fails. The binaries are the
+/// `[[bin]]` tables and those cargo finds (`src/main.rs`,
+/// `src/bin/NAME.rs`, `src/bin/NAME/main.rs`) at the package's edition,
+/// unless `autobins = false` or a `[[bin]]` of that name gives its own. A
+/// `[[test]]`, `[[bench]]` or `[[example]]` whose `path` is under `src/`
+/// is read too; one outside it is not.
+#[test]
+fn shipped_targets_across_2024_fail() {
+    let lib = "macro_rules! m { ($e:expr) => {}; ($t:tt) => { pub fn unproved() {} }; }\nm!(_);\n";
+    let split = "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\nedition = \"2021\"\n";
+    let package = "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n";
+    let mut cases = vec![
+        (
+            "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[[bin]]\nname = \"b\"\npath = \"src/main.rs\"\nedition = \"2021\"\n".to_owned(),
+            None,
+            1,
+        ),
+        (split.to_owned(), Some("main.rs"), 1),
+        (split.to_owned(), Some("bin/x.rs"), 1),
+        (split.to_owned(), Some("bin/y/main.rs"), 1),
+        (split.replace("[lib]", "autobins = false\n[lib]"), Some("main.rs"), 0),
+        (
+            format!("{split}[[bin]]\nname = \"a\"\nedition = \"2021\"\n"),
+            Some("main.rs"),
+            0,
+        ),
+        // `pat`: 2018 and 2021 differ, 2015 and 2018 do not.
+        (
+            "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2018\"\n[[bin]]\nname = \"b\"\npath = \"src/main.rs\"\nedition = \"2021\"\n".to_owned(),
+            Some("main.rs"),
+            1,
+        ),
+        (
+            "[package]\nname = \"a\"\nversion = \"0.0.0\"\n[[bin]]\nname = \"b\"\npath = \"src/main.rs\"\nedition = \"2018\"\n".to_owned(),
+            Some("main.rs"),
+            0,
+        ),
+    ];
+    // An example with no `edition` of its own takes the package's 2024
+    // beside a 2021 `[lib]`: the split fails too.
+    cases.push((
+        format!("{split}[[example]]\nname = \"demo\"\npath = \"src/legacy.rs\"\n"),
+        Some("legacy.rs"),
+        1,
+    ));
+    // A 2021 test, bench or example at `src/legacy.rs` beside a 2024
+    // library is read at the library's edition, where `m!(_)` would take
+    // the first rule: the run fails. One outside `src/` is never read.
+    for kind in ["test", "bench", "example"] {
+        cases.push((
+            format!(
+                "{package}[[{kind}]]\nname = \"l\"\npath = \"src/legacy.rs\"\nedition = \"2021\"\n"
+            ),
+            Some("legacy.rs"),
+            1,
+        ));
+        cases.push((
+            format!("{package}[[{kind}]]\nname = \"l\"\npath = \"other/legacy.rs\"\nedition = \"2021\"\n"),
+            None,
+            0,
+        ));
+    }
+    for (i, (manifest, bin, want)) in cases.into_iter().enumerate() {
+        let dir = crate_of(&format!("edition-split-{i}"), &[("lib.rs", lib)]);
+        fs::write(dir.join("crates/a/Cargo.toml"), &manifest).expect("write");
+        if let Some(bin) = bin {
+            let path = dir.join("crates/a/src").join(bin);
+            fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            let text = if bin == "legacy.rs" {
+                lib
+            } else {
+                "fn main() {}\n"
+            };
+            fs::write(path, text).expect("write");
+        }
+        let other = dir.join("crates/a/other");
+        fs::create_dir_all(&other).expect("mkdir");
+        fs::write(other.join("legacy.rs"), lib).expect("write");
+        let (got, _, err) = count(&dir, &["--list"]);
+        let split = err.contains("read a macro's `expr` or `pat` fragment differently");
+        assert!(
+            got == want && split == (want == 1),
+            "{manifest:?} with {bin:?}: got = exit {got}, {err:?}; wanted = exit {want}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// Every shipped file is scanned for export blocks, whether or not it
+/// holds a function, and an invocation is found by its tokens: with an
+/// empty REACH, an export block of a verified body passes; one in a file
+/// of `use`s alone that exports a body defined elsewhere fails as
+/// unmatched; and `width::exports !` (a space before the `!`) roots its
+/// unverified body, which then fails as reached.
+#[test]
+fn every_shipped_file_is_scanned_for_exports() {
+    let config = format!("{PLAIN}[reach]\npath = \"verus/REACH\"\nexports_macro = \"exports\"\n");
+    for (lib, exp, want) in [
+        (
+            "mod exp;\n",
+            "width::exports! { fn body [a, b, c] (); }\nverus! { pub fn body() {} }\n",
+            None,
+        ),
+        (
+            "mod exp;\npub fn body() {}\n",
+            "use super::body;\nwidth::exports! { fn body [a, b, c] (); }\n",
+            Some(
+                "an exports! block exports `body`, but the file defines no free function of that name",
+            ),
+        ),
+        (
+            "mod exp;\n",
+            "width::exports ! { fn body [a, b, c] (); }\npub fn body() {}\n",
+            Some("`body` is reachable from a C entry point"),
+        ),
+    ] {
+        let dir = crate_of("exports-files", &[("lib.rs", lib), ("exp.rs", exp)]);
+        fs::write(dir.join("verus/count.toml"), &config).expect("write");
+        fs::write(dir.join("verus/REACH"), "").expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        match want {
+            None => assert!(
+                got == 0,
+                "{exp}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+            ),
+            Some(want) => assert!(
+                got == 1 && err.contains(want),
+                "{exp}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+            ),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 /// A head that turns verus/count.toml, or the directory above it, into a
 /// symlink to a configuration without `[reach]` or `[mints]` exits 2,
 /// rather than comparing a path the base does not have.
@@ -817,6 +1019,40 @@ fn ratchet_stats(used: u64) -> String {
     format!(
         r#"{{"times-ms":{{"smt":{{"smt-run-module-times":[{{"module":"m","rlimit":0,"function-breakdown":[{{"function":"a::v","rlimit":{used}}}]}}]}}}},"verification-results":{{"success":true,"verified":1,"errors":0}}}}"#
     )
+}
+
+/// A crate whose only Verus code is a proof built only for Verus
+/// (`#[cfg(verus_keep_ghost)]`) counts outside functions alone, but Verus
+/// checks the proof, so its headroom is held: one using 90% of its rlimit
+/// fails `max-share 65`, where one using 30% passes.
+#[test]
+fn a_crate_of_verus_only_proofs_is_held_to_its_headroom() {
+    let lib = "pub fn o() {}\n#[cfg(verus_keep_ghost)]\nverus! {\nproof fn p() {}\n}\n";
+    let dir = crate_of("rlimit-ghost", &[("lib.rs", lib)]);
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}[rlimit]\npath = \"verus/RLIMIT\"\n"),
+    )
+    .expect("write");
+    fs::write(dir.join("verus/RLIMIT"), "max-share 65\n").expect("write");
+    let stats = dir.join("stats.json");
+    for (used, want, line) in [
+        (
+            27_000_000,
+            1,
+            "FAIL rlimit headroom: a::p uses 90.0% of its rlimit",
+        ),
+        (9_000_000, 0, "ok rlimit headroom: 1 functions"),
+    ] {
+        fs::write(&stats, ratchet_stats(used).replace("a::v", "a::p")).expect("write");
+        let s = stats.to_string_lossy().into_owned();
+        let (got, out, err) = count(&dir, &["--rlimit", &s]);
+        assert!(
+            got == want && (out.contains(line) || err.contains(line)),
+            "{used}: got = exit {got}, {out:?}, {err:?}; wanted = exit {want}, {line:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
 }
 
 /// The ratchets a port's verus check runs, through the command line it
@@ -1586,6 +1822,8 @@ fn a_path_qualified_verus_is_verus() {
         // crate shares its name.
         ("mod other {}\nuse ::other::*;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
         ("enum other { A }\nuse ::other::*;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("mod hidden { enum other { A } }\nuse other::*;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
+        ("mod q { pub use other as bridge; }\nuse q::bridge::*;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
         // Verus's build decides: a binding only it compiles counts.
         ("#[cfg(verus_keep_ghost)]\nuse other as vstd;\nvstd::prelude::verus! { pub fn f() {} }\n", SHADOWED),
         ("#[cfg(verus_keep_ghost)]\nuse other::verus;\nverus! { pub fn f() {} }\n", SHADOWED),
@@ -1626,6 +1864,7 @@ fn a_path_qualified_verus_is_verus() {
         "macro_rules! verus { ($($t:tt)*) => { $($t)* }; }\n::vstd::prelude::verus! { pub fn f() {} }\n",
         "use other::*;\nuse other as vstd;\n::vstd::prelude::verus! { pub fn f() {} }\n",
         "mod other {}\nmod s { use other::*; ::vstd::prelude::verus! { pub fn f() {} } }\n",
+        "mod hidden { enum other { A } }\nuse other::*;\n::vstd::prelude::verus! { pub fn f() {} }\n",
         "#[macro_use]\nextern crate other;\n::vstd::prelude::verus! { pub fn f() {} }\n",
         "#[cfg_attr(unix, macro_use)]\nextern crate core;\n::vstd::prelude::verus! { pub fn f() {} }\n",
         "#[macro_use]\nextern crate vstd;\nverus! { pub fn f() {} }\n",
@@ -1847,6 +2086,7 @@ fn std_item_macros_write_no_function() {
         ("use asmkit::*;", rows_at(Some("3"), &[1])),
         ("use core::ptr::*;", rows_at(Some("3"), &[1])),
         ("mod q { pub use asmkit::*; }\nuse q::*;", rows_at(Some("4"), &[1])),
+        ("mod q { pub use asmkit as bridge; }\nuse q::bridge::*;", rows_at(Some("4"), &[1])),
         ("mod asmkit {}\nmod s { use asmkit::*; compile_error!(\"\"); }", {
             let mut v = rows_at(None, &[1]);
             v.push(row("Outside", "crates/a/src/lib.rs:2", "compile_error!"));
