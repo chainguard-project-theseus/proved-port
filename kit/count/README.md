@@ -382,7 +382,152 @@ does. A predicate Verus's build never meets (`any()`, `test`, a
 `verus_never_sets` atom) never applies the attribute, so the function is
 outside.
 
+## Functions a macro writes
+
+A function an item macro writes is counted like any other, so moving
+code into a macro never takes it out of the denominator. An invocation
+at item position (in a module, an `impl` or a trait) of a `macro_rules!`
+the crate defines is expanded. The definition is one the build compiles
+(not one under `#[cfg(test)]` or in a test-only module, `verus!` block
+or file), found as rustc finds it. An invocation by a path
+(`width::exports!`, `$crate::m!`) takes the definitions that path names:
+one `#[macro_export]` puts at the crate root, or one its module
+re-exports (`pub(crate) use exports;`, or `pub(crate) use ex as build;`
+for `w::build!` and a `*` of `w`), with a first segment the module
+imports (`use crate::w as x;` then `x::ex!`) read as each path it
+imports, and as written too where a module of the crate has that name
+(two under `cfg(unix)` and `cfg(not(unix))` give two candidates). The
+crate's `use`s are followed to a fixed point: a module's `use` of a path
+that names a definition (`pub(crate) use crate::v::build;`, or `use
+crate::w::build as make;`, a rename) gives the definition that module's
+path under the name the `use` brings in, and a module's `use p::*;`
+gives it each path `p` names there, until no `use` adds one. A `use`
+counts only where its own `cfg`s, and its enclosing modules', let it be
+built: a test-only `use` imports nothing for a shipped build, and one
+under a `cfg` the counter cannot settle is a candidate. An invocation
+by a bare
+name takes the last definition of that name before it in its file whose
+module the invocation is in (a definition in a module that has closed
+is out of scope, unless `#[macro_use]` carries it out), and, while that
+one is under a `cfg` the counter cannot settle (a platform or a
+feature) and so may not be built, each before it back to the first
+under no such `cfg`. Failing an unconditional one, it also takes each
+definition its module imports by `use` under that name (`use w::ex;`,
+or `use w::ex as build;` for `build!`, the imported path read from the
+module), each in another file whose textual scope reaches the
+invocation (an enclosing module's, or one a `#[macro_use] mod name;`
+carries out of its file; not a sibling file's), and, at the crate root,
+each `#[macro_export]` puts there. A `macro_rules!` an expansion writes
+defines its macro from there on, a later one shadowing an earlier one
+as in source. The expansion follows rustc's
+rules (each rule tried in order; `ident`, `ty`, `expr`, `block`, `tt`
+and the other fragment kinds, a `tt` and a repetition's separator being
+one token as rustc's lexer makes them (`<<`, `::`, `'a`), a `literal`
+taking `true` and `false` and a `stmt` stopping before a `let`'s `;`; a
+fragment other than an `ident`, `lifetime` or `tt` forwarded to another
+macro staying one fragment of its kind, which no literal token matches
+and only a kind whose parser reads it does, as rustc decides (an `expr`
+reads a `literal`, and a `literal` an `expr` that is a literal; a
+`path` reads a `ty` that is a path; a `ty` is never an `expr`; a
+forwarded `vis`, empty or not, is one `vis`; any other pair rustc's
+matcher tries, the counter does not read, and the run fails, saying so:
+a `literal` from a forwarded `1 + 2` or `-x`, a `pat` from a forwarded
+`expr`, an `item` or `stmt` from a forwarded `vis`; rewrite the macro to
+match the fragment as its own kind);
+nested repetitions; `$crate`; a `$name` the rule does not bind written
+through, as a macro that writes a `macro_rules!` needs; an invocation
+the expansion writes is expanded in turn), and each function in it
+counts as outside `verus!`, since `verus!` does not expand the macros it
+holds. An expansion is read under its invocation's `cfg`s, as code a
+module holds is: one under a `cfg` Verus's build might not meet
+(`#[cfg(unix)] vone!(v1);`) ships its functions trusted, never
+verified, and a definition under such a `cfg` is a candidate, never
+dropped. The walks (REACH, recursion, compile inputs, mints) read only the
+code outside expansions, with `[reach]`'s `exports_macro` and
+`fn_ptr_macro` as before. The rlimit check reads the base revision's
+sources the same way, so a `#[verifier::rlimit]` a macro writes is held
+to the base's.
+
+A row lists a written function at the invocation's line. Its lines are
+the source lines its tokens come from, in the invocation's file and in
+each definition's, so a line added to an export's body in the invocation
+adds a line to that export. Two consequences:
+
+- A definition line counts once for each function each invocation
+  writes from it: a three-line body in a definition that writes 22
+  functions is 66 lines, as 22 hand-written copies would be. Outside
+  `verus!` that keeps the denominator honest; once the definition writes
+  `verus! { .. }`, its lines count as many times on the verified side,
+  which is as many functions as Verus checks.
+- A line with no token (a blank line or a comment inside an invocation)
+  is no line of a written function, where a hand-written function counts
+  every line from `fn` to its closing brace.
+
+An item macro the crate does not define (another crate's) cannot be
+expanded, so the invocation counts as one function outside `verus!`,
+named `NAME!`, over its lines: visible in `--list`, never missing. Each
+of these fails the run (exit 1), as the counter cannot give a count
+rustc would agree with:
+
+- an invocation that resolves to none of the crate's definitions of its
+  name, or of the name it was imported as, though the crate has one
+  (reached by a path the counter does not follow, or a definition an
+  expansion in a file read later writes); one whose name the module
+  imports from this crate (a `use` path from `crate`, `self`, `super` or
+  a module of the crate) by a path that names no definition; one by a
+  path into a module of the crate, or a `*` of one, that brings the name
+  in by a `use` the counter cannot follow to a definition: invoke it by
+  its definition's path, or in that definition's textual scope;
+- an invocation one of whose imported paths (a module alias's, or a
+  `use` of its name, under `cfg`s the counter cannot settle) names no
+  definition by a path the counter follows while another names one:
+  the build that takes the first would expand what the counter cannot
+  see;
+- a macro the crate defines whose invocation no rule matches, or whose
+  expansion does not parse;
+- more than one definition that can reach the invocation (a pair under
+  `cfg`s the counter cannot settle, such as `unix` and `not(unix)`, in
+  the invoking file or another) whose expansions count differently (a
+  different function, class or line count), or one of whose expansions
+  fails to count (an invocation it writes that does not expand or is
+  itself ambiguous); ones that count the same are expanded as the first;
+- an expansion nested more than 128 deep (rustc's default
+  `recursion_limit`);
+- a repetition matched in more than 4096 ways, a bound on the search
+  that a long `$($t:tt)*` reaches, since each iteration is a way to
+  stop.
+
+`count.toml` has no key that lets a run past these: the way forward is
+to rewrite the macro so it expands as rustc's would within the bounds
+(split a long invocation, keep one definition with the `cfg` inside its
+body). chainz, pcre3 and expat-rs come nowhere near the bounds (at most
+41 iterations of one repetition, and an expansion two deep).
+`thread_local!` writes statics, and counts nothing.
+
+One case stays quiet: a `*` that would bring a crate macro's name in
+only through a further `*` the counter cannot follow (`pub use
+me::w::*;` through an `extern crate self as me;`). The invocation then
+counts as another crate's macro, one `NAME!` row, unless the crate
+defines that name, which fails the run as above.
+
+Adopting a kit commit that expands macros lowers a port's shares with no
+change to the port, as functions that were in no denominator join it
+(chainz from 31.5% to 27.3% of functions, pcre3 from 91.5% to 85.6%), so
+the first re-sync fails its FLOOR. A port holds its FLOOR by verifying
+more: it brings the macros' bodies inside `verus!` (below), verified or
+trusted at a seam, and the re-sync waits until the port's figures hold
+its FLOOR. Lowering FLOOR is not the way to adopt a counter change.
+
+To raise the share, put the functions a macro writes inside `verus!`
+by writing them there, or have the macro write a `verus! { .. }` block,
+which is read as one.
+
 ## Parity
+
+The parity runs below predate macro expansion: a port whose crates
+invoke their own item macros (pcre3-capi's `width::exports!` and
+`fn_ptr!`) now counts their functions as well, so its table and
+`--list` differ by those rows.
 
 Run on the same commits, the kit counter's full output (standard
 output, standard error and `--list`) is byte-identical to each port's

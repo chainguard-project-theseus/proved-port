@@ -1094,6 +1094,1120 @@ fn the_badge_is_held_to_the_floor() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// chainz's `export!`, `forward!` and `twins!` shapes (one definition each,
+/// as crates/zlib-capi writes them), and macros of another crate, one over
+/// three lines and one on one.
+const MACROS: &str = r#"verus! {
+pub fn v() {}
+}
+
+macro_rules! export {
+    ($(fn $name:ident / $zname:ident($($arg:ident: $ty:ty),*) -> $ret:ty $body:block)*) => {
+        $(
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn $name($($arg: $ty),*) -> $ret {
+                guard(0, || $body)
+            }
+
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn $zname($($arg: $ty),*) -> $ret {
+                unsafe { $name($($arg),*) }
+            }
+        )*
+    };
+}
+
+macro_rules! forward {
+    ($(fn $name:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)? => $cname:ident, $fail:expr;)*) => {
+        unsafe extern "C" {
+            $(fn $cname($($arg: $ty),*) $(-> $ret)?;)*
+        }
+        $(
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn $name($($arg: $ty),*) $(-> $ret)? {
+                guard($fail, || unsafe { $cname($($arg),*) })
+            }
+        )*
+    };
+}
+
+macro_rules! twins {
+    ($(fn $name:ident / $zname:ident($($arg:ident: $ty:ty),*) $(-> $ret:ty)?;)*) => {
+        $(
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn $zname($($arg: $ty),*) $(-> $ret)? {
+                unsafe { $name($($arg),*) }
+            }
+        )*
+    };
+}
+
+export! {
+    fn adler32 / z_adler32(adler: u64, buf: *const u8, len: u32) -> u64 {
+        BODY
+    }
+    fn crc32 / z_crc32(crc: u64, buf: *const u8, len: u32) -> u64 {
+        crc
+    }
+}
+
+forward! {
+    fn zlibVersion() -> *const u8 => z_zlibVersion, null();
+    fn zError(err: i32) -> *const u8 => z_zError, null();
+}
+
+twins! {
+    fn inflate / z_inflate(strm: *mut u8, flush: i32) -> i32;
+    fn inflateEnd / z_inflateEnd(strm: *mut u8);
+}
+
+#[cfg(test)]
+export! {
+    fn t / z_t() -> u64 { 0 }
+}
+
+other::bitflags! {
+    pub struct Flags: u32 { const A = 1; }
+}
+
+other::flags! { pub struct G: u8 { const B = 1; } }
+"#;
+
+/// Each function a crate-local `macro_rules!` writes is counted, outside
+/// `verus!`, at its invocation's line; a line added to an invocation's body
+/// adds a line to its function; an item macro of another crate counts as
+/// one function outside `verus!` named for it, over the lines it spans
+/// (one for a one-line invocation, its bang and delimiters alike); one
+/// under a test-only cfg counts nothing. Negative: an invocation of a
+/// crate-local macro that no rule matches fails the run.
+#[test]
+fn functions_a_macro_writes_are_counted() {
+    let dir = std::env::temp_dir().join(format!("verus-count-cli-macros-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("crates/a/src")).expect("mkdir");
+    fs::create_dir_all(dir.join("verus")).expect("mkdir");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(dir.join("verus/count.toml"), PLAIN).expect("write");
+    let lib = dir.join("crates/a/src/lib.rs");
+    let rows = |body: &str| {
+        fs::write(&lib, MACROS.replace("BODY", body)).expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        assert!(
+            got == 0,
+            "--list: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+        );
+        list_rows(&out)
+    };
+    let one = rows("adler");
+    let at = |name: &str| {
+        let line = MACROS
+            .lines()
+            .position(|l| l.starts_with(name))
+            .expect("in MACROS")
+            + 1;
+        format!("crates/a/src/lib.rs:{line}")
+    };
+    let mut want: Vec<(String, String, String)> = vec![(
+        "Verified".into(),
+        "crates/a/src/lib.rs:2".into(),
+        "v".into(),
+    )];
+    for (name, invocation) in [
+        ("adler32", "export!"),
+        ("z_adler32", "export!"),
+        ("crc32", "export!"),
+        ("z_crc32", "export!"),
+        ("zlibVersion", "forward!"),
+        ("zError", "forward!"),
+        ("z_inflate", "twins!"),
+        ("z_inflateEnd", "twins!"),
+        ("bitflags!", "other::bitflags!"),
+        ("flags!", "other::flags!"),
+    ] {
+        want.push(("Outside".into(), at(invocation), name.into()));
+    }
+    let got: Vec<(String, String, String)> = one
+        .iter()
+        .map(|(c, f, n, _)| (c.clone(), f.clone(), n.clone()))
+        .collect();
+    assert_eq!(got, want, "rows: got = {got:?}, wanted = {want:?}");
+    let lines = |r: &[(String, String, String, String)], name: &str| {
+        r.iter()
+            .find(|x| x.2 == name)
+            .map(|x| x.3.parse::<usize>().expect("a count"))
+            .expect("listed")
+    };
+    for (name, want) in [("bitflags!", 3), ("flags!", 1)] {
+        let got = lines(&one, name);
+        assert!(got == want, "{name}'s lines: got = {got}, wanted = {want}");
+    }
+    // A second line in adler32's body: one more line for adler32 alone.
+    let two = rows("let s = adler;\n        s");
+    for (name, more) in [("adler32", 1), ("z_adler32", 0), ("crc32", 0)] {
+        let (a, b) = (lines(&one, name), lines(&two, name));
+        assert!(
+            b == a + more,
+            "{name}'s lines after a body line: got = {b}, wanted = {}",
+            a + more
+        );
+    }
+    fs::write(
+        &lib,
+        format!(
+            "{}\nexport! {{ not a function }}\n",
+            MACROS.replace("BODY", "adler")
+        ),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    let want = "export! does not expand: no rule matches the invocation";
+    assert!(
+        got == 1 && err.contains(want),
+        "no rule matches: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The function rows of `--list` output `out`: class, place, name and
+/// lines.
+fn list_rows(out: &str) -> Vec<(String, String, String, String)> {
+    out.lines()
+        .filter(|l| {
+            l.split('\t')
+                .nth(1)
+                .is_some_and(|c| c.starts_with(char::is_uppercase))
+        })
+        .map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            (
+                f[1].to_owned(),
+                f[3].to_owned(),
+                f[4].to_owned(),
+                f[2].to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// A crate `a` with `files` (path under `src/` and text) and `PLAIN`.
+fn crate_of(name: &str, files: &[(&str, &str)]) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("verus-count-cli-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("crates/a/src")).expect("mkdir");
+    fs::create_dir_all(dir.join("verus")).expect("mkdir");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(dir.join("verus/count.toml"), PLAIN).expect("write");
+    for (path, text) in files {
+        fs::write(dir.join("crates/a/src").join(path), text).expect("write");
+    }
+    dir
+}
+
+/// An invocation expands the definition rustc would: one a shipped build
+/// compiles (not one under `#[cfg(test)]`, in a `#[cfg(test)]` module or
+/// `verus!` block, or in a test-only file), and one whose textual scope it is in (not one in
+/// a module that has closed). Each would otherwise shadow the definition
+/// that writes the function, or make the name ambiguous.
+#[test]
+fn an_invocation_expands_the_definition_in_scope() {
+    let lib = "#[macro_use]\nmod helpers;\n#[cfg(test)]\nmod tests;\n\nmacro_rules! m { () => { pub fn f() {} }; }\n#[cfg(test)]\nmacro_rules! m { () => {}; }\nm!();\n\nn!();\n\nmacro_rules! k { () => { pub fn h() {} }; }\nmod closed { macro_rules! k { () => {}; } }\nk!();\n";
+    let helpers = "macro_rules! n { () => { pub fn g() {} }; }\n#[cfg(test)]\nmod inner { macro_rules! n { () => {}; } }\n#[cfg(test)]\nverus! { macro_rules! n { () => {}; } }\n";
+    let tests = "macro_rules! n { () => {}; }\n";
+    let dir = crate_of(
+        "scope",
+        &[
+            ("lib.rs", lib),
+            ("helpers.rs", helpers),
+            ("tests.rs", tests),
+        ],
+    );
+    let (got, out, err) = count(&dir, &["--list"]);
+    let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+    let want = ["f", "g", "h"];
+    assert!(
+        got == 0 && names == want,
+        "functions: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A function a macro writes into `verus!` under a `cfg` Verus's build
+/// might not meet (`unix`) is shipped and trusted, never verified, as a
+/// hand-written one under the same `cfg` is; without the `cfg` it is
+/// verified.
+#[test]
+fn a_function_a_macro_writes_under_an_unsure_cfg_is_trusted() {
+    let lib = "macro_rules! vone { ($n:ident) => { verus! { pub fn $n() {} } }; }\n#[cfg(unix)]\nvone!(v1);\nvone!(v2);\n#[cfg(unix)]\nverus! { pub fn h() {} }\n";
+    let dir = crate_of("unsure-macro", &[("lib.rs", lib)]);
+    let (got, out, err) = count(&dir, &["--list"]);
+    let rows: Vec<(String, String)> = list_rows(&out)
+        .into_iter()
+        .map(|(class, _, name, _)| (class, name))
+        .collect();
+    let want: Vec<(String, String)> = [("Trusted", "v1"), ("Verified", "v2"), ("Trusted", "h")]
+        .iter()
+        .map(|(c, n)| ((*c).to_owned(), (*n).to_owned()))
+        .collect();
+    assert!(
+        got == 0 && rows == want,
+        "rows: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A `vis` forwarded to another macro is one fragment there, empty or
+/// `pub(crate)`: `inner!`'s first rule matches and writes the function,
+/// where its catch-all would write nothing.
+#[test]
+fn a_forwarded_vis_is_one_fragment() {
+    for (invocation, want) in [("outer!(fn a);", "a"), ("outer!(pub(crate) fn a);", "a")] {
+        let lib = format!(
+            "macro_rules! inner {{\n    ($v:vis fn $n:ident) => {{ $v fn $n() {{}} }};\n    ($($t:tt)*) => {{}};\n}}\nmacro_rules! outer {{ ($v:vis fn $n:ident) => {{ inner!($v fn $n); }}; }}\n{invocation}\n"
+        );
+        let dir = crate_of("vis", &[("lib.rs", &lib)]);
+        let (got, out, err) = count(&dir, &["--list"]);
+        let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+        assert!(
+            got == 0 && names == [want],
+            "{invocation}: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, [{want:?}]"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// The review's three invocations rustc expands, through the command
+/// line: a `ty` forwarded to another macro stays a type (`inner!` writes
+/// `f`, not its `(u8)` rule's nothing), `true` is a `literal`, and
+/// `let x = 1` is a `stmt`.
+#[test]
+fn fragments_match_as_rustc_matches_them() {
+    let lib = "macro_rules! inner { (u8) => {}; ($t:ty) => { pub fn f() {} }; }\nmacro_rules! outer { ($t:ty) => { inner!($t); }; }\nouter!(u8);\n\nmacro_rules! b { ($b:literal) => { pub fn g() -> bool { $b } }; }\nb!(true);\n\nmacro_rules! s { ($s:stmt) => { pub fn h() { $s; } }; }\ns!(let x = 1);\n";
+    let dir = crate_of("fragments", &[("lib.rs", lib)]);
+    let (got, out, err) = count(&dir, &["--list"]);
+    let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+    let want = ["f", "g", "h"];
+    assert!(
+        got == 0 && names == want,
+        "functions: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The base revision's rlimits are read as the head's are, through the
+/// crate's macros: a macro whose definition, in another file, writes
+/// `verus! { #[verifier::rlimit(1)] .. }` holds its function to that
+/// limit, so raising it, or dropping the attribute for the default, needs
+/// an `rlimit-raised` line.
+#[test]
+fn a_limit_a_macro_writes_is_held_to_the_base() {
+    let lib = "#[macro_use]\nmod defs;\nw!();\npub fn o() {}\n";
+    let defs = |attr: &str| {
+        format!("macro_rules! w {{ () => {{ verus! {{ {attr} pub fn w() {{}} }} }}; }}\n")
+    };
+    let dir = crate_of(
+        "macro-rlimit",
+        &[
+            ("lib.rs", lib),
+            ("defs.rs", &defs("#[verifier::rlimit(1)]")),
+        ],
+    );
+    fs::write(dir.join("verus/count.toml"), RATCHET_CONFIG).expect("write");
+    fs::write(dir.join("verus/FLOOR"), RATCHET_FLOOR).expect("write");
+    fs::write(dir.join("verus/RLIMIT"), RATCHET_RLIMIT).expect("write");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "crates", "verus"]);
+    git(&dir, &["commit", "-q", "-m", "base"]);
+    let stats = dir.join("stats.json");
+    fs::write(&stats, ratchet_stats(1_000_000).replace("a::v", "a::w")).expect("write");
+    for (case, attr, code, want) in [
+        (
+            "as committed",
+            "#[verifier::rlimit(1)]",
+            0,
+            "ok rlimit headroom",
+        ),
+        (
+            "raised",
+            "#[verifier::rlimit(2)]",
+            1,
+            "raises a::w's rlimit from 1 to 2 with no new `rlimit-raised a::w 2 <reason>` line",
+        ),
+        (
+            "dropped",
+            "",
+            1,
+            "raises a::w's rlimit from 1 to 10 with no new `rlimit-raised a::w 10 <reason>` line",
+        ),
+    ] {
+        fs::write(dir.join("crates/a/src/defs.rs"), defs(attr)).expect("write");
+        let (got, out, err) = count(
+            &dir,
+            &[
+                "--floor",
+                &dir.join("verus/FLOOR").to_string_lossy(),
+                "--rlimit",
+                &stats.to_string_lossy(),
+                "--base-rev",
+                "HEAD",
+            ],
+        );
+        assert!(
+            got == code && (out.contains(want) || err.contains(want)),
+            "{case}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Macros defined in a second file, line for line as the expansion uses
+/// them: `one!`'s function's tokens sit on lines 3 to 5, the same numbers
+/// as lines of the invocation in lib.rs.
+const SHAPES_DEFS: &str = "macro_rules! one {
+    ($name:ident) => {
+        pub fn $name() {
+            let a = 1;
+        }
+    };
+}
+macro_rules! shl { ($name:ident, $op:tt) => { pub fn $name(a: u32, b: u32) -> u32 { a $op b } }; ($($rest:tt)*) => {}; }
+macro_rules! nest { ($n:ident) => { one! { $n } }; }
+macro_rules! meth { ($n:ident) => { fn $n(&self) {} }; }
+macro_rules! vone { ($n:ident) => { verus! { pub fn $n() {} } }; }
+macro_rules! deep { () => { deep!(); }; }
+macro_rules! bad { () => { pub fn }; }
+";
+
+/// Two definitions of each name in one module of a third file, under
+/// `cfg`s the counter cannot settle: `pair!`'s write the same functions,
+/// `diff!`'s do not.
+const SHAPES_PAIRS: &str = "#[cfg(unix)]
+macro_rules! pair { ($($n:ident),*) => { $(pub fn $n() {})* }; }
+#[cfg(not(unix))]
+macro_rules! pair { ($($n:ident),*) => { $(pub fn $n() {})* }; }
+#[cfg(unix)]
+macro_rules! diff { () => { pub fn du() {} }; }
+#[cfg(not(unix))]
+macro_rules! diff { () => { pub fn dw() {} }; }
+";
+
+const SHAPES_LIB: &str = "#[macro_use]
+mod defs;
+#[macro_use]
+mod pairs;
+one! {
+    f
+}
+shl!(shl, <<);
+nest!(n1);
+pub struct S;
+impl S {
+    meth!(m1);
+}
+pub trait T {
+    meth!(m2);
+}
+verus! {
+    one! { inside }
+}
+vone!(v1);
+pair!(a, b, c);
+macro_rules! two { () => { pub fn first() {} }; }
+macro_rules! two { () => { pub fn second() {} }; }
+two!();
+#[cfg(unix)]
+macro_rules! here { () => { pub fn h1() {} }; }
+#[cfg(not(unix))]
+macro_rules! here { () => { pub fn h1() {} }; }
+here!();
+";
+
+/// Each shape of invocation a port writes, through the command line: a
+/// definition in another file (with `f`'s lines, 3 from the definition and
+/// 1 from the invocation, though both files number them alike), a `tt`
+/// that is one token of two characters (`<<`), an expansion that writes an
+/// invocation (`nest!` writes `one!`), invocations in an `impl` and in a
+/// trait, one inside `verus!` (outside, as `verus!` expands no macro) and
+/// one that writes `verus! { .. }` (verified), two definitions in another
+/// file's module that write the same functions (expanded), two in the
+/// invoking file (the last before the invocation), and two in the
+/// invoking file under `cfg(unix)` and `cfg(not(unix))` that write the
+/// same functions (expanded). Negative: two definitions that write
+/// different functions, in another file or under those `cfg`s in the
+/// invoking file, an expansion deeper than rustc's recursion limit, and
+/// one that does not parse each exit 1.
+#[test]
+fn every_invocation_shape_is_counted() {
+    let dir = crate_of(
+        "shapes",
+        &[
+            ("lib.rs", SHAPES_LIB),
+            ("defs.rs", SHAPES_DEFS),
+            ("pairs.rs", SHAPES_PAIRS),
+        ],
+    );
+    let (got, out, err) = count(&dir, &["--list"]);
+    let rows: Vec<(String, String, String)> = list_rows(&out)
+        .into_iter()
+        .map(|(class, _, name, lines)| (class, name, lines))
+        .collect();
+    let row = |class: &str, name: &str, lines: &str| (class.into(), name.into(), lines.into());
+    let want: Vec<(String, String, String)> = vec![
+        row("Outside", "f", "4"),
+        row("Outside", "shl", "2"),
+        row("Outside", "n1", "4"),
+        row("Outside", "m1", "2"),
+        row("Outside", "m2", "2"),
+        row("Outside", "inside", "4"),
+        row("Verified", "v1", "2"),
+        row("Outside", "a", "2"),
+        row("Outside", "b", "2"),
+        row("Outside", "c", "2"),
+        row("Outside", "second", "1"),
+        row("Outside", "h1", "1"),
+    ];
+    assert!(
+        got == 0 && rows == want,
+        "rows: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+    );
+    for (invocation, want) in [
+        (
+            "diff!();",
+            "diff! could be any of 2 definitions (crates/a/src/pairs.rs:6, crates/a/src/pairs.rs:8), which count differently",
+        ),
+        (
+            "#[cfg(unix)]\nmacro_rules! pm { () => { pub fn ma() {} pub fn mb() {} }; }\n#[cfg(not(unix))]\nmacro_rules! pm { () => { pub fn ma() {} }; }\npm!();",
+            "pm! could be any of 2 definitions (crates/a/src/lib.rs:33, crates/a/src/lib.rs:31), which count differently",
+        ),
+        ("deep!();", "deep! expands more than 128 macros deep"),
+        ("bad!();", "bad! does not expand"),
+    ] {
+        fs::write(
+            dir.join("crates/a/src/lib.rs"),
+            format!("{SHAPES_LIB}{invocation}\n"),
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 1 && err.contains(want),
+            "{invocation}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A definition reaches an invocation in another file only along a path
+/// rustc resolves: an enclosing module's textual scope (not a sibling
+/// file's private definition), a `use NAME;` re-export named by a path
+/// (`w::ex!`, `$crate::w::ex!`), or a definition an expansion writes
+/// (a macro that defines a macro; of two one expansion writes, the later
+/// shadows). Two definitions that may each be the one must count the same
+/// rows, class and lines included: a pair whose functions differ only in
+/// `external_body` exits 1, as does a pair one of which writes an
+/// invocation that is itself ambiguous, and a same-file definition under
+/// a `cfg` beside an enclosing module's unconditional one. An invocation
+/// imported under a new name, or through a module imported under one,
+/// resolves by the imported path (from `crate::` or from the root). One
+/// that resolves to none of the crate's definitions of its name or of the
+/// name it was imported as (through a glob of a re-export, a renamed
+/// import of another module's re-export, or a definition a file read
+/// later writes) exits 1 rather than counting as one function, as does a
+/// module alias under `cfg`s one of whose paths names no definition. A
+/// test-only `use` imports nothing.
+#[test]
+fn a_definition_reaches_an_invocation_as_rustc_resolves_it() {
+    for (case, files, code, want) in [
+        (
+            "an enclosing module's, not a sibling file's",
+            &[
+                (
+                    "lib.rs",
+                    "macro_rules! m { () => { pub fn f() {} }; }\nmod caller;\nmod closed;\n",
+                ),
+                ("caller.rs", "m!();\n"),
+                ("closed.rs", "macro_rules! m { () => {}; }\n"),
+            ][..],
+            0,
+            &["f"][..],
+        ),
+        (
+            "a re-export named by a path",
+            &[
+                (
+                    "lib.rs",
+                    "mod w;\nw::ex!();\nmacro_rules! twice { () => { $crate::w::ex2!(); }; }\ntwice!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { pub fn pe() {} }; }\npub(crate) use ex;\nmacro_rules! ex2 { () => { pub fn pe2() {} }; }\npub(crate) use ex2;\n",
+                ),
+            ][..],
+            0,
+            &["pe", "pe2"][..],
+        ),
+        (
+            "a definition an expansion writes",
+            &[(
+                "lib.rs",
+                "macro_rules! outer {\n    ($name:ident) => {\n        macro_rules! $name { ($x:ident) => { pub fn $x() {} pub fn b() {} }; }\n        $name!(a);\n    };\n}\nouter!(inner);\n",
+            )][..],
+            0,
+            &["a", "b"][..],
+        ),
+        (
+            "a pair that differs in class alone",
+            &[
+                ("lib.rs", "#[macro_use]\nmod pair;\nv!();\n"),
+                (
+                    "pair.rs",
+                    "#[cfg(unix)]\nmacro_rules! v { () => { verus! { pub fn f() {} } }; }\n#[cfg(not(unix))]\nmacro_rules! v { () => { verus! { #[verifier::external_body] pub fn f() {} } }; }\n",
+                ),
+            ][..],
+            1,
+            &["v! could be any of 2 definitions"][..],
+        ),
+        (
+            "a pair one of which writes an ambiguous invocation",
+            &[
+                ("lib.rs", "#[macro_use]\nmod defs;\nm!();\n"),
+                (
+                    "defs.rs",
+                    "#[cfg(unix)] macro_rules! m { () => {}; }\n#[cfg(not(unix))] macro_rules! m { () => { n!(); }; }\n#[cfg(unix)] macro_rules! n { () => { fn a() {} }; }\n#[cfg(not(unix))] macro_rules! n { () => { fn b() {} }; }\n",
+                ),
+            ][..],
+            1,
+            &[
+                "m! could be any of 2 definitions (crates/a/src/defs.rs:1, crates/a/src/defs.rs:2), and one of them does not count",
+            ][..],
+        ),
+        (
+            "definitions one expansion writes, in order",
+            &[(
+                "lib.rs",
+                "macro_rules! outer {\n    () => {\n        macro_rules! inner { () => {}; }\n        inner!();\n        macro_rules! inner { () => { pub fn b() {} pub fn c() {} }; }\n        inner!();\n    };\n}\nouter!();\n",
+            )][..],
+            0,
+            &["b", "c"][..],
+        ),
+        (
+            "every same-file definition under a cfg, an enclosing one without",
+            &[
+                (
+                    "lib.rs",
+                    "macro_rules! m { () => { fn a() {} fn b() {} }; }\nmod caller;\n",
+                ),
+                (
+                    "caller.rs",
+                    "#[cfg(unix)]\nmacro_rules! m { () => { fn a() {} }; }\nm!();\n",
+                ),
+            ][..],
+            1,
+            &["m! could be any of 2 definitions"][..],
+        ),
+        (
+            "a definition reached through a glob of a re-export",
+            &[
+                ("lib.rs", "mod w;\nmod prelude;\nmod caller;\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} fn b() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("prelude.rs", "pub(crate) use crate::w::ex;\n"),
+                ("caller.rs", "use crate::prelude::*;\nex!();\n"),
+            ][..],
+            0,
+            &["a", "b"][..],
+        ),
+        (
+            "a glob of a module whose re-export the counter cannot follow",
+            &[
+                (
+                    "lib.rs",
+                    "extern crate self as me;\nmod w;\nmod prelude;\nmod caller;\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} fn b() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("prelude.rs", "pub(crate) use me::w::ex;\n"),
+                ("caller.rs", "use crate::prelude::*;\nex!();\n"),
+            ][..],
+            1,
+            &[
+                "crates/a/src/caller.rs:2: ex! may come through `crate::prelude::*`, which re-exports `ex` by a path the counter does not follow",
+            ][..],
+        ),
+        (
+            "globs under cfgs of modules that re-export definitions counting differently",
+            &[
+                (
+                    "lib.rs",
+                    "mod w;\nmod v;\nmod p;\n#[cfg(unix)] use crate::w::*;\n#[cfg(not(unix))] use crate::p::*;\nbuild!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex as build;\n",
+                ),
+                (
+                    "v.rs",
+                    "macro_rules! ex { () => { fn a() {} fn b() {} }; }\npub(crate) use ex as build;\n",
+                ),
+                ("p.rs", "pub(crate) use crate::v::build;\n"),
+            ][..],
+            1,
+            &["build! could be any of 2 definitions"][..],
+        ),
+        (
+            "globs under cfgs of modules that re-export definitions counting the same",
+            &[
+                (
+                    "lib.rs",
+                    "mod w;\nmod v;\nmod p;\n#[cfg(unix)] use crate::w::*;\n#[cfg(not(unix))] use crate::p::*;\nbuild!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex as build;\n",
+                ),
+                (
+                    "v.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex as build;\n",
+                ),
+                ("p.rs", "pub(crate) use crate::v::build;\n"),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a named use and a glob under cfgs, to definitions counting differently",
+            &[
+                (
+                    "lib.rs",
+                    "mod w;\nmod v;\nmod p;\n#[cfg(unix)] use crate::w::ex;\n#[cfg(not(unix))] use crate::p::*;\nex!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                (
+                    "v.rs",
+                    "macro_rules! ex { () => { fn a() {} fn b() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("p.rs", "pub(crate) use crate::v::ex;\n"),
+            ][..],
+            1,
+            &["ex! could be any of 2 definitions"][..],
+        ),
+        (
+            "a rename in another module, by its path",
+            &[
+                ("lib.rs", "mod w;\nmod p;\np::make!();\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("p.rs", "pub(crate) use crate::w::ex as make;\n"),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a rename in another module, by its path from the crate",
+            &[
+                ("lib.rs", "mod w;\nmod p;\ncrate::p::make!();\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("p.rs", "pub(crate) use crate::w::ex as make;\n"),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a rename in another module, through a glob",
+            &[
+                ("lib.rs", "mod w;\nmod p;\nuse crate::p::*;\nmake!();\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("p.rs", "pub(crate) use crate::w::ex as make;\n"),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a two-step chain of renames",
+            &[
+                ("lib.rs", "mod w;\nmod p;\np::make!();\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex as build;\n",
+                ),
+                ("p.rs", "pub(crate) use crate::w::build as make;\n"),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a three-step chain of renames",
+            &[
+                ("lib.rs", "mod w;\nmod p;\nmod q;\nq::run!();\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex as build;\n",
+                ),
+                ("p.rs", "pub(crate) use crate::w::build as make;\n"),
+                ("q.rs", "pub(crate) use crate::p::make as run;\n"),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a path through a module's rename the counter cannot follow",
+            &[
+                (
+                    "lib.rs",
+                    "extern crate self as me;\nmod w;\nmod q;\nq::run!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("q.rs", "pub(crate) use me::w::ex as run;\n"),
+            ][..],
+            1,
+            &[
+                "crates/a/src/lib.rs:4: q::run! names `run` in `a::q`, which brings it in by a `use` the counter does not follow",
+            ][..],
+        ),
+        (
+            "a named use under cfgs, one path of which names no definition",
+            &[
+                (
+                    "lib.rs",
+                    "extern crate self as me;\nmod w;\nmod v;\n#[cfg(unix)] use crate::w::ex;\n#[cfg(not(unix))] use me::v::ex;\nex!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                (
+                    "v.rs",
+                    "macro_rules! ex { () => { fn a() {} fn b() {} }; }\npub(crate) use ex;\n",
+                ),
+            ][..],
+            1,
+            &[
+                "crates/a/src/lib.rs:6: ex! may stand for `me::v::ex`, which names none of this crate's definitions",
+            ][..],
+        ),
+        (
+            "a definition imported under a new name",
+            &[
+                ("lib.rs", "mod w;\nmod caller;\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("caller.rs", "use crate::w::ex as build;\nbuild!();\n"),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a definition imported under a new name by a path from the root",
+            &[
+                ("lib.rs", "mod w;\nuse w::ex as build;\nbuild!();\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} fn b() {} }; }\npub(crate) use ex;\n",
+                ),
+            ][..],
+            0,
+            &["a", "b"][..],
+        ),
+        (
+            "a module imported under a new name",
+            &[
+                ("lib.rs", "mod w;\nmod caller;\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("caller.rs", "use crate::w as x;\nx::ex!();\n"),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a module alias under cfgs, to definitions that count differently",
+            &[
+                (
+                    "lib.rs",
+                    "mod w;\nmod v;\n#[cfg(unix)] use crate::w as x;\n#[cfg(not(unix))] use crate::v as x;\nx::ex!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                (
+                    "v.rs",
+                    "macro_rules! ex { () => { fn a() {} fn b() {} }; }\npub(crate) use ex;\n",
+                ),
+            ][..],
+            1,
+            &[
+                "ex! could be any of 2 definitions (crates/a/src/w.rs:1, crates/a/src/v.rs:1), which count differently",
+            ][..],
+        ),
+        (
+            "a module alias under cfgs, to definitions that count the same",
+            &[
+                (
+                    "lib.rs",
+                    "mod w;\nmod v;\n#[cfg(unix)] use crate::w as x;\n#[cfg(not(unix))] use crate::v as x;\nx::ex!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                (
+                    "v.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a module alias under cfgs, one path through a re-export",
+            &[
+                (
+                    "lib.rs",
+                    "mod w;\nmod v;\nmod p;\n#[cfg(unix)] use crate::w as x;\n#[cfg(not(unix))] use crate::p as x;\nx::ex!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                (
+                    "v.rs",
+                    "macro_rules! ex { () => { fn a() {} fn b() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("p.rs", "pub(crate) use crate::v::ex;\n"),
+            ][..],
+            1,
+            &["crates/a/src/lib.rs:6: ex! could be any of 2 definitions"][..],
+        ),
+        (
+            "a module alias under cfgs, one path of which names no definition",
+            &[
+                (
+                    "lib.rs",
+                    "extern crate self as me;\nmod w;\nmod v;\nmod p;\n#[cfg(unix)] use crate::w as x;\n#[cfg(not(unix))] use crate::p as x;\nx::ex!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                (
+                    "v.rs",
+                    "macro_rules! ex { () => { fn a() {} fn b() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("p.rs", "pub(crate) use me::v::ex;\n"),
+            ][..],
+            1,
+            &[
+                "crates/a/src/lib.rs:7: ex! may stand for `crate::p::ex`, which names none of this crate's definitions",
+            ][..],
+        ),
+        (
+            "a module alias a test-only use would shadow",
+            &[
+                (
+                    "lib.rs",
+                    "mod w;\nmod v;\n#[cfg(not(test))] use crate::w as x;\n#[cfg(test)] use crate::v as x;\nx::ex!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                (
+                    "v.rs",
+                    "macro_rules! ex { () => { fn a() {} fn b() {} }; }\npub(crate) use ex;\n",
+                ),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a module alias or a module of the same name, counting differently",
+            &[
+                (
+                    "lib.rs",
+                    "mod w;\n#[cfg(unix)] mod x;\n#[cfg(not(unix))] use crate::w as x;\nx::ex!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                (
+                    "x.rs",
+                    "macro_rules! ex { () => { fn a() {} fn b() {} }; }\npub(crate) use ex;\n",
+                ),
+            ][..],
+            1,
+            &["ex! could be any of 2 definitions"][..],
+        ),
+        (
+            "a module alias or a module of the same name, counting the same",
+            &[
+                (
+                    "lib.rs",
+                    "mod w;\n#[cfg(unix)] mod x;\n#[cfg(not(unix))] use crate::w as x;\nx::ex!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                (
+                    "x.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a re-export under a new name, by its path",
+            &[
+                ("lib.rs", "mod w;\nw::build!();\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex as build;\n",
+                ),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a re-export under a new name, through a glob",
+            &[
+                ("lib.rs", "mod w;\nuse crate::w::*;\nbuild!();\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex as build;\n",
+                ),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a re-export under a new name, through a glob of another re-export",
+            &[
+                ("lib.rs", "mod w;\nmod p;\nuse crate::p::*;\nbuild!();\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex as build;\n",
+                ),
+                ("p.rs", "pub(crate) use crate::w::build;\n"),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a definition an expansion writes in another file, through a glob",
+            &[
+                (
+                    "lib.rs",
+                    "mod w;\nmod caller;\nmacro_rules! outer {\n    ($name:ident) => {\n        macro_rules! $name { () => { fn a() {} }; }\n    };\n}\nouter!(build);\n",
+                ),
+                ("w.rs", ""),
+                ("caller.rs", "use crate::w::*;\nbuild!();\n"),
+            ][..],
+            1,
+            &["crates/a/src/caller.rs:2: build! resolves to none of this crate's definitions"][..],
+        ),
+        (
+            "a renamed import through a module's re-export",
+            &[
+                ("lib.rs", "mod w;\nmod p;\nuse p::ex as build;\nbuild!();\n"),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("p.rs", "pub(crate) use crate::w::ex;\n"),
+            ][..],
+            0,
+            &["a"][..],
+        ),
+        (
+            "a renamed import through a module's re-export the counter cannot follow",
+            &[
+                (
+                    "lib.rs",
+                    "extern crate self as me;\nmod w;\nmod p;\nuse p::ex as build;\nbuild!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+                ("p.rs", "pub(crate) use me::w::ex;\n"),
+            ][..],
+            1,
+            &["build! is imported from this crate by a path the counter does not follow"][..],
+        ),
+        (
+            "a renamed import by a path the counter cannot place",
+            &[
+                (
+                    "lib.rs",
+                    "extern crate self as me;\nmod w;\nuse me::w::ex as build;\nbuild!();\n",
+                ),
+                (
+                    "w.rs",
+                    "macro_rules! ex { () => { fn a() {} }; }\npub(crate) use ex;\n",
+                ),
+            ][..],
+            1,
+            &["crates/a/src/lib.rs:4: ex! resolves to none of this crate's definitions"][..],
+        ),
+        (
+            "a definition an expansion in a file read later writes",
+            &[
+                (
+                    "lib.rs",
+                    "macro_rules! outer {\n    ($name:ident) => {\n        macro_rules! $name { ($x:ident) => { fn $x() {} fn b() {} }; }\n    };\n}\nouter!(inner);\nmod caller;\n",
+                ),
+                ("caller.rs", "inner!(a);\n"),
+            ][..],
+            1,
+            &["inner! resolves to none of this crate's definitions"][..],
+        ),
+    ] {
+        let dir = crate_of("resolve", files);
+        let (got, out, err) = count(&dir, &["--list"]);
+        let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+        let ok = match code {
+            0 => names == want,
+            _ => want.iter().all(|w| err.contains(w)),
+        };
+        assert!(
+            got == code && ok,
+            "{case}: got = exit {got}, {names:?}, {err:?}; wanted = exit {code}, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 /// wolfi-dev/proved-port#12's reproducer: a function under a `cfg` Verus's
 /// build might not meet (`target_os = "windows"`, which a Linux proof run
 /// never sees) ships with nothing to prove Verus checked it, so it counts

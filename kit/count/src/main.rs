@@ -41,6 +41,15 @@
 //! `target_os = "windows"`, or any other atom, may be either.
 //! Lines run from a function's `fn` keyword to its closing brace.
 //!
+//! A function an item macro writes counts too ([`Counter::item_macro`]):
+//! an invocation of a `macro_rules!` the crate defines is expanded
+//! ([`expand`]), and each function in the expansion counts as outside
+//! `verus!`, listed at the invocation's line, its lines those of the
+//! invocation and the definition it came from. An item macro the crate
+//! does not define counts as one function outside `verus!`, named
+//! `NAME!`, so no function leaves the tally for being written by a macro;
+//! one the crate defines that does not expand fails the run.
+//!
 //! Usage: `verus-count [--config FILE] [--list] [--floor FILE [--base-rev
 //! REV | --no-base]] [--rlimit STATS] ROOT`, with ROOT the repository root (default
 //! `.`) and FILE the configuration (default `ROOT/verus/count.toml`);
@@ -117,6 +126,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod config;
+mod expand;
 mod inputs;
 mod ledger;
 mod mints;
@@ -138,7 +148,7 @@ enum Class {
     Discharged,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Tally {
     fns: [usize; 4],
     lines: [usize; 4],
@@ -225,7 +235,86 @@ struct Counter {
     /// Whether ghost functions of code built only for Verus count in the
     /// ghost column (`[crates] verus_only_ghost`).
     verus_only_ghost: bool,
+    /// The crate's `macro_rules!` definitions, by name, for
+    /// [`Counter::item_macro`].
+    macros: BTreeMap<String, Vec<MacroDef>>,
+    /// Each module's `use` paths, for [`Counter::item_macro`] to resolve a
+    /// macro an invocation names by an import ([`use_paths`]).
+    uses: BTreeMap<Vec<String>, Vec<UsePath>>,
+    /// While [`Counter::item_macro`] walks an expansion: the outermost
+    /// invocation's line, which each function it writes is listed at.
+    expansion: Option<usize>,
+    /// How deep the expansion being walked is nested.
+    depth: usize,
+    /// While [`Counter::item_macro`] compares the definitions an
+    /// invocation may expand: the rows a candidate's expansion writes,
+    /// gathered in place of the tally ([`Counter::tally`]).
+    dry: Option<Vec<(Class, String, usize)>>,
+    /// The invocations that resolved to no definition and were counted as
+    /// another crate's macro (`NAME!`), with where they are: once the crate
+    /// is read, one whose name the crate defines fails the run
+    /// ([`Counter::walk_crate`]), so that no function the crate's macro
+    /// writes leaves the tally for a lookup the counter does not follow.
+    unresolved: Vec<(String, String)>,
+    /// Every module of the crate, by path from its root, so that a `use`
+    /// path whose first segment is one of them reads as this crate's.
+    modules: std::collections::BTreeSet<Vec<String>>,
 }
+
+/// One path a `use` names: its segments as written (the imported item
+/// last), whether it ends in `*`, and the name it brings into scope (the
+/// last segment, or the new name of a `use .. as`; empty for `*`).
+type UseTarget = (Vec<String>, bool, String);
+
+/// A [`UseTarget`] of this crate, with where its `use` (with its `cfg`s
+/// and its enclosing modules') is built: a test-only import imports
+/// nothing a shipped build sees.
+type UsePath = (Vec<String>, bool, String, Built);
+
+/// One `macro_rules!` definition: the file and line it is at, where it is
+/// built, where its textual scope ends, the paths that name it, and its
+/// rules, or why they could not be read.
+#[derive(Clone)]
+struct MacroDef {
+    file: PathBuf,
+    line: usize,
+    /// Whether an expansion wrote it: it is listed at the outermost
+    /// invocation's line, and is in scope from that invocation on.
+    emitted: bool,
+    /// The module it is in.
+    module: Vec<String>,
+    /// The paths that name it: the crate root's for `#[macro_export]`, and
+    /// its module's for a `use NAME;` there (`pub(crate) use exports;`).
+    paths: Vec<Vec<String>>,
+    /// Where its `cfg`s, its enclosing modules' and its file's let it be
+    /// built: a definition a build does not compile defines nothing there.
+    built: Built,
+    /// Whether a `cfg` on it or an enclosing item may be true or false in a
+    /// build ([`Built::Unsure`]), so that it may not shadow an earlier
+    /// definition of its name.
+    unsure: bool,
+    /// The module whose end ends its textual scope: the module it is in,
+    /// or for one in a `#[macro_use]` module (inline, or a file declared
+    /// `#[macro_use] mod name;`), the module that one is in.
+    scope: Vec<String>,
+    /// Whether it has `#[macro_export]`, which puts it at the crate root.
+    exported: bool,
+    rules: Result<expand::Rules, String>,
+}
+
+/// The narrower of two places an item can be built.
+fn narrower(a: Built, b: Built) -> Built {
+    match (a, b) {
+        (Built::Test, _) | (_, Built::Test) => Built::Test,
+        (Built::Verus, _) | (_, Built::Verus) => Built::Verus,
+        (Built::Unsure, _) | (_, Built::Unsure) => Built::Unsure,
+        _ => Built::Shipped,
+    }
+}
+
+/// An expansion nested deeper than this is an error: rustc's default
+/// `recursion_limit`.
+const MAX_DEPTH: usize = 128;
 
 /// The `cfg` atoms, without whitespace, that the configuration settles:
 /// those only test builds meet (`test`, `kani`, `feature="test-util"`);
@@ -281,6 +370,13 @@ impl Counter {
             fn_ptr_macro,
             trusted: Vec::new(),
             verus_only_ghost: false,
+            macros: BTreeMap::new(),
+            uses: BTreeMap::new(),
+            dry: None,
+            unresolved: Vec::new(),
+            modules: std::collections::BTreeSet::new(),
+            expansion: None,
+            depth: 0,
         }
     }
 }
@@ -1754,8 +1850,9 @@ impl Counter {
         sig: &Signature,
         body: Option<TokenStream>,
         start: usize,
-        end: usize,
+        close: proc_macro2::Span,
     ) -> Option<Class> {
+        let end = close.end().line;
         let built = self.built(attrs);
         if built == Built::Test {
             return None;
@@ -1800,6 +1897,10 @@ impl Counter {
             }
         }
         let class = classify(in_verus, sig, attrs, body.as_ref());
+        let (at, lines) = match &self.expansion {
+            Some(line) => (*line, expansion_lines(sig, body.as_ref(), close)),
+            None => (start, end.saturating_sub(start) + 1),
+        };
         if built == Built::Verus || !self.shipped {
             // A shipped build compiles none of this code, so its verified,
             // ghost and outside functions leave the tally. A trusted one
@@ -1809,7 +1910,7 @@ impl Counter {
             // column, which Verus checks all the same.
             match class {
                 Some(class @ (Class::Trusted | Class::Discharged)) => {
-                    self.tally(class, sig.ident.to_string(), start, end);
+                    self.tally(class, sig.ident.to_string(), at, lines);
                 }
                 None if self.verus_only_ghost => {
                     self.tallies.entry(self.krate.clone()).or_default().ghost += 1;
@@ -1829,6 +1930,13 @@ impl Counter {
         } else {
             class
         };
+        // A macro's expansion is counted, not walked: the walks read the
+        // configured macros their own way (`[reach]`'s `exports_macro`
+        // and `fn_ptr_macro`).
+        if self.expansion.is_some() {
+            self.tally(class, sig.ident.to_string(), at, lines);
+            return None;
+        }
         let mut calls = Vec::new();
         let mut names = inputs::Body::default();
         if let Some(b) = &body {
@@ -1851,15 +1959,18 @@ impl Counter {
             receiver: arity(sig).1,
             entry,
         });
-        self.tally(class, sig.ident.to_string(), start, end);
+        self.tally(class, sig.ident.to_string(), at, lines);
         Some(class)
     }
 
-    /// Counts function `name`, of class `class` on lines `start` to `end`,
-    /// in the tally, lists it under `--list`, and keeps a discharged one for
-    /// the record check ([`unrecorded`]).
-    fn tally(&mut self, class: Class, name: String, start: usize, end: usize) {
-        let lines = end.saturating_sub(start) + 1;
+    /// Counts function `name`, of class `class`, `lines` long and listed at
+    /// line `start`, in the tally, lists it under `--list`, and keeps a
+    /// discharged one for the record check ([`unrecorded`]).
+    fn tally(&mut self, class: Class, name: String, start: usize, lines: usize) {
+        if let Some(rows) = &mut self.dry {
+            rows.push((class, name, lines));
+            return;
+        }
         let t = self.tallies.entry(self.krate.clone()).or_default();
         t.fns[class as usize] += 1;
         t.lines[class as usize] += lines;
@@ -2092,10 +2203,20 @@ impl Counter {
 
     fn items(&mut self, items: &[Item], in_verus: bool) {
         for item in items {
+            // An expansion is walked for its functions alone
+            // ([`Counter::record`]).
+            if self.expansion.is_some()
+                && !matches!(
+                    item,
+                    Item::Fn(_) | Item::Impl(_) | Item::Trait(_) | Item::Mod(_) | Item::Macro(_)
+                )
+            {
+                continue;
+            }
             match item {
                 Item::Fn(f) => {
                     let start = f.sig.fn_token.span.start().line;
-                    let end = f.block.brace_token.span.close().end().line;
+                    let end = f.block.brace_token.span.close();
                     let body = Some(
                         f.block
                             .stmts
@@ -2120,7 +2241,7 @@ impl Counter {
                     for ii in &i.items {
                         if let ImplItem::Fn(f) = ii {
                             let start = f.sig.fn_token.span.start().line;
-                            let end = f.block.brace_token.span.close().end().line;
+                            let end = f.block.brace_token.span.close();
                             let body = Some(
                                 f.block
                                     .stmts
@@ -2139,6 +2260,20 @@ impl Counter {
                             {
                                 self.nested(&f.block.stmts, c);
                             }
+                        } else if let ImplItem::Macro(im) = ii {
+                            let mut wrap: TokenStream = i
+                                .attrs
+                                .iter()
+                                .filter(|a| is_external(std::slice::from_ref(a)))
+                                .map(verus_syn::__private::ToTokens::to_token_stream)
+                                .collect();
+                            wrap.extend(verus_syn::__private::ToTokens::to_token_stream(
+                                &i.impl_token,
+                            ));
+                            wrap.extend(verus_syn::__private::ToTokens::to_token_stream(
+                                &*i.self_ty,
+                            ));
+                            self.item_macro(&im.attrs, &im.mac, Some(wrap));
                         }
                     }
                     self.owner = outer;
@@ -2159,7 +2294,7 @@ impl Counter {
                             && let Some(block) = &f.default
                         {
                             let start = f.sig.fn_token.span.start().line;
-                            let end = block.brace_token.span.close().end().line;
+                            let end = block.brace_token.span.close();
                             let body = Some(
                                 block
                                     .stmts
@@ -2172,6 +2307,11 @@ impl Counter {
                             {
                                 self.nested(&block.stmts, c);
                             }
+                        } else if let TraitItem::Macro(tm) = ti {
+                            let mut wrap =
+                                verus_syn::__private::ToTokens::to_token_stream(&t.trait_token);
+                            wrap.extend(verus_syn::__private::ToTokens::to_token_stream(&t.ident));
+                            self.item_macro(&tm.attrs, &tm.mac, Some(wrap));
                         }
                     }
                     self.owner = outer;
@@ -2233,19 +2373,24 @@ impl Counter {
                     );
                 }
                 Item::Macro(m)
-                    if m.mac.path.is_ident("thread_local") && self.item_ships(&m.attrs) =>
+                    if m.mac.path.is_ident("thread_local")
+                        && self.expansion.is_none()
+                        && self.item_ships(&m.attrs) =>
                 {
                     inputs::statics_in(m.mac.tokens.clone(), true, &mut self.statics);
                 }
                 Item::Macro(m)
                     if self.fn_ptr_macro.as_ref().is_some_and(|f| {
                         m.mac.path.segments.last().is_some_and(|s| s.ident == f)
-                    }) && self.item_ships(&m.attrs) =>
+                    }) && self.expansion.is_none()
+                        && self.item_ships(&m.attrs) =>
                 {
                     self.fn_ptr(m);
+                    self.item_macro(&m.attrs, &m.mac, None);
                 }
                 Item::Macro(m)
                     if m.mac.path.is_ident("macro_rules")
+                        && self.expansion.is_none()
                         && self
                             .fn_ptr_macro
                             .as_ref()
@@ -2271,8 +2416,970 @@ impl Counter {
                     }
                     self.leave(was);
                 }
+                // A `macro_rules!` an expansion writes defines its macro from
+                // here on, as rustc's would: kept as written at the outermost
+                // invocation's line, in the module the expansion is in.
+                Item::Macro(m)
+                    if m.mac.path.is_ident("macro_rules")
+                        && self.expansion.is_some()
+                        && m.ident.is_some() =>
+                {
+                    let at = self.expansion.unwrap_or_default();
+                    let name = m
+                        .ident
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    let file = self.file.clone();
+                    let mut def = macro_def(
+                        m,
+                        &DefsAt {
+                            file: &file,
+                            module: self.module.clone(),
+                            built: match (self.shipped, self.sure) {
+                                (false, _) => Built::Verus,
+                                (true, false) => Built::Unsure,
+                                (true, true) => Built::Shipped,
+                            },
+                            scope: self.module.clone(),
+                        },
+                        &self.atoms,
+                        true,
+                    );
+                    def.line = at;
+                    self.macros.entry(name).or_default().push(def);
+                }
+                Item::Macro(m) if !m.mac.path.is_ident("macro_rules") => {
+                    self.item_macro(&m.attrs, &m.mac, None);
+                }
                 _ => {}
             }
+        }
+    }
+
+    /// Reads crate [`Counter::krate`], in directory `k` under `root`, as
+    /// every run reads a crate, the working tree's or a base revision's
+    /// ([`base_limits`]): its module files placed and classed by their
+    /// declarations ([`module_files`], [`module_class`]), a test-only one
+    /// left out, a Verus-only one read for its rlimits alone, one Verus's
+    /// build might not compile counting no function verified. The crate's
+    /// `macro_rules!` definitions are kept first, from every file
+    /// ([`macro_defs`]), so that an invocation in one file expands a
+    /// definition in another; then each file is walked under its modules'
+    /// `cfg`s. `tests`, if given, gathers the `#[test]` functions a ledger
+    /// may name.
+    fn walk_crate(
+        &mut self,
+        cfg: &Config,
+        (root, k): (&Path, &Path),
+        mut tests: Option<&mut std::collections::BTreeSet<String>>,
+    ) {
+        let src = k.join("src");
+        let src = src.as_path();
+        let mut paths = Vec::new();
+        rust_files(src, &mut paths);
+        // A same-length stand-in for an identifier Verus keeps as a keyword
+        // (pcre3's `assert::`) keeps the line numbers.
+        let read: Vec<(PathBuf, Option<verus_syn::Result<verus_syn::File>>)> = paths
+            .into_iter()
+            .map(|f| {
+                let p = fs::read_to_string(&f)
+                    .ok()
+                    .map(|t| parse_file(&cfg.stand_in(&t)));
+                (f, p)
+            })
+            .collect();
+        let mut ok: Vec<(PathBuf, verus_syn::File)> = Vec::with_capacity(read.len());
+        for (f, p) in &read {
+            if let Some(Ok(file)) = p {
+                if let Some(t) = tests.as_deref_mut() {
+                    ledger::test_fns(&ledger::module_path(src, f), &file.items, t);
+                }
+                ok.push((f.clone(), file.clone()));
+            }
+        }
+        let mut bad = Vec::new();
+        let mods = module_files(&ok, crate_roots(k), &self.atoms, &mut bad);
+        for e in &bad {
+            eprintln!("{e}");
+        }
+        self.errors += bad.len();
+        // Each file's class (a `cfg` [`module_files`] reported counts as
+        // shipped) and the `cfg`s of the modules around it.
+        let classes: Vec<(Built, Vec<String>)> = read
+            .iter()
+            .map(|(f, _)| {
+                let cf = canonical(f);
+                (
+                    module_class(&cf, &mods, &self.atoms).unwrap_or(Built::Shipped),
+                    module_guards(&cf, &mods),
+                )
+            })
+            .collect();
+        let class = |i: usize| classes[i].0;
+        let files: Vec<PathBuf> = read.iter().map(|(f, _)| f.clone()).collect();
+        let parsed: Vec<Option<verus_syn::Result<verus_syn::File>>> =
+            read.into_iter().map(|(_, p)| p).collect();
+        self.macros.clear();
+        self.uses.clear();
+        // The modules a `#[macro_use] mod name;` declares, whose textual
+        // scope carries on into the module that declares them.
+        let mut carried = std::collections::BTreeSet::new();
+        self.modules.clear();
+        for (f, p) in files.iter().zip(&parsed) {
+            let Some(Ok(file)) = p else { continue };
+            let module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
+            self.modules.insert(module.clone());
+            macro_use_mods(&file.items, &module, (&mut carried, &mut self.modules));
+        }
+        for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
+            let Some(Ok(file)) = p else { continue };
+            let module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
+            let mut scope = module.clone();
+            while carried.contains(&scope) {
+                scope.pop();
+            }
+            let at = DefsAt {
+                file: f.strip_prefix(root).unwrap_or(f),
+                scope,
+                module,
+                built: class(i),
+            };
+            macro_defs(
+                &file.items,
+                &at,
+                &self.atoms,
+                (&mut self.macros, &mut self.uses),
+            );
+        }
+        // A definition's module re-exporting it (`pub(crate) use exports;`,
+        // or `pub(crate) use ex as build;` under the new name) gives it that
+        // module's path, under each name it is exported as.
+        for (name, defs) in &mut self.macros {
+            for d in defs.iter_mut() {
+                let exports: Vec<String> = self
+                    .uses
+                    .get(&d.module)
+                    .into_iter()
+                    .flatten()
+                    .filter(|(p, glob, _, built)| {
+                        !glob
+                            && *built != Built::Test
+                            && (p.as_slice() == std::slice::from_ref(name)
+                                || p == &["self".to_owned(), name.clone()])
+                    })
+                    .map(|(_, _, named, _)| named.clone())
+                    .collect();
+                for named in exports {
+                    let mut path = d.module.clone();
+                    path.push(named);
+                    if !d.paths.contains(&path) {
+                        d.paths.push(path);
+                    }
+                }
+            }
+        }
+        self.follow_reexports();
+        for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
+            // A module built only for Verus is read for its rlimits alone,
+            // and one Verus's build might not compile counts no function
+            // verified. Its items are read under its modules' `cfg`s.
+            (self.shipped, self.sure) = match class(i) {
+                Built::Test => continue,
+                Built::Verus => (false, true),
+                Built::Unsure => (true, false),
+                Built::Shipped => (true, true),
+            };
+            self.guards = classes[i].1.clone();
+            self.file = f.strip_prefix(root).unwrap_or(f).to_path_buf();
+            self.module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
+            match p {
+                Some(Ok(file)) => self.items(&file.items, false),
+                Some(Err(e)) => {
+                    eprintln!("{}:{}: {e}", self.file.display(), e.span().start().line);
+                    self.errors += 1;
+                }
+                None => {
+                    eprintln!("{}: unreadable", f.display());
+                    self.errors += 1;
+                }
+            }
+        }
+        // An invocation counted as another crate's macro whose name this
+        // crate defines (a definition reached by a path the counter does
+        // not follow, or one an expansion in a file read later writes)
+        // fails the run: its functions would otherwise leave the tally.
+        for (here, name) in std::mem::take(&mut self.unresolved) {
+            // Defined under that name, or exported under it (`pub(crate) use
+            // ex as build;`).
+            let defined = self.macros.iter().any(|(n, defs)| {
+                defs.iter().any(|d| {
+                    d.built != Built::Test
+                        && (*n == name || d.paths.iter().any(|p| p.last() == Some(&name)))
+                })
+            });
+            if defined {
+                eprintln!(
+                    "{here}: {name}! resolves to none of this crate's definitions of `{name}`, though rustc may reach one; invoke it by its definition's path, or in that definition's textual scope"
+                );
+                self.errors += 1;
+            }
+        }
+    }
+
+    /// Follows the crate's `use` chains to its macros: a module's `use` of
+    /// a path that names a definition (`pub(crate) use crate::v::build;`)
+    /// gives the definition that module's path under the name the `use`
+    /// brings in, and a module's `use p::*;` gives each definition `p`
+    /// names its path there too, until no `use` adds a path. A `use` built
+    /// only for tests adds none.
+    fn follow_reexports(&mut self) {
+        // Each pass can only add paths; a chain is no longer than the
+        // crate has modules.
+        for _ in 0..=self.modules.len() {
+            let mut add: Vec<(String, usize, Vec<String>)> = Vec::new();
+            for (module, uses) in &self.uses {
+                for (p, glob, named, built) in uses {
+                    if *built == Built::Test {
+                        continue;
+                    }
+                    for (name, defs) in &self.macros {
+                        for (i, d) in defs.iter().enumerate() {
+                            let new: Vec<Vec<String>> = d
+                                .paths
+                                .iter()
+                                .filter_map(|dp| match glob {
+                                    false => names_from(module, p, dp)
+                                        .then(|| [module.clone(), vec![named.clone()]].concat()),
+                                    true => {
+                                        let (last, parent) = dp.split_last()?;
+                                        names_from(module, p, parent)
+                                            .then(|| [module.clone(), vec![last.clone()]].concat())
+                                    }
+                                })
+                                .filter(|n| !d.paths.contains(n))
+                                .collect();
+                            add.extend(new.into_iter().map(|n| (name.clone(), i, n)));
+                        }
+                    }
+                }
+            }
+            if add.is_empty() {
+                return;
+            }
+            for (name, i, path) in add {
+                if let Some(d) = self.macros.get_mut(&name).and_then(|v| v.get_mut(i))
+                    && !d.paths.contains(&path)
+                {
+                    d.paths.push(path);
+                }
+            }
+        }
+    }
+
+    /// The module of the crate that `segs`, written in this module, names:
+    /// through `crate`, `self` or `super`, or a module beside this one or
+    /// at the root.
+    fn module_of(&self, segs: &[String]) -> Option<Vec<String>> {
+        let up = segs.iter().take_while(|s| *s == "super").count();
+        let candidates = match segs.first().map(String::as_str) {
+            Some("crate") => vec![[self.module[..1].to_vec(), segs[1..].to_vec()].concat()],
+            Some("self") => vec![[self.module.clone(), segs[1..].to_vec()].concat()],
+            Some("super") => {
+                let base = self.module.len().checked_sub(up)?;
+                vec![[self.module[..base].to_vec(), segs[up..].to_vec()].concat()]
+            }
+            _ => vec![
+                [self.module.clone(), segs.to_vec()].concat(),
+                [self.module[..1].to_vec(), segs.to_vec()].concat(),
+            ],
+        };
+        candidates.into_iter().find(|m| self.modules.contains(m))
+    }
+
+    /// Counts the functions macro invocation `mac`, an item or an `impl`'s
+    /// or trait's item with `attrs`, writes, so that none leaves the tally
+    /// for being written by a macro. In an `impl` or trait, `wrap` is the
+    /// header (`impl Type`, `trait Name`, with an `impl`'s `external`
+    /// attribute) its expansion is read inside. A `macro_rules!`
+    /// definition of the crate ([`Counter::macros`]) resolves it, as rustc
+    /// resolves it ([`Counter::resolve`]); several must count the same
+    /// rows, class and lines included ([`Counter::dry_rows`]), else it is
+    /// an error. Its expansion
+    /// ([`expand::Rules::expand`]) is walked as code outside `verus!`
+    /// (Verus's `verus!` does not expand the macros it holds; a `verus!`
+    /// block the expansion writes is read as one), and each function in it
+    /// is counted, listed at the invocation's line, with its lines from the
+    /// invocation and the definition ([`expansion_lines`]). A macro the
+    /// crate does not define cannot be read, so the invocation counts as
+    /// one function outside `verus!`, named `NAME!`, over the invocation's
+    /// lines. A definition that resolves but does not expand, or an
+    /// expansion that does not parse, is an error. `thread_local!` writes
+    /// statics, not functions.
+    fn item_macro(
+        &mut self,
+        attrs: &[Attribute],
+        mac: &verus_syn::Macro,
+        wrap: Option<TokenStream>,
+    ) {
+        let Some(name) = mac.path.segments.last().map(|s| s.ident.to_string()) else {
+            return;
+        };
+        if name == "thread_local" {
+            return;
+        }
+        let built = self.built(attrs);
+        if built == Built::Test {
+            return;
+        }
+        let bang = mac.bang_token.span;
+        let line = bang.start().line;
+        let outer = self.expansion.is_none();
+        let at = *self.expansion.get_or_insert(line);
+        // The expansion is read under the invocation's `cfg`s: one Verus's
+        // build might not meet ([`Built::Unsure`]) leaves its functions
+        // shipped but not sure, so trusted, never verified.
+        let was = self.enter(built, attrs);
+        // Each definition the invocation could expand, by where it is.
+        let here = format!("{}:{line}", self.file.display());
+        let found: Vec<(String, Result<expand::Rules, String>)> =
+            match self.resolve(&name, &mac.path, at) {
+                Ok(defs) => defs
+                    .into_iter()
+                    .map(|d| (format!("{}:{}", d.file.display(), d.line), d.rules.clone()))
+                    .collect(),
+                Err(e) => {
+                    eprintln!("{here}: {e}");
+                    self.errors += 1;
+                    self.leave(was);
+                    if outer {
+                        self.expansion = None;
+                    }
+                    return;
+                }
+            };
+        // The expansion by `rules`, read as items (inside `wrap`, in an
+        // `impl` or trait).
+        let expand = |rules: &expand::Rules| {
+            rules.expand(mac.tokens.clone()).and_then(|t| {
+                let src = match &wrap {
+                    Some(w) => {
+                        let mut s = w.clone();
+                        s.extend([TokenTree::Group(proc_macro2::Group::new(
+                            proc_macro2::Delimiter::Brace,
+                            t,
+                        ))]);
+                        s
+                    }
+                    None => t,
+                };
+                parse2::<verus_syn::File>(src).map_err(|e| e.to_string())
+            })
+        };
+        match found {
+            defs if defs.is_empty() => {
+                // A name the module imports from this crate (`use
+                // crate::w::ex as build;`, `use w::ex;` with `w` a module of
+                // the crate) is the crate's macro, by a path the counter did
+                // not follow. Any other is checked, under the name it was
+                // imported as, once the crate is read.
+                let imported = self.imported(&name, false);
+                if imported.iter().any(|p| self.local(p)) {
+                    eprintln!(
+                        "{here}: {name}! is imported from this crate by a path the counter does not follow; invoke it by its definition's path"
+                    );
+                    self.errors += 1;
+                } else {
+                    self.unresolved.push((here.clone(), name.clone()));
+                    for p in &imported {
+                        if let Some(orig) = p.last()
+                            && *orig != name
+                        {
+                            self.unresolved.push((here.clone(), orig.clone()));
+                        }
+                    }
+                }
+                if self.shipped {
+                    let mut seen = std::collections::BTreeSet::new();
+                    place(bang, &mut seen);
+                    token_lines(mac.tokens.clone(), &mut seen);
+                    place(mac.delimiter.span().close(), &mut seen);
+                    self.tally(Class::Outside, format!("{name}!"), at, seen.len());
+                }
+            }
+            _ if self.depth >= MAX_DEPTH => {
+                eprintln!("{here}: {name}! expands more than {MAX_DEPTH} macros deep");
+                self.errors += 1;
+            }
+            defs => {
+                // Each definition that could be the one rustc expands here:
+                // more than one (a pair under `cfg`s the counter cannot
+                // settle) must write the same functions, or the count would
+                // depend on which.
+                let mut files = Vec::new();
+                for (at, rules) in &defs {
+                    match rules
+                        .as_ref()
+                        .map_err(|e| (true, e.clone()))
+                        .and_then(|r| expand(r).map_err(|e| (false, e)))
+                    {
+                        Ok(f) => files.push(f),
+                        Err((true, e)) => {
+                            eprintln!("{here}: {name}!'s definition at {at} cannot be read: {e}");
+                            self.errors += 1;
+                        }
+                        Err((false, e)) => {
+                            eprintln!("{here}: {name}! does not expand: {e}");
+                            self.errors += 1;
+                        }
+                    }
+                }
+                // The rows each writes, class and lines too, from a walk
+                // that leaves the count as it was.
+                let rows: Vec<Option<Vec<(Class, String, usize)>>> = if files.len() > 1 {
+                    files.iter().map(|f| self.dry_rows(f)).collect()
+                } else {
+                    Vec::new()
+                };
+                let at: Vec<&str> = defs.iter().map(|(a, _)| a.as_str()).collect();
+                if rows.iter().any(Option::is_none) {
+                    eprintln!(
+                        "{here}: {name}! could be any of {} definitions ({}), and one of them does not count (above)",
+                        defs.len(),
+                        at.join(", ")
+                    );
+                    self.errors += 1;
+                } else if rows.windows(2).any(|w| w[0] != w[1]) {
+                    eprintln!(
+                        "{here}: {name}! could be any of {} definitions ({}), which count differently",
+                        defs.len(),
+                        at.join(", ")
+                    );
+                    self.errors += 1;
+                } else if files.len() == defs.len()
+                    && let Some(f) = files.first()
+                {
+                    self.depth += 1;
+                    self.items(&f.items, false);
+                    self.depth -= 1;
+                }
+            }
+        }
+        self.leave(was);
+        if outer {
+            self.expansion = None;
+        }
+    }
+
+    /// The definitions of macro `name` that an invocation by `path`, at
+    /// line `at` of the walk's file, may expand, as rustc resolves it,
+    /// among those this build compiles:
+    ///
+    /// - a path of more than one segment (`width::exports!`,
+    ///   `$crate::m!`) names the definitions it is a path of: the crate
+    ///   root's for `#[macro_export]`, a module's for its `use NAME;`;
+    /// - a bare name takes the last definition before it in its file whose
+    ///   textual scope it is in, with each before that while the later is
+    ///   under a `cfg` the counter cannot settle ([`attrs_unsure`]);
+    /// - failing that, each definition the module imports by name or `*`,
+    ///   each in another file whose textual scope reaches here (an
+    ///   enclosing module's, or one `#[macro_use] mod` carries out), and,
+    ///   at the crate root, each `#[macro_export]` puts there.
+    ///
+    /// It is an error when some definition is found and an imported path
+    /// the invocation may stand for (a module alias's, or a `use` of the
+    /// name) names none: the build that takes that path would expand what
+    /// the counter cannot see.
+    fn resolve(
+        &self,
+        name: &str,
+        path: &verus_syn::Path,
+        at: usize,
+    ) -> Result<Vec<&MacroDef>, String> {
+        // A definition under a `cfg` the counter cannot settle may be the
+        // one: it is a candidate.
+        let active = |d: &&MacroDef| match d.built {
+            Built::Shipped | Built::Unsure => true,
+            Built::Verus => !self.shipped,
+            Built::Test => false,
+        };
+        // The definitions that `path`, read from this module, names: of any
+        // name, as a re-export under a new name (`pub(crate) use ex as
+        // build;`) makes `w::build` a path of `ex`.
+        let by_path = |path: &[String]| -> Vec<&MacroDef> {
+            self.macros
+                .values()
+                .flatten()
+                .filter(active)
+                .filter(|d| d.paths.iter().any(|p| names(&self.module, path, p)))
+                .collect()
+        };
+        // The definitions each of `paths` names, and the paths that name
+        // none.
+        let gather = |paths: Vec<Vec<String>>| -> (Vec<&MacroDef>, Vec<String>) {
+            let mut found = Vec::new();
+            let mut missing = Vec::new();
+            for p in paths {
+                let named = by_path(&p);
+                if named.is_empty() {
+                    missing.push(p.join("::"));
+                }
+                found.extend(named);
+            }
+            (found, missing)
+        };
+        // An imported path that names none while another names some.
+        let missed = |missing: &[String], any: bool| match missing.first() {
+            Some(m) if any => Err(format!(
+                "{name}! may stand for `{m}`, which names none of this crate's definitions of `{name}` by a path the counter follows, where another path it may stand for does; invoke it by its definition's path"
+            )),
+            _ => Ok(()),
+        };
+        let segs: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        if segs.len() > 1 {
+            // A first segment the module imports (`use crate::w as x;`)
+            // stands for each path it imports: under `cfg`s the counter
+            // cannot settle there may be several, and each one's
+            // definitions are candidates, compared as any others are.
+            // A module of the crate of that name, beside this one or at the
+            // root, is one more: the path as written.
+            let imported = self.imported(&segs[0], false);
+            if imported.is_empty() {
+                let found = by_path(&segs);
+                // A module of the crate that brings the name in by a `use`
+                // the counter could not follow to a definition holds the
+                // crate's macro out of sight.
+                if found.is_empty()
+                    && let Some(m) = self.module_of(&segs[..segs.len() - 1])
+                    && self.binds(&m, name)
+                {
+                    return Err(format!(
+                        "{}! names `{name}` in `{}`, which brings it in by a `use` the counter does not follow; invoke it by its definition's path",
+                        segs.join("::"),
+                        m.join("::")
+                    ));
+                }
+                return Ok(found);
+            }
+            let mut paths: Vec<Vec<String>> = imported
+                .into_iter()
+                .map(|p| [p, segs[1..].to_vec()].concat())
+                .collect();
+            if self.local(&segs[..1]) {
+                paths.push(segs.clone());
+            }
+            let (found, missing) = gather(paths);
+            missed(&missing, !found.is_empty())?;
+            return Ok(joined(Vec::new(), found));
+        }
+        let defs: &[MacroDef] = self.macros.get(name).map_or(&[], Vec::as_slice);
+        let visible = |d: &&MacroDef| self.module.starts_with(&d.scope);
+        // Latest first: by line, an emitted definition after any written
+        // on its line, and among equals (the definitions one expansion
+        // writes, all at its invocation's line) the one registered later.
+        let mut before: Vec<(usize, &MacroDef)> = defs
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| active(d) && visible(d))
+            .filter(|(_, d)| d.file == self.file && (d.line < at || (d.emitted && d.line == at)))
+            .collect();
+        before.sort_by_key(|(i, d)| std::cmp::Reverse((d.line, d.emitted, *i)));
+        let before: Vec<&MacroDef> = before.into_iter().map(|(_, d)| d).collect();
+        // When every one is under such a `cfg`, a build may compile none of
+        // them, and then the definitions below are rustc's: they join.
+        let textual: Vec<&MacroDef> = match before.iter().position(|d| !d.unsure) {
+            Some(i) => return Ok(before[..=i].to_vec()),
+            None => before,
+        };
+        let others: Vec<&MacroDef> = defs
+            .iter()
+            .filter(active)
+            .filter(|d| {
+                (d.file != self.file && visible(d)) || (d.exported && self.module.len() == 1)
+            })
+            .collect();
+        // A `*` may hold the name or not, so only a `use` of the name is
+        // held to naming a definition. But a `*` of a module of the crate
+        // that re-exports the name by a `use` the counter could not follow
+        // to a definition ([`Counter::follow_reexports`]) does hold it, and
+        // what it brings in is out of sight: an error.
+        let (globbed, _) = gather(self.imported(name, true));
+        for p in self.globs() {
+            if by_path(&[p.clone(), vec![name.to_owned()]].concat()).is_empty()
+                && let Some(m) = self.module_of(&p)
+                && self.binds(&m, name)
+            {
+                return Err(format!(
+                    "{name}! may come through `{}::*`, which re-exports `{name}` by a path the counter does not follow; invoke it by its definition's path",
+                    p.join("::")
+                ));
+            }
+        }
+        let (named, missing) = gather(self.imported(name, false));
+        let out = joined(joined(joined(textual, others), globbed), named);
+        missed(&missing, !out.is_empty())?;
+        Ok(out)
+    }
+
+    /// Whether module `m` brings `name` in by a `use` of it (not a `*`, and
+    /// not one built only for tests).
+    fn binds(&self, m: &[String], name: &str) -> bool {
+        self.uses.get(m).is_some_and(|us| {
+            us.iter()
+                .any(|(_, glob, named, built)| !glob && *built != Built::Test && named == name)
+        })
+    }
+
+    /// The paths this module's `use p::*;`s glob, where the code walked can
+    /// be built with them ([`Counter::imported`]).
+    fn globs(&self) -> Vec<Vec<String>> {
+        self.uses
+            .get(&self.module)
+            .into_iter()
+            .flatten()
+            .filter(|(_, glob, _, built)| {
+                *glob
+                    && match built {
+                        Built::Shipped | Built::Unsure => true,
+                        Built::Verus => !self.shipped,
+                        Built::Test => false,
+                    }
+            })
+            .map(|(p, ..)| p.clone())
+            .collect()
+    }
+
+    /// The paths, as written, of what this module's `use`s bring into
+    /// scope as `name`: the path of a `use p::name;` or `use p::orig as
+    /// name;`, and with `globs`, `p::name` for each `use p::*;`. A `use`
+    /// is one only where the code walked can be built with it: a test-only
+    /// `use` never, a Verus-only one in Verus-only code, any other (one
+    /// under a `cfg` the counter cannot settle too) always.
+    fn imported(&self, name: &str, globs: bool) -> Vec<Vec<String>> {
+        self.uses
+            .get(&self.module)
+            .into_iter()
+            .flatten()
+            .filter(|(_, _, _, built)| match built {
+                Built::Shipped | Built::Unsure => true,
+                Built::Verus => !self.shipped,
+                Built::Test => false,
+            })
+            .filter_map(|(p, glob, named, _)| match glob {
+                true => globs.then(|| [p.clone(), vec![name.to_owned()]].concat()),
+                false => (named == name).then(|| p.clone()),
+            })
+            .collect()
+    }
+
+    /// Whether `path`, a non-`*` `use` path in this module, names something
+    /// of this crate: it starts at `crate`, `self` or `super`, or at a
+    /// module of the crate, beside this one or at the root.
+    fn local(&self, path: &[String]) -> bool {
+        match path.first().map(String::as_str) {
+            Some("crate" | "self" | "super") => true,
+            Some(first) => {
+                let here = [self.module.clone(), vec![first.to_owned()]].concat();
+                let root = [self.module[..1].to_vec(), vec![first.to_owned()]].concat();
+                self.modules.contains(&here) || self.modules.contains(&root)
+            }
+            None => false,
+        }
+    }
+
+    /// The rows `f`, an expansion, writes (class, name and lines), from a
+    /// walk of it that leaves the count as it was.
+    fn dry_rows(&mut self, f: &verus_syn::File) -> Option<Vec<(Class, String, usize)>> {
+        let tallies = self.tallies.clone();
+        let (limits, errors, unresolved) = (self.limits.len(), self.errors, self.unresolved.len());
+        let verus_fns = self.verus_fns.clone();
+        let macros = self.macros.clone();
+        let outer = self.dry.replace(Vec::new());
+        self.depth += 1;
+        self.items(&f.items, false);
+        self.depth -= 1;
+        let rows = std::mem::replace(&mut self.dry, outer).unwrap_or_default();
+        // A candidate whose walk failed (a nested invocation that does not
+        // expand, or is itself ambiguous) has no rows to compare: `None`.
+        let failed = self.errors > errors;
+        self.tallies = tallies;
+        self.limits.truncate(limits);
+        self.unresolved.truncate(unresolved);
+        self.errors = errors;
+        self.verus_fns = verus_fns;
+        self.macros = macros;
+        (!failed).then_some(rows)
+    }
+}
+
+/// `out` with each of `more` it does not hold yet, in order.
+fn joined<'a>(mut out: Vec<&'a MacroDef>, more: Vec<&'a MacroDef>) -> Vec<&'a MacroDef> {
+    for d in more {
+        if !out.iter().any(|t| std::ptr::eq(*t, d)) {
+            out.push(d);
+        }
+    }
+    out
+}
+
+/// Whether `segs`, a path written in module `module`, names `full`, a
+/// path from the crate root: through `crate::`, `self::` or `super::`
+/// exactly, else as its last segments, which a `use` of a parent brings
+/// in scope (`width::exports` in a module that has `width`).
+fn names(module: &[String], segs: &[String], full: &[String]) -> bool {
+    match segs.first().map(String::as_str) {
+        Some("crate") => full.get(1..) == segs.get(1..),
+        Some("self" | "super") => {
+            let up = segs.iter().take_while(|s| *s == "super").count();
+            let rest = &segs[up.max(usize::from(segs[0] == "self"))..];
+            let Some(base) = module.len().checked_sub(up) else {
+                return false;
+            };
+            [&module[..base], rest].concat() == full
+        }
+        _ => full.ends_with(segs),
+    }
+}
+
+/// [`names`], with a path from neither `crate`, `self` nor `super` read
+/// as from `module` or from the crate root alone, as a `use` reads it
+/// ([`Counter::follow_reexports`]): `use ex;` in `w` names `w::ex`, not
+/// every `ex`.
+fn names_from(module: &[String], segs: &[String], full: &[String]) -> bool {
+    match segs.first().map(String::as_str) {
+        Some("crate" | "self" | "super") => names(module, segs, full),
+        _ => {
+            [module, segs].concat() == full
+                || module
+                    .first()
+                    .is_some_and(|root| [std::slice::from_ref(root), segs].concat() == full)
+        }
+    }
+}
+
+/// A source line: the file a token was parsed from, and its line there.
+type Place = (String, usize);
+
+/// Adds to `seen` the line `s` starts on, in the file it was parsed from.
+/// Each file the counter parses is its own source to proc-macro2, named
+/// apart (`Span::file`), so lines of the same number in the invocation's
+/// file and a definition's are two lines, and one line is one line.
+fn place(s: proc_macro2::Span, seen: &mut std::collections::BTreeSet<Place>) {
+    seen.insert((s.file(), s.start().line));
+}
+
+/// Adds to `seen` the line of each token of `ts`, and of each group's
+/// closing delimiter ([`place`]).
+fn token_lines(ts: TokenStream, seen: &mut std::collections::BTreeSet<Place>) {
+    for t in ts {
+        // A fragment forwarded opaque is an invisible group, with no
+        // delimiters of its own to place ([`expand`]).
+        if let TokenTree::Group(g) = &t
+            && g.delimiter() == proc_macro2::Delimiter::None
+        {
+            token_lines(g.stream(), seen);
+            continue;
+        }
+        place(t.span(), seen);
+        if let TokenTree::Group(g) = t {
+            place(g.span_close(), seen);
+            token_lines(g.stream(), seen);
+        }
+    }
+}
+
+/// The lines of a function a macro wrote: each line one of its tokens
+/// (signature, body and closing brace `close`) came from, in the
+/// invocation or in a definition, so that a line added to either adds to
+/// it.
+fn expansion_lines(sig: &Signature, body: Option<&TokenStream>, close: proc_macro2::Span) -> usize {
+    let mut seen = std::collections::BTreeSet::new();
+    token_lines(
+        verus_syn::__private::ToTokens::to_token_stream(sig),
+        &mut seen,
+    );
+    if let Some(b) = body {
+        token_lines(b.clone(), &mut seen);
+    }
+    place(close, &mut seen);
+    seen.len()
+}
+
+/// Where [`macro_defs`] is reading: the file, the module it is in, where
+/// that module is built ([`Built::Unsure`] under a `cfg` the counter
+/// cannot settle), and the module that ends a definition's textual scope
+/// there.
+struct DefsAt<'a> {
+    file: &'a Path,
+    module: Vec<String>,
+    built: Built,
+    scope: Vec<String>,
+}
+
+/// Whether `attrs` has `#[name]`.
+fn has_attr(attrs: &[Attribute], name: &str) -> bool {
+    attrs.iter().any(|a| a.path().is_ident(name))
+}
+
+/// The modules among `items` (in `module`, and in its inline modules)
+/// that `#[macro_use] mod name;` declares in a file of their own, into
+/// `carried`: the textual scope of a definition at such a file's top
+/// carries on into the module that declares it. Every module `items`
+/// declares goes into `all`.
+fn macro_use_mods(
+    items: &[Item],
+    module: &[String],
+    (carried, all): (
+        &mut std::collections::BTreeSet<Vec<String>>,
+        &mut std::collections::BTreeSet<Vec<String>>,
+    ),
+) {
+    for item in items {
+        let Item::Mod(m) = item else { continue };
+        let mut inner = module.to_vec();
+        inner.push(m.ident.to_string());
+        all.insert(inner.clone());
+        match &m.content {
+            None if has_attr(&m.attrs, "macro_use") => {
+                carried.insert(inner);
+            }
+            Some((_, items)) => macro_use_mods(items, &inner, (carried, all)),
+            None => {}
+        }
+    }
+}
+
+/// The paths `tree`, a `use`, names, under `prefix`.
+fn use_paths(tree: &verus_syn::UseTree, prefix: &mut Vec<String>, out: &mut Vec<UseTarget>) {
+    match tree {
+        verus_syn::UseTree::Path(p) => {
+            prefix.push(p.ident.to_string());
+            use_paths(&p.tree, prefix, out);
+            prefix.pop();
+        }
+        verus_syn::UseTree::Name(n) => {
+            let mut p = prefix.clone();
+            p.push(n.ident.to_string());
+            out.push((p, false, n.ident.to_string()));
+        }
+        verus_syn::UseTree::Glob(_) => out.push((prefix.clone(), true, String::new())),
+        verus_syn::UseTree::Group(g) => {
+            for t in &g.items {
+                use_paths(t, prefix, out);
+            }
+        }
+        // A rename keeps the path it imports, under its new name.
+        verus_syn::UseTree::Rename(r) => {
+            let mut p = prefix.clone();
+            p.push(r.ident.to_string());
+            out.push((p, false, r.rename.to_string()));
+        }
+    }
+}
+
+/// The definition `m`, a `macro_rules!` item, at `at`.
+fn macro_def(m: &verus_syn::ItemMacro, at: &DefsAt, atoms: &Atoms, emitted: bool) -> MacroDef {
+    let built = narrower(
+        at.built,
+        attrs_built(&m.attrs, atoms).unwrap_or(Built::Shipped),
+    );
+    MacroDef {
+        file: at.file.to_path_buf(),
+        line: m.mac.bang_token.span.start().line,
+        emitted,
+        module: at.module.clone(),
+        paths: if has_attr(&m.attrs, "macro_export") {
+            vec![vec![
+                at.module.first().cloned().unwrap_or_default(),
+                m.ident
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
+            ]]
+        } else {
+            Vec::new()
+        },
+        built,
+        unsure: built == Built::Unsure,
+        scope: at.scope.clone(),
+        exported: has_attr(&m.attrs, "macro_export"),
+        rules: expand::Rules::parse(m.mac.tokens.clone()),
+    }
+}
+
+/// The crate's `macro_rules!` definitions, by name.
+type MacroDefs = BTreeMap<String, Vec<MacroDef>>;
+
+/// Each module's `use` paths.
+type Uses = BTreeMap<Vec<String>, Vec<UsePath>>;
+
+/// Keeps each `macro_rules!` definition in `items` (and in the inline
+/// modules and `verus!` blocks among them) under its name, for
+/// [`Counter::item_macro`], with where it is built (under `#[cfg(test)]`,
+/// in a test-only module or file, it is built for tests alone) and how far
+/// its scope reaches, and each module's `use` paths. `at` is where the
+/// items are.
+fn macro_defs(
+    items: &[Item],
+    at: &DefsAt,
+    atoms: &Atoms,
+    (out, uses): (&mut MacroDefs, &mut Uses),
+) {
+    let built = |attrs: &[Attribute]| {
+        narrower(
+            at.built,
+            attrs_built(attrs, atoms).unwrap_or(Built::Shipped),
+        )
+    };
+    for item in items {
+        match item {
+            Item::Macro(m) if m.mac.path.is_ident("macro_rules") => {
+                if let Some(name) = &m.ident {
+                    out.entry(name.to_string())
+                        .or_default()
+                        .push(macro_def(m, at, atoms, false));
+                }
+            }
+            Item::Use(u) => {
+                let mut targets = Vec::new();
+                use_paths(&u.tree, &mut Vec::new(), &mut targets);
+                let b = built(&u.attrs);
+                uses.entry(at.module.clone()).or_default().extend(
+                    targets
+                        .into_iter()
+                        .map(|(p, glob, named)| (p, glob, named, b)),
+                );
+            }
+            Item::Macro(m) if m.mac.path.is_ident("verus") => {
+                if let Ok(f) = parse2::<verus_syn::File>(m.mac.tokens.clone()) {
+                    let inner_at = DefsAt {
+                        file: at.file,
+                        module: at.module.clone(),
+                        built: built(&m.attrs),
+                        scope: at.scope.clone(),
+                    };
+                    macro_defs(&f.items, &inner_at, atoms, (out, uses));
+                }
+            }
+            Item::Mod(m) => {
+                if let Some((_, inner)) = &m.content {
+                    let mut module = at.module.clone();
+                    module.push(m.ident.to_string());
+                    let scope = if has_attr(&m.attrs, "macro_use") {
+                        at.scope.clone()
+                    } else {
+                        module.clone()
+                    };
+                    let inner_at = DefsAt {
+                        file: at.file,
+                        module,
+                        built: built(&m.attrs),
+                        scope,
+                    };
+                    macro_defs(inner, &inner_at, atoms, (out, uses));
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -2609,57 +3716,7 @@ fn main() {
         if !ships {
             unshipped.push(c.krate.clone());
         }
-        let mut files = Vec::new();
-        rust_files(&k.join("src"), &mut files);
-        let mut parsed = Vec::with_capacity(files.len());
-        for f in &files {
-            if let Ok(text) = fs::read_to_string(f)
-                && let Ok(file) = parse_file(&cfg.stand_in(&text))
-            {
-                if cfg.ledger.is_some() {
-                    let module = ledger::module_path(&k.join("src"), f);
-                    ledger::test_fns(&module, &file.items, &mut tests);
-                }
-                parsed.push((f.clone(), file));
-            }
-        }
-        let mut bad = Vec::new();
-        let mods = module_files(&parsed, crate_roots(k), &c.atoms, &mut bad);
-        for e in &bad {
-            eprintln!("{e}");
-        }
-        c.errors += bad.len();
-        for f in files {
-            let cf = fs::canonicalize(&f).unwrap_or_else(|_| f.clone());
-            // A module built only for Verus is read for its rlimits alone,
-            // and one Verus's build might not compile counts no function
-            // verified. Its items are read under its modules' `cfg`s.
-            // test_module_files read each predicate, so their conjunction
-            // reads too.
-            (c.shipped, c.sure) = match module_class(&cf, &mods, &c.atoms) {
-                Ok(Built::Test) => continue,
-                Ok(Built::Verus) => (false, true),
-                Ok(Built::Unsure) => (true, false),
-                Ok(Built::Shipped) | Err(_) => (true, true),
-            };
-            c.guards = module_guards(&cf, &mods);
-            let Ok(text) = fs::read_to_string(&f) else {
-                eprintln!("{}: unreadable", f.display());
-                c.errors += 1;
-                continue;
-            };
-            c.file = f.strip_prefix(&root).unwrap_or(&f).to_path_buf();
-            c.module = module_path(&c.krate, f.strip_prefix(k.join("src")).unwrap_or(&f));
-            // A same-length stand-in for an identifier Verus keeps as a
-            // keyword (pcre3's `assert::`) keeps the line numbers.
-            match parse_file(&cfg.stand_in(&text)) {
-                Ok(file) => c.items(&file.items, false),
-                Err(e) => {
-                    eprintln!("{}:{}: {e}", c.file.display(), e.span().start().line);
-                    c.errors += 1;
-                }
-            }
-        }
+        c.walk_crate(&cfg, (&root, k), cfg.ledger.is_some().then_some(&mut tests));
     }
     c.finish();
     if cfg.ledger.is_some() && !c.discharged.is_empty() {
@@ -3336,9 +4393,11 @@ fn check_rlimit(
 }
 
 /// The `#[verifier::rlimit]` limits of `rev`'s sources of the crates in
-/// `dirs` (name and directory, under `root`), as [`Counter`] reads them
-/// from the working tree: each file `git grep` finds the attribute in,
-/// parsed from `rev`'s copy.
+/// `dirs` (name and directory, under `root`), read from `rev`'s copy of
+/// each crate's files by the walk the working tree's are read with
+/// ([`Counter::walk_crate`]): test-only modules left out, and the crate's
+/// `macro_rules!` collected and expanded, so that a limit a macro writes,
+/// with its definition in any file, is the base's limit too.
 fn base_limits(
     root: &Path,
     cfg: &Config,
@@ -3369,51 +4428,66 @@ fn base_limits(
             .output()
             .map_err(|e| format!("git: {e}"))
     };
-    let mut args = vec!["grep", "-l", "-F", "verifier::rlimit", rev, "--"];
-    let src_args: Vec<String> = srcs.iter().map(|(_, s)| s.display().to_string()).collect();
-    args.extend(src_args.iter().map(String::as_str));
-    let found = git(&args)?;
-    // git grep exits 1 when nothing matches.
-    if !found.status.success() && found.status.code() != Some(1) {
-        return Err(format!(
-            "git grep in {rev}: {}",
-            String::from_utf8_lossy(&found.stderr).trim()
-        ));
-    }
     let mut c = Counter::new(
         false,
         Atoms::of(cfg),
         cfg.reach.as_ref().and_then(|r| r.fn_ptr_macro.clone()),
     );
-    for line in String::from_utf8_lossy(&found.stdout).lines() {
-        // `REV:<crate dir>/src/<path>`.
-        let path = line.strip_prefix(&format!("{rev}:")).unwrap_or(line);
-        let rel = Path::new(path);
-        let Some((krate, under)) = srcs
-            .iter()
-            .find_map(|(k, s)| rel.strip_prefix(s).ok().map(|u| (k, u)))
-        else {
-            continue;
-        };
-        let shown = git(&["show", &format!("{rev}:{path}")])?;
-        if !shown.status.success() {
-            return Err(format!(
-                "git show {rev}:{path}: {}",
-                String::from_utf8_lossy(&shown.stderr).trim()
-            ));
+    // The revision's copy of each crate (its sources and its Cargo.toml,
+    // which names its roots) is written to a scratch directory and read by
+    // the walk the working tree is read with.
+    let scratch = std::env::temp_dir().join(format!(
+        "verus-count-base-{}-{}",
+        std::process::id(),
+        rev.replace(|ch: char| !ch.is_ascii_alphanumeric(), "_")
+    ));
+    let _ = fs::remove_dir_all(&scratch);
+    let read = (|| -> Result<(), String> {
+        for (krate, src) in &srcs {
+            let kdir = src.parent().unwrap_or(Path::new("")).to_path_buf();
+            let listed = git(&[
+                "ls-tree",
+                "-r",
+                "--name-only",
+                rev,
+                "--",
+                &src.display().to_string(),
+                &kdir.join("Cargo.toml").display().to_string(),
+            ])?;
+            if !listed.status.success() {
+                return Err(format!(
+                    "git ls-tree {rev}: {}",
+                    String::from_utf8_lossy(&listed.stderr).trim()
+                ));
+            }
+            for path in String::from_utf8_lossy(&listed.stdout).lines() {
+                if !path.ends_with(".rs") && !path.ends_with("Cargo.toml") {
+                    continue;
+                }
+                let shown = git(&["show", &format!("{rev}:{path}")])?;
+                if !shown.status.success() {
+                    return Err(format!(
+                        "git show {rev}:{path}: {}",
+                        String::from_utf8_lossy(&shown.stderr).trim()
+                    ));
+                }
+                let to = scratch.join(path);
+                if let Some(d) = to.parent() {
+                    fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+                }
+                fs::write(&to, &shown.stdout).map_err(|e| format!("{}: {e}", to.display()))?;
+            }
+            fs::create_dir_all(scratch.join(src)).map_err(|e| format!("{e}"))?;
+            c.krate = krate.clone();
+            c.walk_crate(cfg, (&scratch, &scratch.join(&kdir)), None);
         }
-        let text = cfg.stand_in(&String::from_utf8_lossy(&shown.stdout));
-        c.krate = krate.clone();
-        c.file = rel.to_path_buf();
-        c.module = module_path(&c.krate, under);
-        match parse_file(&text) {
-            Ok(file) => c.items(&file.items, false),
-            Err(e) => return Err(format!("{rev}:{path}: {e}")),
-        }
-    }
+        Ok(())
+    })();
+    let _ = fs::remove_dir_all(&scratch);
+    read?;
     if c.errors > 0 {
         return Err(format!(
-            "{rev}: {} rlimit attributes did not parse",
+            "{rev}: {} errors reading its sources for their rlimits",
             c.errors
         ));
     }
