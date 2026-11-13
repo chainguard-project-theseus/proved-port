@@ -6,7 +6,8 @@
 # block. Toolchain: the Wolfi rust stream pcre3's test.yaml uses (it
 # carries rustc, cargo, rustfmt and clippy); bump with it. git is for
 # the tests that build a repository to read a base revision from, and
-# for kit/sync.sh, which count-sync tests.
+# for kit/sync.sh, which count-sync tests. count-installed tests the
+# installed mode of kit/make against the counter built here.
 version: 1
 
 environment:
@@ -41,3 +42,18 @@ checks:
     trigger: [presubmit, postsubmit]
     timeout: 5m
     cmd: [sh, kit/sync-test.sh]
+
+  count-installed:
+    description: >-
+      kit/installed-test.sh: the kit installed into a scratch root as the
+      theseus-proved-port package installs it, then a fixture port in
+      installed mode (verus-count from PATH, no build, the
+      PROVED_PORT_VERSION guard) with the same counter output as the
+      vendored copy.
+    trigger: [presubmit, postsubmit]
+    timeout: 15m
+    environment:
+      # The file's packages, and make (GNU) for the port's targets.
+      packages: [rust-1.99, build-base, busybox, git, make]
+    network: *crates
+    cmd: [sh, kit/installed-test.sh]
