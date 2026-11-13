@@ -30,8 +30,11 @@ base to compare with: a local or development run, or the proof PR that
 adds the port's first FLOOR. It is never a CI run's flag once FLOOR is
 on the base, and giving it with `--base-rev` fails the run (exit 2);
 `--rlimit` reads the statistics `cargo verus ... -- --time-expanded
---output-json` printed. `--version` prints the counter's version.
-`--badge` prints the coverage badge line (The badge, below) for the
+--output-json` printed. `--version` prints the counter's version, which
+is the kit release (`verus-count 0.2.5`): `kit/count/Cargo.toml`'s
+version, which the release sets before it tags (Release, below).
+`--help` (or `-h`) prints the usage and exits 0. Either takes no other
+argument, since it checks nothing. `--badge` prints the coverage badge line (The badge, below) for the
 figures in ROOT's `[floor] path`, and takes no checking option. An
 unknown option or a second ROOT fails the run (exit 2), so a misspelt
 `--flor` cannot leave the floor unchecked.
@@ -741,7 +744,9 @@ pilot's hand count did.
 
 ## Adopting: vendoring
 
-TODO: once proved-port (and the ports) are public, publish verus-count as a package (crates.io or a Wolfi apk installed as a pinned environment package) and replace vendoring.
+From v0.2.5 the kit is also a Wolfi package (Release, below), and a
+port that pins it carries no copy. Vendoring, described here, stays for
+the ports that have not moved yet.
 
 A port's check guests cannot reach this repository, so a port carries
 a copy of this crate at `verus/count/`, made by `kit/sync.sh` from a
@@ -782,18 +787,21 @@ kit/sync.sh --check PORT_ROOT  # fail unless the copy matches its recorded commi
 
 ## Release
 
-Ports will pin the kit as a released package (kit/PLAN.md, section 4)
-once the TODO above is done; until then they vendor it. A
-release of this crate needs:
+A release is a `vX.Y.Z` tag on main (v0.1.0 through v0.2.4 so far).
+The counter's version is the release's: the pull request that opens a
+release sets `version` in `Cargo.toml` and `Cargo.lock` to X.Y.Z before
+the tag, and `--version` prints `verus-count X.Y.Z` from that commit
+on. A counter built from main between that pull request and the tag
+already names the coming release. A copy vendored from there records
+`tag none` in its KIT, as any copy taken between releases does.
 
-- a version: `Cargo.toml` says `0.0.0` until a `vX.Y.Z` tag
-  sets it, and `--version` prints it so a port's Makefile can refuse
-  another;
-- a package build (a melange config in a package repository the ports'
-  check guests can read) that runs `cargo build --locked --release`
-  here and installs `verus-count`, with `cargo test` in its test
-  stage;
-- the ports' checks to install it pinned with `~`, and to drop the
-  in-tree counter and its `counter tests` step in the same PR.
-
-No tag or release exists yet.
+From v0.2.5 on, each tag is packaged as theseus-proved-port X.Y.Z,
+which installs `verus-count` and kit/make, the templates and a KIT
+file. That release also brings kit/make/proved-port.mk's installed
+mode, which this check depends on: a port that pins the package with
+`~` sets PROVED_PORT_VERSION in its Makefile, and the installed mode
+refuses a counter whose `--version` is another release. So a tag that
+kept the previous release's version fails `make verus` in every port
+that moves its pin to it. Nothing in this directory checks the bump by
+itself: the cli tests only refuse the 0.0.0 placeholder. Ports that
+vendor take a tag with `kit/sync.sh` instead.
