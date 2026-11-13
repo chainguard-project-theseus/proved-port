@@ -8,29 +8,30 @@ the project names taken out.
 The rule text in each header (how FLOOR ratchets, how RLIMIT headroom
 and REACH rows work) is the contract the counter enforces and agents
 read, so keep it as written in the port's own file; fill in the
-placeholders and the rows. Each header ends with a
-`# kit: proved-port v{KIT_VERSION} ({KIT_SHA})` line naming the kit
-release and commit it came from, such as
-`# kit: proved-port v0.2.0 (<full sha>)`: `{KIT_VERSION}` is the
-release's tag without its `v` (proved-port tags `v0.1.0`, `v0.2.0`, ...),
-and `{KIT_SHA}` the full commit the copy was taken at, the tag's commit
-or, for a copy taken between releases, the later commit, with
-`{KIT_VERSION}` the latest release before it. Where the port vendors the
-counter, `{KIT_SHA}` is the commit `verus/count/KIT` records, and
-`make verus-headers` (`verus/make/headers.sh`) diffs the port's header
-against the template at that commit, holding the line's SHA to that
-commit and its version to KIT's tag (any version while KIT's tag is
-`none`). `AGENTS.md` and `CONTRIBUTING.md` point at those
-headers rather than restating them.
+placeholders and the rows.
+
+A port takes the kit as the theseus-proved-port package, pinned
+`theseus-proved-port~{KIT_VERSION}` (v0.3.0 or later). Its copies of
+these files carry no `# kit:` line: the release is the package pin (the
+Checks environments, `.chainguard/ci/env/dev.yaml` and the Makefile's
+`PROVED_PORT_VERSION`). `make verus-headers`
+(`/usr/share/proved-port/make/headers.sh`) holds each file's header,
+its whole leading `#` comment, to the installed template's, so the
+port's own comments go after a blank line below it.
+
+`AGENTS.md` and `CONTRIBUTING.md` point at those headers rather than
+restating them.
 
 `make verus-headers` holds only the kit's Verus files, which
-`kit/make/VERUS-FILES` names: the headers of `verus/FLOOR`, `RLIMIT`,
+`kit/make/VERUS-FILES` names (the package installs that list beside
+`headers.sh`, with every template under its own name in
+`/usr/share/proved-port/templates/`, and holds only the listed ones):
+the headers of `verus/FLOOR`, `RLIMIT`,
 `REACH`, `MINTS` and `verus/count.toml`, of `.chainguard/ci/verus.yaml`,
 `.chainguard/ci/miri.yaml` and `.chainguard/reviewers.yaml`, and the
-vendored-kit rule (the `- The vendored kit` item) of
-`.chainguard/review-prompt.md`, which carries no kit line. The vendored
-copies themselves (`verus/count/`, `verus/make/`) are
-`kit/sync.sh --check`'s. Every other template here is a starting point,
+kit rule (the item that starts `- The vendored kit`) of
+`.chainguard/review-prompt.md`, which carries no kit line. A port has
+no copy of the counter or the make targets. Every other template here is a starting point,
 not held: the port reshapes it to its own checks, and its copy needs no
 kit line ("Repository configuration" below).
 
@@ -72,10 +73,12 @@ earlier with FLOOR at 0.0 (FLOOR's header; `kit/count/README.md`,
    names; never leave the `TEMPLATE` files in the port, since the
    counter reads every `verus/theorems/*.md` as a seams table and every
    `verus/seams/kani-*.md` as a record.
-2. Replace every `{PLACEHOLDER}`. A placeholder in capitals is a value
+2. Delete each `# kit: proved-port v{KIT_VERSION} ({KIT_SHA})` line a
+   template still has, held or a starting point: a port's files carry none.
+   Then replace every `{PLACEHOLDER}`. A placeholder in capitals is a value
    (`{PORT}`, `{LIBRARY}`, `{UPSTREAM_VERSION}`, `{CAPI_CRATE}`,
    `{VERUS_RELEASE}`, `{KANI_RELEASE}`, `{RUST_STREAM}`, `{MSRV}`,
-   `{KIT_VERSION}`, `{KIT_SHA}`);
+   `{KIT_VERSION}`);
    one with a colon (`{SIGNING_POLICY: ...}`) is a value its text
    describes, and where it lists choices split by `|`, keep one; one in
    a sentence (`{How to run the gate ...}`) is prose to write, or to
@@ -128,15 +131,15 @@ merged) with #202 (`98588c1f`).
 | `.chainguard/ci/env/default.yaml` | the empty default environment | all four |
 | `.chainguard/ci/env/dev.yaml` | the union of the checks' packages (consumers.yaml's apk-tools and wolfi-keys included), for sessions and the deps agent | pcre3, chainz, challoc#688 |
 | `.chainguard/develop.yaml` | sessions `from: .chainguard/ci/env/dev.yaml` | pcre3, chainz, challoc#688 |
-| `.chainguard/deps.yaml` | the Checks deps agent: crates, toolchain (Rust, Verus with vstd, and Kani as one set), msrv (rust-version with the msrv check's toolchain), tools, the reference library, consumers | pcre3 main (#1079), challoc#689, chainz#64, expat-rs main (#201) |
+| `.chainguard/deps.yaml` | the Checks deps agent: crates, toolchain (Rust, Verus with vstd, and Kani as one set), msrv (rust-version with the msrv check's toolchain), kit (the theseus-proved-port pin with `PROVED_PORT_VERSION` and the held headers), tools, the reference library, consumers | pcre3 main (#1079), challoc#689, chainz#64, expat-rs main (#201) |
 | `.chainguard/reviewers.yaml` | the Checks reviewer `{PORT}`: `approve: true`, the read limits, no `diff_lines` (deprecated), and `rerun_on_checks` on the presubmit aggregate, since the reviewer reads its results | chainz and challoc |
-| `.chainguard/review-prompt.md` | the sections the four prompts share, plus the runtime-costs-of-proof check that cites AGENTS.md; the port writes its own checks. Evidence reads the presubmit results, as chainz's does; the vendored-counter rule is pcre3's (`KIT` moves with the copy) | all four; Evidence from chainz, the counter rule from pcre3, the check from proved-c-port's "Prove the producer, not its output" (#13) |
+| `.chainguard/review-prompt.md` | the sections the four prompts share, plus the runtime-costs-of-proof check that cites AGENTS.md; the port writes its own checks. Evidence reads the presubmit results, as chainz's does; the kit rule holds the kit's pins to one release, moved as one | all four; Evidence from chainz, the kit rule from pcre3's counter rule, the check from proved-c-port's "Prove the producer, not its output" (#13) |
 | `.github/codeowners.yaml` | the codeowners-gate sidecar: one gated `*` entry, the maintainers and `bot:{PORT}` | pcre3, challoc, chainz |
 | `.github/CODEOWNERS` | the sidecar's rendering, without the `bot:` owner | pcre3, challoc, chainz |
 
 Of these, the Verus files (`.chainguard/ci/verus.yaml`,
 `.chainguard/ci/miri.yaml`, `.chainguard/reviewers.yaml` and the
-vendored-kit rule of `.chainguard/review-prompt.md`) are held to the kit
+kit rule of `.chainguard/review-prompt.md`) are held to the kit
 by `make verus-headers`. The rest (conformance, consumers, fuzz, test,
 lint, the environments, `develop.yaml`, `deps.yaml`, the codeowners
 files) are starting points: the port copies them, then reshapes them to
@@ -181,7 +184,9 @@ Each passes on a port with no proofs yet:
 
   ```make
   KANI_NONE = yes
-  include verus/make/proved-port.mk
+  PROVED_PORT_VERSION = {KIT_VERSION}
+  PROVED_PORT_HOME ?= /usr/share/proved-port
+  include $(PROVED_PORT_HOME)/make/proved-port.mk
   ```
 
   `make kani` then lists the harnesses, passes when there are none, and
@@ -199,9 +204,14 @@ packages that run on every pull request. Check keys are
 the ones the ports use, so the `ci/run:<check>` labels carry over. The
 deps entries each repeat the rules the agent must keep, since it sees
 only its entry's prompt: FLOOR never goes down and gains no `lowered`
-line, `verus/count` and `verus/make` change only by `kit/sync.sh`, and a reference bump
+line, the kit's pin (`theseus-proved-port~`, `PROVED_PORT_VERSION`, and
+the proved-port marketplace ref in a `.claude/settings.json` that names
+one) moves only through the kit entry, and a reference bump
 updates `docs/abi-changes.md`, the deviations lists and the
-known-differences rows in the same pull request. The toolchain entry
+known-differences rows in the same pull request. The kit entry moves
+every kit pin together, takes the kit's header text where `make
+verus-headers` reports drift, and leaves a bump whose counter fails a
+gate the old one passed for a person. The toolchain entry
 commits the pin moves before it runs any suite, so a run that outlasts
 the deps agent's two-hour budget still pushes a draft, then runs every
 suite in the guest, Kani included, as pcre3's does (#1080). A port whose
@@ -210,12 +220,11 @@ request's kani check and fixes what it reports on a turn, as chainz's
 and challoc's do; its body then says Kani was left to the check. A port
 with this file deletes `.github/dependabot.yml`.
 
-The `verus` and `verus-main` checks run verus/count's own tests before
-the proofs, as all three sources do. A port's CI cannot run
-`kit/sync.sh --check` (the kit is internal), so those tests are the only
-check in the port of a hand-edited counter, and a hand edit to
-`verus/make/` has no check there but the reviewer, whose prompt holds
-both copies to the commit `verus/count/KIT` names.
+The `verus` and `verus-main` checks run no counter tests: the package's
+own build tests the counter. `make verus` fails when the installed KIT
+or `verus-count --version` names another release than
+`PROVED_PORT_VERSION`, so a stale install or another counter on PATH
+fails.
 
 The verus checks compare verus/FLOOR and verus/RLIMIT with one base, by
 one rule: the base Checks sets (`CHAINGUARD_BASE_REVISION`), which both

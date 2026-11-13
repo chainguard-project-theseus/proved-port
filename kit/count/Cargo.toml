@@ -3,7 +3,7 @@ name = "verus-count"
 description = "Counts a proved port's verified, trusted and unverified functions, and holds them to its FLOOR (kit/count/README.md)"
 # The kit release this counter comes from, which --version prints; the
 # release that tags vX.Y.Z sets it to X.Y.Z first.
-version = "0.2.5"
+version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false

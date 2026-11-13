@@ -1,6 +1,7 @@
 # How much of its SMT resource limit a verified function may use
-# (verus/count --rlimit; verus/README.md, "Headroom"): the rlimit count
-# Verus's statistics report for the function, summed over its queries, as
+# (the kit counter (verus-count) with --rlimit; verus/README.md,
+# "Headroom"): the rlimit count Verus's statistics report for the
+# function, summed over its queries, as
 # a share of its `#[verifier::rlimit(N)]` or of the default (10), at
 # 3,000,000 a unit. Z3's count is deterministic, so a function near its
 # limit passes every run of the change that put it there and fails on main

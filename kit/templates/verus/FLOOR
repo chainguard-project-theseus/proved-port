@@ -1,5 +1,6 @@
 # The shares of executable functions and of their lines that the verus
-# check holds main to (verus/count --floor; verus/README.md, "Coverage"):
+# check holds main to (the kit counter (verus-count) with --floor;
+# verus/README.md, "Coverage"):
 # the counter's `shipped` row, {SHIPPED_CRATES: every crate of the port
 # but one whose Cargo.toml says `publish = false` (name those); or, where
 # verus/count.toml's `ships` says otherwise, the crates it ships (a single

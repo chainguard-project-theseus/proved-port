@@ -52,30 +52,44 @@ marketplace's GitHub source.
 
 ## How a port consumes the kit
 
-A port vendors the kit rather than depending on it, since a port's CI
-cannot reach this repository:
+- **The package.** A port pins the kit as the Wolfi package
+  `theseus-proved-port~X.Y.Z` (v0.3.0 or later), in the packages of its
+  verus checks and of `.chainguard/ci/env/dev.yaml`. The package
+  installs the counter as `verus-count`, and the make targets, their
+  scripts, the templates and a KIT record of the release under
+  `/usr/share/proved-port/`. The port's Makefile names the same release
+  and includes the installed targets:
 
-- **Vendoring.** `kit/sync.sh PORT_ROOT`, run from a clone of this
-  repository at the commit to take (a release tag where there is one),
-  copies `kit/count` (the coverage counter) into the port's
-  `verus/count/` and `kit/make` (the make targets and `kani.sh`) into
-  its `verus/make/`. It records the commit in `verus/count/KIT`, with
-  its tag, or `tag none` for a copy taken between releases.
-  `kit/sync.sh --check PORT_ROOT` fails unless both copies match that
-  commit byte for byte. Whoever changes a copy runs it, since the
-  port's CI cannot.
+  ```make
+  PROVED_PORT_VERSION = X.Y.Z
+  PROVED_PORT_HOME ?= /usr/share/proved-port
+  include $(PROVED_PORT_HOME)/make/proved-port.mk
+  ```
+
+  The kit's targets then fail when the installed kit or counter is
+  another release. `kit/count/README.md`, "Adopting: the package", has
+  the details, including how to build the counter on a host without the
+  package.
 - **Templates.** A new port copies `kit/templates/`: the Verus ledgers
   (`verus/FLOOR`, `RLIMIT`, `REACH`, `MINTS`, `count.toml`), the check
-  files, the reviewer configuration and the document skeletons, with
-  the placeholders filled. Each of the kit's Verus files
-  (`kit/make/VERUS-FILES`) but `.chainguard/review-prompt.md` keeps the
-  kit's header and its `# kit: proved-port vX.Y.Z (<sha>)` line; the
-  other templates are starting points that carry no kit line.
-  `make verus-headers` holds the kit's Verus files to the templates of
-  the commit KIT records ([kit/templates/README.md](kit/templates/README.md)).
-- **Changes.** A port never edits its vendored copies. A change to the
-  counter or the make targets lands here first; the port then re-syncs
-  to a commit that has it, and moves its kit lines to that commit.
+  files, the reviewer configuration and the
+  document skeletons, with the placeholders filled. Each of the kit's
+  Verus files (`kit/make/VERUS-FILES`) but
+  `.chainguard/review-prompt.md` keeps the kit's header, with no
+  `# kit:` line: the release is the package pin. The other templates are
+  starting points. `make verus-headers` holds the kit's Verus files to
+  the installed templates
+  ([kit/templates/README.md](kit/templates/README.md)).
+- **Changes.** A port carries no copy of the kit. A change to the
+  counter or the make targets lands here and ships in a release; a new
+  release reaches a port as one pull request that moves the package
+  pins and `PROVED_PORT_VERSION` together (and the proved-port marketplace
+  ref in a `.claude/settings.json` that names one), and takes any new text in the held
+  headers (the kit entry of `kit/templates/.chainguard/deps.yaml`).
+
+A port that still carries vendored `verus/count/` and `verus/make/`
+copies is on kit 0.2.4, and moves to the package in one pull request
+(`kit/count/README.md`, "Moving from a vendored copy").
 
 ## What "proved" means here
 

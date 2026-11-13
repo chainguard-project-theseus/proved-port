@@ -12,14 +12,12 @@ what each class means for a C caller. verus/MINTS cites this section.}
 
 ```sh
 make verus VERUS_BASE=none     # locally: the proofs, then the counter with FLOOR and RLIMIT
-cargo run --locked --release --manifest-path verus/count/Cargo.toml \
-  --target-dir target/verus-count -- .           # the shares, per crate
-cargo run --locked --release --manifest-path verus/count/Cargo.toml \
-  --target-dir target/verus-count -- --list .    # one line per function
+verus-count .                  # the shares, per crate
+verus-count --list .           # one line per function
 ```
 
-The counter (verus/count, "Counter" below) reads every shipped crate's
-source, `verus!` blocks included, and classes each executable function,
+`verus-count` is the counter the theseus-proved-port package installs
+("Counter" below). It reads every shipped crate's source, `verus!` blocks included, and classes each executable function,
 and the lines from its `fn` to its closing brace, as verified, trusted,
 discharged or outside ("What counts as verified"). Test-only and
 verifier-only code is left out. It reads source and does not run Verus,
@@ -71,31 +69,27 @@ verus/FLOOR cites this section.}
 
 ## Counter
 
-`verus/count/` is the proved-port kit's coverage counter
-(`verus-count`), vendored: [count/KIT](count/KIT) names the proved-port
-commit it was copied from, and [count.toml](count.toml) configures it
-for {PORT} (the crates, the test-only `cfg`s and features, and where
-each table this file names lives; count/README.md, "Configuration").
-count/README.md states every rule it enforces, and the headers of
-FLOOR, RLIMIT, REACH and MINTS state each file's. Those headers are the
-kit's templates filled in for {PORT}, and each ends with a
-`# kit: proved-port vX.Y.Z (SHA)` line naming the kit release and commit
-it matches.
+`verus-count` is the proved-port kit's coverage counter. {PORT} takes
+the kit as the theseus-proved-port package, pinned
+(`theseus-proved-port~X.Y.Z`) in `.chainguard/ci/verus.yaml` and
+`.chainguard/ci/env/dev.yaml`, with the same release as the Makefile's
+`PROVED_PORT_VERSION`. The package installs the counter on PATH and the
+kit's make targets under `/usr/share/proved-port/make/` (`proved-port.mk`,
+which the Makefile includes for `make verus` and `make kani`, and its
+scripts), with the templates `make verus-headers` holds the headers to
+and a KIT file naming the release's tag and commit. `make` fails a kit
+target when the installed KIT or `verus-count --version` names another
+release than `PROVED_PORT_VERSION`. The pins move together (with the
+proved-port marketplace ref, where `.claude/settings.json` names one), in a pull
+request of their own (`.chainguard/deps.yaml`, the kit entry). {PORT}
+carries no copy of the counter or the make targets: a change to either
+lands in the kit's `kit/count` or `kit/make`, in a proved-port pull
+request, and reaches {PORT} with the next kit release.
 
-The same sync vendors the kit's make targets to `verus/make/`
-(`proved-port.mk`, which the Makefile includes for `make verus` and
-`make kani`, its scripts, and the templates `make verus-headers` holds
-the headers to), under the same KIT.
-
-Never edit either copy. A change to the counter or the make targets
-lands in the kit's `kit/count` or `kit/make` first, in a
-proved-port pull request; then a {PORT} pull request runs
-`kit/sync.sh <{PORT} checkout>` from a clone of proved-port at that
-commit, which replaces `verus/count/` and `verus/make/` and rewrites
-KIT, and `kit/sync.sh --check <{PORT} checkout>`, which fails unless
-both copies are exactly the commit KIT names. Name that commit in the pull
-request: the checks here cannot reach proved-port.
-The verus check runs the copy's tests (`counter tests`) before the
-proofs. The copy is a workspace of its own with its own Cargo.lock,
-built under `target/verus-count` so `git status` stays clean, and none
-of its dependencies reach the shipped crates.
+[count.toml](count.toml) configures the counter for {PORT} (the crates,
+the test-only `cfg`s and features, and where each table this file names
+lives; the kit's `kit/count/README.md`, "Configuration", which also
+states every rule the counter enforces), and the headers of FLOOR,
+RLIMIT, REACH and MINTS state each file's. Those headers are the kit's
+templates filled in for {PORT}, held to the release the package pin
+names; they carry no kit line.

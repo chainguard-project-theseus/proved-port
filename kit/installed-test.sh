@@ -341,6 +341,25 @@ headers "$hdr_installed"
 cp "$tmp/floor.saved" "$hdr_installed/verus/FLOOR"
 echo "ok make verus-headers, installed, needs no kit line and reads none"
 
+# A port moving from a vendored copy, with its own comment below the kit
+# line: replacing the line with a blank line keeps that comment out of
+# the header and passes; deleting it outright puts the comment in the
+# header, which then drifts from the template.
+awk -v kit="# kit: proved-port v0.0.0 (1234567890abcdef)" \
+  '!done && !/^#/ { print kit; print "#"; print "# The port'"'"'s own note."; done = 1 } { print }' \
+  "$tmp/floor.saved" > "$tmp/floor.vendored"
+grep -q "^# The port's own note.$" "$tmp/floor.vendored" || fail "the port's own note was not planted"
+awk '/^# kit: proved-port / { print ""; next } { print }' "$tmp/floor.vendored" > "$hdr_installed/verus/FLOOR"
+headers "$hdr_installed"
+[ "$hdr_rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "make verus-headers, installed, kit line replaced by a blank line: got = failure, want = success"; }
+sed '/^# kit: proved-port /d' "$tmp/floor.vendored" > "$hdr_installed/verus/FLOOR"
+headers "$hdr_installed"
+[ "$hdr_rc" -ne 0 ] || fail "make verus-headers, installed, kit line deleted with the port's comment below it: got = success, want = failure"
+grep -q "headers: verus/FLOOR: the header drifted from the kit's" "$tmp/out" \
+  || { cat "$tmp/out" >&2; fail "make verus-headers, installed, port comment in the header: the message does not say it drifted"; }
+cp "$tmp/floor.saved" "$hdr_installed/verus/FLOOR"
+echo "ok make verus-headers, installed, a kit line becomes a blank line where the port's comments follow it"
+
 # Vendored still holds each file's kit line: one missing, or naming
 # another commit, fails.
 cp "$hdr_vendored/verus/FLOOR" "$tmp/vfloor.saved"

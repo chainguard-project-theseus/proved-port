@@ -46,22 +46,17 @@ a change cites. The checks below are what a change must not get wrong.
   anything else is a Question citing that header, unless it is the port's
   first proof pull request, raising FLOOR from 0.0, whether or not it
   brings the counter.
-- The vendored kit (`verus/count/`, the counter, and `verus/make/`, the
-  make targets, Kani runner and header lint with their templates).
-  Every file in either comes from `kit/sync.sh` in the proved-port kit,
-  at the commit `verus/count/KIT` names, and `kit/sync.sh --check`
-  covers both. A change to a file in either must also move `KIT` to a
-  new proved-port commit. `kit/sync.sh` rewrites `KIT` on every run, so
-  a re-sync moves `KIT` (its `commit` line, or its `tag` line once that
-  commit is tagged) whether or not another file there changes; a
-  `KIT`-only diff is such a re-sync and is fine. The body of a pull
-  request that changes `KIT` names the commit `KIT` records and says
-  `kit/sync.sh --check` passed on this head: the checks here cannot
-  reach proved-port, so that line is the evidence the copies match. An
-  edit under `verus/count/` or `verus/make/` with `KIT` unchanged is
-  Blocking, and so is a `KIT` change whose body names no commit, names
-  one other than `KIT`'s `commit` line, or does not say
-  `kit/sync.sh --check` passed.
+- The vendored kit, which this port does not carry: it takes the kit as
+  the theseus-proved-port package, whose installed `KIT` names the
+  release. Its pin is the `theseus-proved-port~X.Y.Z` package version in
+  every `.chainguard/ci` file that installs it and in
+  `.chainguard/ci/env/dev.yaml`, `PROVED_PORT_VERSION` in the Makefile,
+  and the `vX.Y.Z` ref of the proved-port marketplace in a
+  `.claude/settings.json` that names one; they move together, to the
+  same release, in
+  one pull request. A change that moves some of them but not all is
+  Blocking, and so is one that adds a `verus/count/` or `verus/make/`
+  copy of the kit.
 - Kani harnesses. Never order-compare bools (`<`, `<=`, `>`, `>=`): CBMC
   ignores the relations Kani emits, so the harness passes vacuously. Such
   a comparison is Blocking. A Kani-discharged seam has its record under
