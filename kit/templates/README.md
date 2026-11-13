@@ -38,7 +38,7 @@ which brings the counter, is the one exception (FLOOR's header;
 | template | copy to | what it holds |
 |---|---|---|
 | `verus/FLOOR` | `verus/FLOOR` | the coverage ratchet: four figures, `lowered` lines |
-| `verus/count.toml` | `verus/count.toml` | the counter's configuration: `[crates]`, `[floor]` and `[badge]`; add the sections of the checks the port runs (kit/count/README.md, "Configuration") |
+| `verus/count.toml` | `verus/count.toml` | the counter's configuration: `[crates]`, with the `cfg` atoms the proof run settles (`verus_sets`, `verus_never_sets`), `[floor]` and `[badge]`; add the sections of the checks the port runs (kit/count/README.md, "Configuration") |
 | `PORT-README.md` | `README.md` | the port's README: its title, the Verus badge at FLOOR's figures (0.0 until the first proof), and outline sections |
 | `verus/RLIMIT` | `verus/RLIMIT` | rlimit headroom: `max-share`, `allow`, `rlimit-raised` |
 | `verus/REACH` | `verus/REACH` | functions a C caller reaches that Verus does not check |

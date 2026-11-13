@@ -73,6 +73,19 @@ pub(crate) struct Crates {
     /// `verus_keep_ghost` is.
     #[serde(default)]
     pub(crate) verus_features: Vec<String>,
+    /// `cfg` atoms Verus's build is sure to set, written as a `cfg` writes
+    /// them (`unix`, `target_os = "linux"`, or `feature = "jit"` for a
+    /// default feature the proof run keeps), beyond `verus_keep_ghost` and
+    /// the `verus_features`. A shipped build may set them or not. Any atom
+    /// the configuration does not settle may be false where Verus runs, so
+    /// a function under it counts as trusted, never as verified.
+    #[serde(default)]
+    pub(crate) verus_sets: Vec<String>,
+    /// `cfg` atoms Verus's build never sets (`miri`), written as
+    /// `verus_sets` writes them, so `not(miri)` is sure to hold where
+    /// Verus runs. A shipped build may set them or not.
+    #[serde(default)]
+    pub(crate) verus_never_sets: Vec<String>,
     /// Whether the ghost column counts the `spec` and `proof` functions of
     /// code built only for Verus too (challoc's counter does); by default
     /// it counts shipped code's alone. No FLOOR figure reads it.
@@ -290,6 +303,7 @@ impl Config {
                 ));
             }
         }
+        c.check_verus_atoms()?;
         let read = c.read_names();
         for [from, to] in &c.crates.stand_ins {
             if let Some(name) = read.iter().find(|n| rewrites(from, to, n)) {
@@ -354,8 +368,87 @@ impl Config {
             .chain(self.crates.test_cfgs.iter().cloned())
             .chain(self.crates.test_features.iter().cloned())
             .chain(self.crates.verus_features.iter().cloned())
+            .chain(
+                self.verus_set_atoms()
+                    .into_iter()
+                    .chain(self.verus_never_atoms())
+                    .flat_map(|a| {
+                        a.split('=')
+                            .map(|p| p.trim_matches('"').to_owned())
+                            .collect::<Vec<_>>()
+                    }),
+            )
             .chain(reach)
             .chain(mints)
+            .collect()
+    }
+
+    /// Fails on a `verus_sets` or `verus_never_sets` entry that is not one
+    /// `cfg` atom (a name, or `name = "value"`), and on one the
+    /// configuration already settles: a test atom, a Verus atom, or an
+    /// atom named twice, since one atom cannot be both sure and never set.
+    fn check_verus_atoms(&self) -> Result<(), String> {
+        let mut seen: Vec<(String, &str)> = self
+            .test_atoms()
+            .into_iter()
+            .map(|a| (a, "a test atom"))
+            .chain(self.verus_atoms().into_iter().map(|a| (a, "a Verus atom")))
+            .collect();
+        for (key, names, what) in [
+            ("verus_sets", &self.crates.verus_sets, "in verus_sets"),
+            (
+                "verus_never_sets",
+                &self.crates.verus_never_sets,
+                "in verus_never_sets",
+            ),
+        ] {
+            for n in names {
+                let a = atom(n).ok_or_else(|| {
+                    format!(
+                        "[crates] {key} entry {n:?} is not one cfg atom: give a name (`miri`) or `name = \"value\"` (`feature = \"jit\"`)"
+                    )
+                })?;
+                if let Some((_, was)) = seen.iter().find(|(s, _)| *s == a) {
+                    return Err(format!("[crates] {key} entry {n:?} is already {was}"));
+                }
+                seen.push((a, what));
+            }
+        }
+        Ok(())
+    }
+
+    /// The `cfg` atoms that only Verus's build meets, as `cfg_eval`
+    /// compares them: `verus_keep_ghost`, and `feature="F"` for each
+    /// Verus feature.
+    pub(crate) fn verus_atoms(&self) -> Vec<String> {
+        std::iter::once("verus_keep_ghost".to_owned())
+            .chain(
+                self.crates
+                    .verus_features
+                    .iter()
+                    .map(|f| format!("feature=\"{f}\"")),
+            )
+            .collect()
+    }
+
+    /// `verus_sets`' atoms, as `cfg_eval` compares them (whitespace
+    /// removed). An entry that is not an atom is left out: [`Config::parse`]
+    /// refuses it.
+    pub(crate) fn verus_set_atoms(&self) -> Vec<String> {
+        self.crates
+            .verus_sets
+            .iter()
+            .filter_map(|n| atom(n))
+            .collect()
+    }
+
+    /// `verus_never_sets`' atoms, as [`Config::verus_set_atoms`] gives
+    /// `verus_sets`'.
+    pub(crate) fn verus_never_atoms(&self) -> Vec<String> {
+        self.crates
+            .verus_never_sets
+            .iter()
+            .filter_map(|n| atom(n))
             .collect()
     }
 
@@ -399,7 +492,10 @@ impl Config {
     /// of the shipped tally and the walks; a member that both moves and
     /// changes `ships` makes two narrowings); a `test_cfgs`,
     /// `test_features` or `verus_features` name added (each takes the
-    /// items under it out of the shipped tally); a `stand_ins` pair added
+    /// items under it out of the shipped tally); a `verus_sets` or
+    /// `verus_never_sets` atom added (each lets the functions it guards
+    /// count as verified, which they could not while Verus's build might
+    /// skip them); a `stand_ins` pair added
     /// (it changes what the counter reads); the `[badge]` section removed,
     /// or its `path` moved, since the badge a reader sees is in the file
     /// the base held and no base copy of the badge is compared. Renaming a table, a mint,
@@ -532,6 +628,25 @@ impl Config {
                 push(
                     format!("[crates] {key} adds {n:?}"),
                     "so the items under it leave the shipped tally",
+                );
+            }
+        }
+        // Compared as atoms, so respacing one is not a change.
+        for (key, here, there) in [
+            ("verus_sets", &h.verus_sets, base.verus_set_atoms()),
+            (
+                "verus_never_sets",
+                &h.verus_never_sets,
+                base.verus_never_atoms(),
+            ),
+        ] {
+            for n in here
+                .iter()
+                .filter(|n| atom(n).is_none_or(|a| !there.contains(&a)))
+            {
+                push(
+                    format!("[crates] {key} adds {n:?}"),
+                    "so the counter takes Verus's build to settle it, and the functions it guards may count as verified",
                 );
             }
         }
@@ -739,6 +854,30 @@ fn rewrites(from: &str, to: &str, name: &str) -> bool {
     })
 }
 
+/// `text` as one `cfg` atom, without whitespace, as `cfg_eval` compares
+/// atoms: a name (`miri`), or a name, `=` and a string (`feature="jit"`);
+/// `None` for anything else, such as a predicate (`not(miri)`).
+fn atom(text: &str) -> Option<String> {
+    let w: String = text.split_whitespace().collect();
+    let is_name = |n: &str| {
+        n.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    let ok = match w.split_once('=') {
+        None => is_name(&w),
+        Some((name, value)) => {
+            is_name(name)
+                && value.len() >= 2
+                && value.starts_with('"')
+                && value.ends_with('"')
+                && !value[1..value.len() - 1].contains('"')
+        }
+    };
+    ok.then_some(w)
+}
+
 /// `path` as [`Path`] compares it, without `.` components, so `./crates/a`
 /// and `crates/a/` name the directory `crates/a` does.
 pub(crate) fn normal(path: &str) -> PathBuf {
@@ -848,6 +987,21 @@ mod tests {
             (r#"["unsafe(", "unsafx("]"#, "", "unsafe"),
             (r#"["", "x"]"#, "", "external_body"),
             (
+                r#"["(miri)", "(mirx)"]"#,
+                "verus_never_sets = [\"miri\"]\n",
+                "miri",
+            ),
+            (
+                r#"["\"jit\"", "\"jix\""]"#,
+                "verus_sets = ['feature = \"jit\"']\n",
+                "jit",
+            ),
+            (
+                r#"["\"linux\"", "\"linuz\""]"#,
+                "verus_sets = ['target_os = \"linux\"']\n",
+                "linux",
+            ),
+            (
                 r#"["c_mint(", "c_minx("]"#,
                 "[mints]\npath = \"m\"\nmint = \"c_mint\"\ntoken_trait = \"CToken\"\nhome = \"h\"\n",
                 "c_mint",
@@ -872,6 +1026,8 @@ members = [{ name = "extra", path = "extra", ships = true }]
 test_cfgs = ["test", "kani"]
 test_features = ["test-util"]
 verus_features = ["verus"]
+verus_sets = ['feature = "jit"']
+verus_never_sets = ["miri"]
 stand_ins = [["assert::", "assrtx::"]]
 [recursion]
 table = "verus/theorems/RN1.md"
@@ -905,8 +1061,9 @@ home = "crates/pcre3-capi/src/object.rs"
     /// dropping a member, moving it or turning its `ships` off (also both
     /// at once, under a new name at its path, or for a crate of the base's
     /// `dir`), and adding a `test_cfgs`, `test_features` or
-    /// `verus_features` name or a `stand_ins` pair, each names what it
-    /// turned off.
+    /// `verus_features` name, a `verus_sets` or `verus_never_sets` atom,
+    /// or a `stand_ins` pair, each names what it turned off. Removing or
+    /// respacing a `verus_sets` or `verus_never_sets` atom is not.
     #[test]
     fn a_gate_removed_or_narrowed_since_the_base_fails() {
         let shown = |n: &[Narrowing]| n.iter().map(ToString::to_string).collect::<Vec<_>>();
@@ -946,6 +1103,10 @@ home = "crates/pcre3-capi/src/object.rs"
             // The badge's path spelt another way, or left to its default.
             ("path = \"README.md\"", "path = \"./README.md\""),
             ("path = \"README.md\"\n", ""),
+            ("verus_sets = ['feature = \"jit\"']\n", ""),
+            ("verus_never_sets = [\"miri\"]\n", ""),
+            ("'feature = \"jit\"'", "'feature=\"jit\"'"),
+            ("[\"miri\"]", "[\" miri \"]"),
         ] {
             let got = edit(from, to).narrowed_from(&base);
             assert!(got.is_empty(), "{to:?}: got = {got:?}, wanted = none");
@@ -1060,6 +1221,16 @@ home = "crates/pcre3-capi/src/object.rs"
                 "[\"test-util\"]",
                 "[\"test-util\", \"hardened\"]",
                 "[crates] test_features adds \"hardened\"",
+            ),
+            (
+                "['feature = \"jit\"']",
+                "['feature = \"jit\"', 'target_os = \"linux\"']",
+                "[crates] verus_sets adds \"target_os = \\\"linux\\\"\"",
+            ),
+            (
+                "[\"miri\"]",
+                "[\"miri\", \"loom\"]",
+                "[crates] verus_never_sets adds \"loom\"",
             ),
             (
                 "path = \"extra\"",

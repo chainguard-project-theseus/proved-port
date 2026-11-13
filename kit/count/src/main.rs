@@ -30,8 +30,16 @@
 //! run) are left out, with the files of such modules and, for a `mod.rs`
 //! one, its directory. Items built only for Verus (`verus_keep_ghost`, or
 //! a configured Verus-only feature) are read for their rlimits and their
-//! trusted functions alone. Lines run from a function's `fn` keyword to
-//! its closing brace.
+//! trusted functions alone. A shipped function under a `cfg` Verus's build
+//! might not meet (on the function, or on an `impl`, trait, inline `mod`,
+//! `verus!` block or out-of-line `mod x;` around it), or under a
+//! `cfg_attr` it might not apply, is *trusted* rather than verified: it
+//! ships, and nothing proves Verus compiled it. Only the atoms the
+//! configuration settles there are sure: `verus_keep_ghost`, the
+//! Verus-only features, the test-only atoms (never set), and the
+//! `verus_sets` and `verus_never_sets` atoms; a platform such as
+//! `target_os = "windows"`, or any other atom, may be either.
+//! Lines run from a function's `fn` keyword to its closing brace.
 //!
 //! Usage: `verus-count [--config FILE] [--list] [--floor FILE [--base-rev
 //! REV | --no-base]] [--rlimit STATS] ROOT`, with ROOT the repository root (default
@@ -189,6 +197,16 @@ struct Counter {
     /// for Verus, whose functions are walked for their rlimits and not
     /// counted.
     shipped: bool,
+    /// Whether Verus's build is sure to compile the code
+    /// [`Counter::items`] is walking: false inside a module, `impl`, trait
+    /// or `verus!` block whose `cfg` it might not meet
+    /// ([`Built::Unsure`]), whose verified functions count as trusted.
+    sure: bool,
+    /// The `cfg` predicates of the code [`Counter::items`] is walking: its
+    /// file's ([`module_guards`]) and those of each module, `impl`, trait
+    /// and `verus!` block around it. An item is built where they and its
+    /// own all hold ([`guarded_built`]).
+    guards: Vec<String>,
     /// `width::fn_ptr!`'s definition and invocations, expanded once every
     /// file is read ([`Counter::expand_fn_ptrs`]).
     fn_ptrs: FnPtrs,
@@ -209,28 +227,28 @@ struct Counter {
     verus_only_ghost: bool,
 }
 
-/// The `cfg` atoms, without whitespace, that a shipped build never meets:
-/// those only test builds meet (`test`, `kani`, `feature="test-util"`),
-/// and those only Verus's build meets (`verus_keep_ghost`, and
-/// `feature="F"` for each configured Verus-only feature).
+/// The `cfg` atoms, without whitespace, that the configuration settles:
+/// those only test builds meet (`test`, `kani`, `feature="test-util"`);
+/// those only Verus's build meets (`verus_keep_ghost`, and `feature="F"`
+/// for each configured Verus-only feature); and those Verus's build is
+/// sure to meet (`sets`, `[crates] verus_sets`) or never meets (`never`,
+/// `verus_never_sets`), which a shipped build may or may not. Every other
+/// atom may be true or false in any build.
 #[derive(Debug, Clone, Default)]
 struct Atoms {
     test: Vec<String>,
     verus: Vec<String>,
+    sets: Vec<String>,
+    never: Vec<String>,
 }
 
 impl Atoms {
     fn of(c: &Config) -> Atoms {
         Atoms {
             test: c.test_atoms(),
-            verus: std::iter::once("verus_keep_ghost".to_owned())
-                .chain(
-                    c.crates
-                        .verus_features
-                        .iter()
-                        .map(|f| format!("feature=\"{f}\"")),
-                )
-                .collect(),
+            verus: c.verus_atoms(),
+            sets: c.verus_set_atoms(),
+            never: c.verus_never_atoms(),
         }
     }
 }
@@ -255,6 +273,8 @@ impl Counter {
             limits: Vec::new(),
             verus_fns: BTreeMap::new(),
             shipped: true,
+            sure: true,
+            guards: Vec::new(),
             fn_ptrs: FnPtrs::default(),
             addressed: Vec::new(),
             atoms,
@@ -425,57 +445,420 @@ fn arity(sig: &Signature) -> (usize, bool) {
     (sig.inputs.len() - usize::from(receiver), receiver)
 }
 
-/// The files of modules declared in `file` that no shipped build compiles:
-/// those built only for tests (`#[cfg(test)] mod name;`, `#[cfg(kani)]`)
-/// into `tests`, which nothing reads, and those built only for Verus
-/// (`#[cfg(verus_keep_ghost)]`, `#[cfg(any(test, verus_keep_ghost))]`) into
-/// `verus`, which are read for their rlimits and not counted. A module's
-/// file is the one its `#[path]` names, relative to `file`'s directory, or
-/// else `name.rs` or `name/mod.rs` beside it (or under its directory, for a
-/// `mod.rs` or crate root). Each is canonical, as `main` compares them. A
-/// `cfg` it cannot read is an error, in `errors`.
-fn test_module_files(
-    file: &Path,
-    items: &[Item],
-    atoms: &Atoms,
-    tests: &mut Vec<PathBuf>,
-    verus: &mut Vec<PathBuf>,
-    errors: &mut Vec<String>,
-) {
-    let Some(dir) = module_dir(file) else { return };
-    for item in items {
-        let Item::Mod(m) = item else { continue };
-        let built = match attrs_built(&m.attrs, atoms) {
-            Ok(b) => b,
-            Err(e) => {
-                errors.push(format!("{}: {e}", file.display()));
-                continue;
-            }
-        };
-        let out = match built {
-            Built::Shipped => continue,
-            Built::Test => &mut *tests,
-            Built::Verus => &mut *verus,
-        };
-        if m.content.is_none() {
-            let candidates = match (path_attr(&m.attrs), file.parent()) {
-                (Some(p), Some(d)) => vec![d.join(p)],
-                (Some(_), None) => Vec::new(),
-                (None, _) => {
-                    let name = m.ident.to_string();
-                    vec![
-                        dir.join(format!("{name}.rs")),
-                        dir.join(name).join("mod.rs"),
-                    ]
-                }
-            };
-            out.extend(
-                candidates
-                    .into_iter()
-                    .filter_map(|f| fs::canonicalize(f).ok()),
-            );
+/// What the first pass learns of the module files ([`module_files`]):
+/// each file's own inner `#![cfg(..)]` predicates (`inner`); each
+/// out-of-line declaration of a file, with the file that declares it and
+/// the `cfg` predicates it is under in that file (`declared`: its own,
+/// `#[cfg(..)] mod name;`, and those of the inline modules, `verus!`
+/// blocks and macro bodies around it), one record per declaration, since a
+/// file declared twice is built where either holds; and the files a
+/// `#[path]` names (`path_named`), which rustc reads as a `mod.rs`, so the
+/// modules they declare are their siblings; and the crate's root files
+/// (`roots`: `src/lib.rs`, `src/main.rs`, and each `src/bin` target),
+/// which nothing declares. [`module_guards`] reads a file's guards from
+/// them, and from those of the files that declare it.
+#[derive(Default)]
+struct ModFiles {
+    inner: Vec<(PathBuf, Vec<String>)>,
+    declared: Vec<Declared>,
+    path_named: Vec<PathBuf>,
+    roots: Vec<PathBuf>,
+}
+
+/// One out-of-line declaration ([`ModFiles`]): the file declared, the file
+/// declaring it, and the `cfg` predicates it is under there.
+struct Declared {
+    file: PathBuf,
+    from: PathBuf,
+    guards: Vec<String>,
+}
+
+impl ModFiles {
+    /// The directory of the modules `file` declares ([`module_dir`]), a
+    /// crate root and a file a `#[path]` names counting as a `mod.rs`.
+    fn dir_of(&self, file: &Path) -> Option<PathBuf> {
+        if self.path_named.iter().chain(&self.roots).any(|p| p == file) {
+            return file.parent().map(Path::to_path_buf);
+        }
+        module_dir(file)
+    }
+}
+
+/// The atom a module file whose declaration the counter cannot read is
+/// guarded by: one declared only inside a macro body other than `verus!`
+/// (`cfg_if! { if #[cfg(windows)] { mod win; } }`), whose `cfg`s the
+/// counter does not evaluate, and a crate file no declaration it reads
+/// names (one a `#[cfg_attr(P, path = "..")]` under a macro names, or
+/// one some other way reaches). No configuration settles this atom, so
+/// the file is unsure ([`Built::Unsure`]): it counts as trusted, never as
+/// verified.
+const UNREAD_DECLARATION: &str = "verus_count_unread_declaration";
+
+/// The root files of the crate in `dir`, canonical, as its Cargo.toml
+/// declares its targets: the `[lib]` `path`, else `src/lib.rs` unless
+/// `autolib = false`; each `path` of a `[[bin]]`, `[[example]]`, `[[test]]`
+/// and `[[bench]]`; and, unless `autobins = false`, the binaries cargo
+/// finds (`src/main.rs`, each `src/bin/NAME.rs` and `src/bin/NAME/main.rs`).
+/// The counter reads only `src`, so the examples, tests and benches cargo
+/// finds outside it do not matter. With `autobins = false`, a binary file
+/// no `[[bin]]` names is no root, so a module it would hold counts as
+/// undeclared, never verified. A manifest it cannot read gives the default
+/// targets.
+fn crate_roots(dir: &Path) -> Vec<PathBuf> {
+    let manifest: toml::Table = fs::read_to_string(dir.join("Cargo.toml"))
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+        .unwrap_or_default();
+    let auto = |key: &str| {
+        manifest
+            .get("package")
+            .and_then(|p| p.get(key))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(true)
+    };
+    let path_of = |t: &toml::Value| {
+        t.get("path")
+            .and_then(toml::Value::as_str)
+            .map(|p| dir.join(p))
+    };
+    let src = dir.join("src");
+    let mut roots = Vec::new();
+    match manifest.get("lib").and_then(path_of) {
+        Some(p) => roots.push(p),
+        None if auto("autolib") => roots.push(src.join("lib.rs")),
+        None => {}
+    }
+    for kind in ["bin", "example", "test", "bench"] {
+        if let Some(targets) = manifest.get(kind).and_then(toml::Value::as_array) {
+            roots.extend(targets.iter().filter_map(path_of));
         }
     }
+    if auto("autobins") {
+        roots.push(src.join("main.rs"));
+        if let Ok(rd) = fs::read_dir(src.join("bin")) {
+            for e in rd.flatten() {
+                let p = e.path();
+                roots.push(if p.is_dir() { p.join("main.rs") } else { p });
+            }
+        }
+    }
+    roots
+        .into_iter()
+        .filter_map(|r| fs::canonicalize(r).ok())
+        .collect()
+}
+
+/// [`ModFiles`] for the parsed module files `files`, each with its path,
+/// of the crate whose root files are `roots` ([`crate_roots`]). The pass
+/// runs twice: the first learns which files a `#[path]` names, so that the
+/// second resolves the modules those files declare beside them. Errors
+/// are those of the second pass.
+fn module_files(
+    files: &[(PathBuf, verus_syn::File)],
+    roots: Vec<PathBuf>,
+    atoms: &Atoms,
+    errors: &mut Vec<String>,
+) -> ModFiles {
+    let mut first = ModFiles {
+        roots: roots.clone(),
+        ..ModFiles::default()
+    };
+    for (f, parsed) in files {
+        test_module_files(f, parsed, atoms, &mut first, &mut Vec::new());
+    }
+    let mut out = ModFiles {
+        path_named: first.path_named,
+        roots,
+        ..ModFiles::default()
+    };
+    for (f, parsed) in files {
+        test_module_files(f, parsed, atoms, &mut out, errors);
+    }
+    out
+}
+
+/// Adds to `out` the file `file` when its inner attributes, `attrs`, hold
+/// a `cfg` (`#![cfg(target_os = "windows")]` atop a module file or a crate
+/// root, which then guards every file under it), and then the files of
+/// modules declared in `file` under a `cfg`
+/// ([`ModFiles`]), whether it builds them only for tests (`#[cfg(test)]
+/// mod name;`, `#[cfg(kani)]`), only for Verus (`#[cfg(verus_keep_ghost)]`,
+/// `#[cfg(any(test, verus_keep_ghost))]`), where Verus's build might not
+/// compile them (`#[cfg(not(miri))]` with `miri` unsettled), or in every
+/// build (`#[cfg(target_arch = "x86_64")]` with it declared, which a
+/// function under another architecture's `cfg` in the file conflicts with).
+/// It descends into inline modules, `verus!` blocks and other item macros'
+/// bodies, whose `cfg`s the declarations inside them inherit; one inside
+/// another macro's body is also guarded by [`UNREAD_DECLARATION`]. A
+/// `#[cfg_attr(P, path = "..")]` names the module's file where `P` holds
+/// and no earlier path attribute's predicate does ([`ordered_paths`], in
+/// source order, a bare `#[path]` ending the list), and the default file
+/// is the one where none of them applies. A
+/// module's file is the one its `#[path]` names, relative to the directory of the
+/// module that declares it (`file`'s, for a top-level declaration; an
+/// inline module's, inside one), or else `name.rs` or `name/mod.rs` in the
+/// directory of the modules the enclosing module declares
+/// ([`ModFiles::dir_of`], then each inline module's name, or its `#[path]`
+/// from the declaring module's directory). Each is canonical, as `main`
+/// compares them. A `cfg` it cannot read is an error, in `errors`, and the
+/// module is skipped.
+fn test_module_files(
+    file: &Path,
+    parsed: &verus_syn::File,
+    atoms: &Atoms,
+    out: &mut ModFiles,
+    errors: &mut Vec<String>,
+) {
+    match attrs_built(&parsed.attrs, atoms) {
+        Err(e) => errors.push(format!("{}: {e}", file.display())),
+        Ok(_) => {
+            let own = cfg_predicates(&parsed.attrs);
+            if !own.is_empty()
+                && let Ok(f) = fs::canonicalize(file)
+            {
+                out.inner.push((f, own));
+            }
+        }
+    }
+    let canonical = canonical(file);
+    let Some(dir) = out.dir_of(&canonical) else {
+        return;
+    };
+    let Some(base) = canonical.parent().map(Path::to_path_buf) else {
+        return;
+    };
+    declared_module_files(file, (&dir, &base), &parsed.items, &[], atoms, out, errors);
+}
+
+/// [`test_module_files`] for the items of one module: `dir` is where its
+/// `mod name;` files live, `base` the declaring module's directory, which
+/// a `#[path]` is relative to, and `guards` the `cfg` predicates of the
+/// inline modules and macros around it.
+fn declared_module_files(
+    file: &Path,
+    (dir, base): (&Path, &Path),
+    items: &[Item],
+    guards: &[String],
+    atoms: &Atoms,
+    out: &mut ModFiles,
+    errors: &mut Vec<String>,
+) {
+    for item in items {
+        let attrs = match item {
+            Item::Mod(m) => &m.attrs,
+            Item::Macro(m) => &m.attrs,
+            _ => continue,
+        };
+        if let Err(e) = attrs_built(attrs, atoms) {
+            errors.push(format!("{}: {e}", file.display()));
+            continue;
+        }
+        let mut inner = guards.to_vec();
+        inner.extend(cfg_predicates(attrs));
+        if let Item::Macro(m) = item {
+            if m.mac.path.is_ident("verus") {
+                // The walk reports a body it cannot parse.
+                if let Ok(f) = parse2::<verus_syn::File>(m.mac.tokens.clone()) {
+                    declared_module_files(file, (dir, base), &f.items, &inner, atoms, out, errors);
+                }
+            } else {
+                inner.push(UNREAD_DECLARATION.to_owned());
+                let mut found = Vec::new();
+                macro_module_files(m.mac.tokens.clone(), (dir, base), &mut found);
+                let from = canonical(file);
+                for (f, named) in found {
+                    let Ok(f) = fs::canonicalize(f) else { continue };
+                    if named {
+                        out.path_named.push(f.clone());
+                    }
+                    out.declared.push(Declared {
+                        file: f,
+                        from: from.clone(),
+                        guards: inner.clone(),
+                    });
+                }
+            }
+            continue;
+        }
+        let Item::Mod(m) = item else { continue };
+        let name = m.ident.to_string();
+        if let Some((_, items)) = &m.content {
+            // The inline module's directory is chosen as an out-of-line
+            // module's file is: by its path attributes in source order.
+            for (path, extra) in path_choices(&m.attrs) {
+                let sub = match path {
+                    Some(p) => base.join(p),
+                    None => dir.join(&name),
+                };
+                let mut guards = inner.clone();
+                guards.extend(extra);
+                declared_module_files(file, (&sub, &sub), items, &guards, atoms, out, errors);
+            }
+            continue;
+        }
+        // Each file the declaration may name, whether a `#[path]` names
+        // it, and the predicates beyond `inner` under which it does.
+        let mut candidates: Vec<(PathBuf, bool, Vec<String>)> = Vec::new();
+        for (path, extra) in path_choices(&m.attrs) {
+            match path {
+                Some(p) => candidates.push((base.join(p), true, extra)),
+                None => candidates.extend(
+                    [
+                        dir.join(format!("{name}.rs")),
+                        dir.join(&name).join("mod.rs"),
+                    ]
+                    .into_iter()
+                    .map(|f| (f, false, extra.clone())),
+                ),
+            }
+        }
+        for (f, named, extra) in candidates {
+            let Ok(f) = fs::canonicalize(f) else { continue };
+            if named {
+                out.path_named.push(f.clone());
+            }
+            let mut guards = inner.clone();
+            guards.extend(extra);
+            out.declared.push(Declared {
+                file: f,
+                from: canonical(file),
+                guards,
+            });
+        }
+    }
+}
+
+/// The places a module with `attrs` may be: each path its path attributes
+/// give ([`ordered_paths`]), or `None` for its default place, each with the
+/// predicates under which it is the one. rustc takes the first path
+/// attribute in effect, in source order: each path is the module's where
+/// its predicate holds and no earlier one's does; a bare `#[path]` holds
+/// wherever none earlier does and ends the list; the default is the
+/// module's where no path applies.
+fn path_choices(attrs: &[Attribute]) -> Vec<(Option<String>, Vec<String>)> {
+    let excluded = |earlier: &[String]| {
+        (!earlier.is_empty()).then(|| format!("not(any({}))", earlier.join(",")))
+    };
+    let mut out = Vec::new();
+    let mut earlier: Vec<String> = Vec::new();
+    for (pred, p) in ordered_paths(attrs) {
+        let mut extra: Vec<String> = pred.iter().cloned().collect();
+        extra.extend(excluded(&earlier));
+        out.push((Some(p), extra));
+        match pred {
+            Some(pred) => earlier.push(pred),
+            None => return out,
+        }
+    }
+    out.push((None, excluded(&earlier).into_iter().collect()));
+    out
+}
+
+/// The path attributes of `attrs` in source order: each `#[path = ".."]`
+/// with no predicate, and each `path = ".."` a `cfg_attr` applies, at any
+/// depth ([`applied_attrs`]), with the conjunction of the predicates
+/// around it.
+fn ordered_paths(attrs: &[Attribute]) -> Vec<(Option<String>, String)> {
+    applied_attrs(attrs)
+        .into_iter()
+        .filter_map(|(preds, toks)| {
+            path_in_attribute(toks.into_iter().collect())
+                .map(|p| ((!preds.is_empty()).then(|| all_of(&preds)), p))
+        })
+        .collect()
+}
+
+/// The files of the `mod name;` declarations in a macro body, `tokens`,
+/// at any depth, each with whether a `#[path]` named it: the file a
+/// `#[path = ".."]` before the declaration names, relative to `base` (the
+/// declaring module's directory), or else `name.rs` or `name/mod.rs` under
+/// `dir`. Inside an inline `mod outer { .. }` in the body, both are its
+/// directory: `outer` under `dir`, or its own `#[path]` from `base`.
+fn macro_module_files(
+    tokens: TokenStream,
+    (dir, base): (&Path, &Path),
+    out: &mut Vec<(PathBuf, bool)>,
+) {
+    let toks: Vec<TokenTree> = tokens.into_iter().collect();
+    // The `#[path]` of the item the attributes so far precede.
+    let mut path: Option<String> = None;
+    let mut skip = 0;
+    for (i, t) in toks.iter().enumerate() {
+        if skip > 0 {
+            skip -= 1;
+            continue;
+        }
+        match (t, toks.get(i + 1), toks.get(i + 2)) {
+            (TokenTree::Punct(p), Some(TokenTree::Group(g)), _)
+                if p.as_char() == '#' && g.delimiter() == proc_macro2::Delimiter::Bracket =>
+            {
+                if let Some(p) = path_in_attribute(g.stream()) {
+                    path = Some(p);
+                }
+                skip = 1;
+            }
+            (TokenTree::Ident(k), Some(TokenTree::Ident(name)), Some(TokenTree::Punct(p)))
+                if k == "mod" && p.as_char() == ';' =>
+            {
+                match path.take() {
+                    Some(p) => out.push((base.join(p), true)),
+                    None => {
+                        out.push((dir.join(format!("{name}.rs")), false));
+                        out.push((dir.join(name.to_string()).join("mod.rs"), false));
+                    }
+                }
+                skip = 2;
+            }
+            (TokenTree::Ident(k), Some(TokenTree::Ident(name)), Some(TokenTree::Group(g)))
+                if k == "mod" && g.delimiter() == proc_macro2::Delimiter::Brace =>
+            {
+                let sub = match path.take() {
+                    Some(p) => base.join(p),
+                    None => dir.join(name.to_string()),
+                };
+                macro_module_files(g.stream(), (&sub, &sub), out);
+                skip = 2;
+            }
+            // A restricted visibility (`pub(crate)`, `pub(super)`,
+            // `pub(in path)`) is part of the item the attributes precede.
+            (TokenTree::Group(g), _, _)
+                if g.delimiter() == proc_macro2::Delimiter::Parenthesis
+                    && i > 0
+                    && matches!(&toks[i - 1], TokenTree::Ident(v) if v == "pub") => {}
+            (TokenTree::Group(g), _, _) => {
+                path = None;
+                macro_module_files(g.stream(), (dir, base), out);
+            }
+            (TokenTree::Punct(p), _, _) if p.as_char() == ';' => path = None,
+            _ => {}
+        }
+    }
+}
+
+/// The string an attribute's tokens, `path = ".."`, give, if they are a
+/// `#[path]`'s.
+fn path_in_attribute(tokens: TokenStream) -> Option<String> {
+    let toks: Vec<TokenTree> = tokens.into_iter().collect();
+    let [
+        TokenTree::Ident(k),
+        TokenTree::Punct(eq),
+        TokenTree::Literal(l),
+    ] = toks.as_slice()
+    else {
+        return None;
+    };
+    if k != "path" || eq.as_char() != '=' {
+        return None;
+    }
+    match verus_syn::Lit::new(l.clone()) {
+        verus_syn::Lit::Str(s) => Some(s.value()),
+        _ => None,
+    }
+}
+
+/// `file`, canonical, or as given when it cannot be.
+fn canonical(file: &Path) -> PathBuf {
+    fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf())
 }
 
 /// The directory of the modules a module file declares: a `mod.rs`'s (or
@@ -489,46 +872,98 @@ fn module_dir(file: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Where the file `f` is built, given the module files declared for tests
-/// alone (`tests`) and for Verus alone (`verus`): as one of those, or as a
-/// file one of them declares, at any depth, which inherits its class; else
-/// shipped.
-fn module_class(f: &Path, tests: &[PathBuf], verus: &[PathBuf]) -> Built {
-    let under = |fs: &[PathBuf]| {
-        fs.iter()
-            .any(|m| m == f || module_dir(m).is_some_and(|d| f.starts_with(d)))
-    };
-    if under(tests) {
-        Built::Test
-    } else if under(verus) {
-        Built::Verus
-    } else {
-        Built::Shipped
+/// The `cfg` predicates that must hold for the file `f` to be built, given
+/// the module files `mods` records: its inner `#![cfg(..)]`s, and for each
+/// declaration of it, that declaration's guards and the declaring file's
+/// own ([`module_guards`] of it). A file declared once takes that
+/// declaration's; one declared several times is built where any
+/// declaration holds, so it takes their `any(all(..), ..)`, and nothing
+/// more when one declaration needs nothing. A crate file no declaration
+/// names, other than a root, is unsure ([`UNREAD_DECLARATION`]) and takes
+/// the guards of each recorded file whose module directory ([`module_dir`])
+/// it is under, so one under a test-only module stays test-only. A root
+/// has its inner `cfg`s alone.
+fn module_guards(f: &Path, mods: &ModFiles) -> Vec<String> {
+    guards_of(f, mods, &mut Vec::new())
+}
+
+/// [`module_guards`], with `seen` the files whose guards are being read,
+/// so that a declaration cycle ends.
+fn guards_of(f: &Path, mods: &ModFiles, seen: &mut Vec<PathBuf>) -> Vec<String> {
+    if seen.iter().any(|s| s == f) {
+        return Vec::new();
     }
+    seen.push(f.to_path_buf());
+    let mut out: Vec<String> = mods
+        .inner
+        .iter()
+        .filter(|(i, _)| i == f)
+        .flat_map(|(_, g)| g.iter().cloned())
+        .collect();
+    let declarations: Vec<&Declared> = mods.declared.iter().filter(|d| d.file == f).collect();
+    if declarations.is_empty() && !mods.roots.iter().any(|r| r == f) {
+        // No declaration the counter reads names this file, so nothing
+        // shows where it is built: it is unsure, and keeps the guards of
+        // the files whose module directory holds it.
+        out.push(UNREAD_DECLARATION.to_owned());
+        let mut above: Vec<&PathBuf> = mods
+            .inner
+            .iter()
+            .map(|(m, _)| m)
+            .chain(mods.declared.iter().map(|d| &d.file))
+            .filter(|m| *m != f && module_dir(m).is_some_and(|d| f.starts_with(d)))
+            .collect();
+        above.sort();
+        above.dedup();
+        for m in above {
+            out.extend(guards_of(m, mods, seen));
+        }
+    } else if !declarations.is_empty() {
+        let alternatives: Vec<Vec<String>> = declarations
+            .iter()
+            .map(|d| {
+                let mut g = d.guards.clone();
+                g.extend(guards_of(&d.from, mods, seen));
+                g
+            })
+            .collect();
+        match alternatives.as_slice() {
+            [one] => out.extend(one.iter().cloned()),
+            several if several.iter().any(Vec::is_empty) => {}
+            several => out.push(format!(
+                "any({})",
+                several
+                    .iter()
+                    .map(|g| format!("all({})", g.join(",")))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )),
+        }
+    }
+    seen.pop();
+    out
 }
 
-/// The `#[path = "..."]` of a module declaration, if it has one.
-fn path_attr(attrs: &[Attribute]) -> Option<String> {
-    attrs.iter().find_map(|a| match &a.meta {
-        Meta::NameValue(nv) if nv.path.is_ident("path") => match &nv.value {
-            verus_syn::Expr::Lit(l) => match &l.lit {
-                verus_syn::Lit::Str(s) => Some(s.value()),
-                _ => None,
-            },
-            _ => None,
-        },
-        _ => None,
-    })
+/// Where the file `f` is built ([`guarded_built`] of its
+/// [`module_guards`]): a test-only module inside one Verus might skip is
+/// test-only, and one under `target_arch = "x86_64"` inside one under
+/// `target_arch = "aarch64"` is built nowhere, so test-only too.
+fn module_class(f: &Path, mods: &ModFiles, atoms: &Atoms) -> Result<Built, String> {
+    guarded_built(&module_guards(f, mods), atoms)
 }
 
-/// Where a `cfg` lets an item be built: by a shipped build; only where
-/// Verus checks the code (`verus_keep_ghost`), so Verus checks it and no
-/// shipped build compiles it; or only for tests (`test`, `kani`, the
-/// `test-util` feature, which only tests enable: [`test_util_enablers`]
-/// fails the run otherwise), which Verus does not see either.
+/// Where a `cfg` lets an item be built: by a shipped build, and surely by
+/// Verus's; by a shipped build, where Verus's build might not compile it
+/// (`unix`, or any atom the configuration does not settle), so nothing
+/// proves Verus checked it; only where Verus checks the code
+/// (`verus_keep_ghost`), so Verus checks it and no shipped build compiles
+/// it; or only for tests (`test`, `kani`, the `test-util` feature, which
+/// only tests enable: [`test_util_enablers`] fails the run otherwise),
+/// which Verus does not see either.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Built {
     Shipped,
+    Unsure,
     Verus,
     Test,
 }
@@ -543,7 +978,8 @@ struct Can {
 
 /// [`Can`] for the predicate `p` in a shipped build (`verus` false: none
 /// of `atoms`' test or Verus atoms) or a Verus build (the Verus atoms and
-/// none of the test ones). Any other name or feature may be either.
+/// the ones it is sure to set, and none of the test ones or the ones it
+/// never sets). Any other name or feature may be either.
 /// `all`, `any` and `not` nest to any depth; a predicate it cannot read
 /// is an error.
 fn cfg_eval(p: &str, verus: bool, atoms: &Atoms) -> Result<Can, String> {
@@ -555,6 +991,11 @@ fn cfg_eval(p: &str, verus: bool, atoms: &Atoms) -> Result<Can, String> {
             .and_then(|r| r.strip_suffix(')'))
     };
     if let Some(inner) = call("all") {
+        // A conjunction that needs two values of one single-valued key
+        // holds in no build, whatever the atoms say on their own.
+        if cfg_forced(p, verus, atoms)?.is_none() {
+            return Ok(Can { t: false, f: true });
+        }
         let mut c = Can { t: true, f: false };
         for a in cfg_args(inner)? {
             let x = cfg_eval(a, verus, atoms)?;
@@ -593,9 +1034,176 @@ fn cfg_eval(p: &str, verus: bool, atoms: &Atoms) -> Result<Can, String> {
             t: verus,
             f: !verus,
         }
+    } else if verus && atoms.sets.contains(&w) {
+        Can { t: true, f: false }
+    } else if verus && atoms.never.contains(&w) {
+        Can { t: false, f: true }
     } else {
         Can { t: true, f: true }
     })
+}
+
+/// The `cfg` keys rustc gives exactly one value per target (`rustc --print
+/// cfg`): `target_family` is not one (emscripten is both `unix` and
+/// `wasm`), nor are `feature`, `target_feature` and `target_has_atomic`.
+const SINGLE_VALUED: [&str; 8] = [
+    "target_arch",
+    "target_os",
+    "target_env",
+    "target_abi",
+    "target_vendor",
+    "target_endian",
+    "target_pointer_width",
+    "panic",
+];
+
+/// Single-valued keys and the one value a predicate needs each to have.
+type Forced = std::collections::BTreeMap<String, String>;
+
+/// The single-valued `key="value"` atoms ([`SINGLE_VALUED`]) the predicate
+/// `p` needs to hold, without whitespace: each conjunct's, and those every
+/// alternative of an `any` needs. `None` when no build can meet it: it
+/// needs two values of one key (`all(target_arch = "x86_64", target_arch
+/// = "aarch64")`), or it is an `any` none of whose alternatives can hold
+/// (`any()`). An alternative that cannot hold in the build `verus` and
+/// `atoms` describe ([`cfg_eval`]: `test`, here) needs nothing of the
+/// others, so `all(target_arch = "x86_64", any(target_arch = "aarch64",
+/// test))` needs both values. A `not` needs nothing. A predicate it cannot
+/// read is an error, as [`cfg_eval`] reads it.
+fn cfg_forced(p: &str, verus: bool, atoms: &Atoms) -> Result<Option<Forced>, String> {
+    let p = p.trim();
+    let call = |name: &str| {
+        p.strip_prefix(name)
+            .map(str::trim_start)
+            .and_then(|r| r.strip_prefix('('))
+            .and_then(|r| r.strip_suffix(')'))
+    };
+    if let Some(inner) = call("all") {
+        let mut out = Forced::new();
+        for a in cfg_args(inner)? {
+            let Some(f) = cfg_forced(a, verus, atoms)? else {
+                return Ok(None);
+            };
+            for (k, v) in f {
+                if out.get(&k).is_some_and(|w| *w != v) {
+                    return Ok(None);
+                }
+                out.insert(k, v);
+            }
+        }
+        return Ok(Some(out));
+    }
+    if let Some(inner) = call("any") {
+        let mut out: Option<Forced> = None;
+        for a in cfg_args(inner)? {
+            if !cfg_eval(a, verus, atoms)?.t {
+                continue;
+            }
+            let Some(f) = cfg_forced(a, verus, atoms)? else {
+                continue;
+            };
+            out = Some(match out {
+                None => f,
+                Some(o) => o.into_iter().filter(|(k, v)| f.get(k) == Some(v)).collect(),
+            });
+        }
+        return Ok(out);
+    }
+    if call("not").is_some() {
+        return Ok(Some(Forced::new()));
+    }
+    let w: String = p.split_whitespace().collect();
+    Ok(Some(match w.split_once('=') {
+        Some((k, v)) if SINGLE_VALUED.contains(&k) => [(k.to_owned(), v.to_owned())].into(),
+        _ => Forced::new(),
+    }))
+}
+
+/// The ways the predicate `p` can hold, each as the atoms of the keys in
+/// `multi` it needs true (without whitespace): `all` joins its arguments'
+/// ways, `any` lists each argument's, and `not` swaps the two, so an atom
+/// under an odd number of `not`s is needed false and adds nothing, and one
+/// under an even number is needed true. With `negated`, the ways `p` can
+/// fail. A predicate it cannot read is an error.
+fn cfg_ways(
+    p: &str,
+    negated: bool,
+    multi: &[String],
+) -> Result<Vec<std::collections::BTreeSet<String>>, String> {
+    let p = p.trim();
+    let call = |name: &str| {
+        p.strip_prefix(name)
+            .map(str::trim_start)
+            .and_then(|r| r.strip_prefix('('))
+            .and_then(|r| r.strip_suffix(')'))
+    };
+    if let Some(inner) = call("not") {
+        let mut out = Vec::new();
+        for a in cfg_args(inner)? {
+            out.extend(cfg_ways(a, !negated, multi)?);
+        }
+        return Ok(out);
+    }
+    for (name, joins) in [("all", !negated), ("any", negated)] {
+        let Some(inner) = call(name) else { continue };
+        let mut out = vec![std::collections::BTreeSet::new()];
+        if !joins {
+            out.clear();
+        }
+        for a in cfg_args(inner)? {
+            let ways = cfg_ways(a, negated, multi)?;
+            out = if joins {
+                out.iter()
+                    .flat_map(|o| ways.iter().map(move |w| o.union(w).cloned().collect()))
+                    .collect()
+            } else {
+                out.into_iter().chain(ways).collect()
+            };
+        }
+        return Ok(out);
+    }
+    let w: String = p.split_whitespace().collect();
+    let counts = !negated
+        && w.split_once('=')
+            .is_some_and(|(k, _)| multi.iter().any(|m| m == k));
+    Ok(vec![if counts {
+        [w].into()
+    } else {
+        std::collections::BTreeSet::new()
+    }])
+}
+
+/// Whether the predicate `p` names atoms of more than one of the proof
+/// runs the configuration declares: `verus_sets` holds two values of a
+/// single-valued key ([`SINGLE_VALUED`]) when a port runs Verus on several
+/// hosts (challoc's `target_arch = "x86_64"` and `target_arch =
+/// "aarch64"`), and the counter reads each atom on its own, not each run's
+/// set. Under one such atom a function is checked by the run that sets it.
+/// When some way the predicate can hold ([`cfg_ways`]) needs two or more
+/// distinct ones true (`target_os = "macos"` on a module and `target_arch
+/// = "x86_64"` on a function in it, with both oses and both arches
+/// declared, or the same with `not(not(target_os = "macos"))`), it may
+/// ship on a host no run is, so it is not sure. Alternatives of an `any`
+/// are ways of their own: `any(target_arch = "x86_64", target_arch =
+/// "aarch64")` needs one atom either way.
+fn names_several_runs(p: &str, atoms: &Atoms) -> Result<bool, String> {
+    let key = |a: &str| a.split_once('=').map(|(k, _)| k.to_owned());
+    let multi: Vec<String> = SINGLE_VALUED
+        .iter()
+        .filter(|k| {
+            atoms
+                .sets
+                .iter()
+                .filter(|a| key(a).as_deref() == Some(**k))
+                .count()
+                > 1
+        })
+        .map(|k| (*k).to_owned())
+        .collect();
+    if multi.is_empty() {
+        return Ok(false);
+    }
+    Ok(cfg_ways(p, false, &multi)?.iter().any(|w| w.len() > 1))
 }
 
 /// The arguments of an `all`, `any` or `not`: split at the commas outside
@@ -636,31 +1244,112 @@ fn cfg_args(inner: &str) -> Result<Vec<&str>, String> {
 }
 
 /// Where the `cfg` predicate `tokens` lets an item be built ([`Built`]).
+/// A shipped item is [`Built::Unsure`] when the predicate can be false in
+/// Verus's build: only the atoms the configuration settles there are sure,
+/// and only one run's of them at a time ([`names_several_runs`]).
 fn cfg_built(tokens: &str, atoms: &Atoms) -> Result<Built, String> {
+    let verus = cfg_eval(tokens, true, atoms)?;
     Ok(if cfg_eval(tokens, false, atoms)?.t {
-        Built::Shipped
-    } else if cfg_eval(tokens, true, atoms)?.t {
+        if verus.f || names_several_runs(tokens, atoms)? {
+            Built::Unsure
+        } else {
+            Built::Shipped
+        }
+    } else if verus.t {
         Built::Verus
     } else {
         Built::Test
     })
 }
 
-/// Where `attrs`' `cfg`s, all of which must hold, let an item be built.
-fn attrs_built(attrs: &[Attribute], atoms: &Atoms) -> Result<Built, String> {
-    let mut b = Built::Shipped;
+/// Each attribute `attrs` apply, through `cfg_attr`s nested to any depth,
+/// as rustc expands them: its tokens (`path = ".."`, `cfg(Q)`,
+/// `verus_verify`) with the predicates of the `cfg_attr`s around it, all of
+/// which must hold for it to apply. `cfg_attr(P, a, b)` applies each of `a`
+/// and `b` under `P`; an attribute outside any `cfg_attr` has none.
+fn applied_attrs(attrs: &[Attribute]) -> Vec<(Vec<String>, Vec<TokenTree>)> {
+    let mut out = Vec::new();
     for a in attrs {
-        if a.path().is_ident("cfg")
-            && let Meta::List(l) = &a.meta
+        let toks: Vec<TokenTree> = verus_syn::__private::ToTokens::to_token_stream(&a.meta)
+            .into_iter()
+            .collect();
+        applied(&toks, &[], &mut out);
+    }
+    out
+}
+
+/// [`applied_attrs`] for one attribute's tokens, `toks`, under `preds`.
+fn applied(toks: &[TokenTree], preds: &[String], out: &mut Vec<(Vec<String>, Vec<TokenTree>)>) {
+    if let [TokenTree::Ident(i), TokenTree::Group(g)] = toks
+        && i == "cfg_attr"
+        && g.delimiter() == proc_macro2::Delimiter::Parenthesis
+    {
+        let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+        let mut parts = inner.split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ','));
+        let Some(predicate) = parts.next() else {
+            return;
+        };
+        let mut preds = preds.to_vec();
+        preds.push(
+            predicate
+                .iter()
+                .cloned()
+                .collect::<TokenStream>()
+                .to_string(),
+        );
+        for part in parts.filter(|p| !p.is_empty()) {
+            applied(part, &preds, out);
+        }
+        return;
+    }
+    out.push((preds.to_vec(), toks.to_vec()));
+}
+
+/// The conjunction of the non-empty `preds`, as one predicate.
+fn all_of(preds: &[String]) -> String {
+    match preds {
+        [one] => one.clone(),
+        _ => format!("all({})", preds.join(",")),
+    }
+}
+
+/// The predicates of `attrs`' `cfg`s, all of which must hold: each
+/// `#[cfg(Q)]`'s `Q`, and each `cfg(Q)` a `cfg_attr` applies under `P`
+/// (at any depth, [`applied_attrs`]) as `any(not(P), Q)`, since the item is
+/// left out only where `P` holds and `Q` does not.
+fn cfg_predicates(attrs: &[Attribute]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (preds, toks) in applied_attrs(attrs) {
+        if let [TokenTree::Ident(id), TokenTree::Group(g)] = toks.as_slice()
+            && id == "cfg"
+            && g.delimiter() == proc_macro2::Delimiter::Parenthesis
         {
-            b = match (b, cfg_built(&l.tokens.to_string(), atoms)?) {
-                (Built::Test, _) | (_, Built::Test) => Built::Test,
-                (Built::Verus, _) | (_, Built::Verus) => Built::Verus,
-                _ => Built::Shipped,
-            };
+            out.push(if preds.is_empty() {
+                g.stream().to_string()
+            } else {
+                format!("any(not({}),{})", all_of(&preds), g.stream())
+            });
         }
     }
-    Ok(b)
+    out
+}
+
+/// Where an item under every one of the `cfg` predicates `guards` is
+/// built: their conjunction, read as one predicate, so that two guards
+/// needing two values of one single-valued key (`#[cfg(target_arch =
+/// "x86_64")]` on a module, `#[cfg(target_arch = "aarch64")]` on a
+/// function in it) hold in no build ([`cfg_forced`]).
+fn guarded_built(guards: &[String], atoms: &Atoms) -> Result<Built, String> {
+    match guards {
+        [] => Ok(Built::Shipped),
+        [one] => cfg_built(one, atoms),
+        _ => cfg_built(&format!("all({})", guards.join(",")), atoms),
+    }
+}
+
+/// Where `attrs`' `cfg`s, all of which must hold, let an item be built.
+fn attrs_built(attrs: &[Attribute], atoms: &Atoms) -> Result<Built, String> {
+    guarded_built(&cfg_predicates(attrs), atoms)
 }
 
 /// Whether a `cfg` predicate keeps an item out of shipped builds.
@@ -773,19 +1462,53 @@ fn cargo(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 /// The `#[cfg_attr(any(), discharged_by = "kani")]` marker: Kani checks
-/// this trusted function's contract (verus/README.md, "Kani").
+/// this trusted function's contract (verus/README.md, "Kani"). The marker
+/// is inert: `discharged_by` is no attribute rustc knows, so it may only
+/// sit under predicates that hold in no build. It is read through
+/// [`applied_attrs`], so it counts nested or beside other attributes
+/// (`cfg_attr(any(), inline, discharged_by = "kani")`), and only where the
+/// predicates around it hold in no build whatever the configuration
+/// declares (`any()`, or `all(any(), unix)`). Under one that some build
+/// may meet (`windows`, `test`) it fails closed: the function is not
+/// discharged, as it would not be in that build.
 fn is_discharged(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        a.path().is_ident("cfg_attr")
-            && matches!(&a.meta, Meta::List(l)
-                if l.tokens.to_string().split_whitespace().collect::<String>()
-                    == "any(),discharged_by=\"kani\"")
+    applied_attrs(attrs).into_iter().any(|(preds, toks)| {
+        toks.iter()
+            .cloned()
+            .collect::<TokenStream>()
+            .to_string()
+            .split_whitespace()
+            .collect::<String>()
+            == "discharged_by=\"kani\""
+            && !preds.is_empty()
+            && never_holds(&all_of(&preds))
     })
 }
 
+/// Whether the predicate `p` holds in no build, with no atom settled:
+/// neither a shipped build nor Verus's can meet it. One it cannot read is
+/// taken as one that may hold.
+fn never_holds(p: &str) -> bool {
+    let none = Atoms::default();
+    [false, true]
+        .into_iter()
+        .all(|verus| cfg_eval(p, verus, &none).is_ok_and(|c| !c.t))
+}
+
+/// Whether `attrs` make a function external to Verus (`external_body`,
+/// `verifier::external`, `verus_verify(external..)`), read through
+/// [`applied_attrs`]. It fails closed: an attribute a `cfg_attr` applies
+/// counts whatever its predicate, so a function external in some build is
+/// trusted, never verified.
 fn is_external(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        let text = quote_attr(a);
+    applied_attrs(attrs).into_iter().any(|(_, toks)| {
+        // A `name = value` attribute (a doc comment) is read by its name
+        // alone, so prose that mentions `external_body` is not one.
+        let text = toks
+            .into_iter()
+            .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == '='))
+            .collect::<TokenStream>()
+            .to_string();
         text.contains("external_body")
             || text.contains("verifier :: external") && !text.contains("external_fn_specification")
             || text.contains("verus_verify (external")
@@ -797,55 +1520,58 @@ fn is_external(attrs: &[Attribute]) -> bool {
 /// `#[verus_spec(..)]` (by any path), alone or as an attribute a
 /// `cfg_attr` applies (`#[cfg_attr(feature = "verus", verus_spec(..))]`,
 /// the form a port whose MSRV is below vstd's uses). Such a function is
-/// classed as one inside `verus!` is ([`classify`]). A `cfg_attr` counts
-/// only when Verus's build is sure to meet its predicate (by
-/// [`cfg_eval`]: it can be true there and cannot be false), as a
-/// configured Verus-only feature or `verus_keep_ghost` is. One no build
-/// meets (`any()`) or only a test build meets (`test`) never applies the
-/// attribute to the code Verus checks, and one that names a platform or
-/// any other name the counter cannot settle (`target_os = "windows"`)
-/// may not apply it on the host Verus runs on, which would leave the
-/// function unchecked. A predicate it cannot read is an error.
-fn verus_attribute(attrs: &[Attribute], atoms: &Atoms) -> Result<bool, String> {
+/// classed as one inside `verus!` is ([`classify`]): `Some(true)` when
+/// Verus's build is sure to apply it, `Some(false)` when it might not, and
+/// `None` when it never does. A `cfg_attr` is sure when Verus's build is
+/// sure to meet its predicate (by [`cfg_eval`]: it can be true there and
+/// cannot be false), as a configured Verus-only feature,
+/// `verus_keep_ghost`, a `verus_sets` atom or `not` of a
+/// `verus_never_sets` one is. One no build meets (`any()`) or only a test
+/// build meets (`test`) never applies the attribute to the code Verus
+/// checks. One that names a platform or any other atom the configuration
+/// does not settle (`target_os = "windows"`) may not apply it on the host
+/// Verus runs on, so the function counts as trusted, as one under a `cfg`
+/// Verus might not meet does ([`Built::Unsure`]). A predicate it cannot
+/// read is an error. A `cfg_attr`'s predicate is read together with the
+/// `cfg`s the function is under, `guards`: one under `target_arch =
+/// "x86_64"` whose attribute needs `target_arch = "aarch64"` never applies.
+fn verus_attribute(
+    attrs: &[Attribute],
+    guards: &[String],
+    atoms: &Atoms,
+) -> Result<Option<bool>, String> {
     const NAMES: [&str; 2] = ["verus_verify", "verus_spec"];
-    for a in attrs {
-        if a.path()
-            .segments
-            .last()
-            .is_some_and(|s| NAMES.iter().any(|n| s.ident == n))
-        {
-            return Ok(true);
-        }
-        // `cfg_attr(PREDICATE, ATTR, ..)`: an ATTR at the top level after
-        // the predicate's comma, by its last path segment.
-        let Meta::List(l) = &a.meta else { continue };
-        if !l.path.is_ident("cfg_attr") {
-            continue;
-        }
-        let toks: Vec<TokenTree> = l.tokens.clone().into_iter().collect();
-        let Some(comma) = toks
+    let mut maybe = false;
+    for (preds, toks) in applied_attrs(attrs) {
+        // The attribute's path is the tokens before its arguments; it is
+        // the attribute form by its last segment.
+        let last = toks
             .iter()
-            .position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ','))
-        else {
-            continue;
-        };
-        let names_one = toks[comma + 1..].iter().enumerate().any(|(i, t)| {
-            matches!(t, TokenTree::Ident(id) if NAMES.iter().any(|n| id == n))
-                && !matches!(
-                    toks.get(comma + 1 + i + 1),
-                    Some(TokenTree::Punct(p)) if p.as_char() == ':'
-                )
-        });
-        if !names_one {
+            .take_while(|t| {
+                !matches!(t, TokenTree::Group(_))
+                    && !matches!(t, TokenTree::Punct(p) if p.as_char() == '=')
+            })
+            .filter_map(|t| match t {
+                TokenTree::Ident(i) => Some(i.to_string()),
+                _ => None,
+            })
+            .last();
+        if !last.is_some_and(|l| NAMES.contains(&l.as_str())) {
             continue;
         }
-        let predicate: TokenStream = toks[..comma].iter().cloned().collect();
-        let can = cfg_eval(&predicate.to_string(), true, atoms)?;
-        if can.t && !can.f {
-            return Ok(true);
+        if preds.is_empty() {
+            return Ok(Some(true));
         }
+        let mut all = guards.to_vec();
+        all.extend(preds);
+        let all = format!("all({})", all.join(","));
+        let can = cfg_eval(&all, true, atoms)?;
+        if can.t && !can.f && !names_several_runs(&all, atoms)? {
+            return Ok(Some(true));
+        }
+        maybe |= can.t;
     }
-    Ok(false)
+    Ok(maybe.then_some(false))
 }
 
 /// The `#[verifier::rlimit(N)]` among `attrs`: `Some(Some(N))`,
@@ -895,14 +1621,6 @@ fn module_path(krate: &str, rel: &Path) -> Vec<String> {
         }
     }
     out
-}
-
-fn quote_attr(a: &Attribute) -> String {
-    match &a.meta {
-        Meta::Path(p) => path_string(p),
-        Meta::List(l) => format!("{} ({})", path_string(&l.path), l.tokens),
-        Meta::NameValue(nv) => path_string(&nv.path),
-    }
 }
 
 fn path_string(p: &verus_syn::Path) -> String {
@@ -985,10 +1703,19 @@ fn classify(
 }
 
 impl Counter {
-    /// Where `attrs` let an item be built ([`attrs_built`]); a `cfg` it
-    /// cannot read is an error, and the item is taken as shipped.
+    /// The `cfg` predicates an item with `attrs` here is under: those
+    /// around it ([`Counter::guards`]) and its own.
+    fn guards_with(&self, attrs: &[Attribute]) -> Vec<String> {
+        let mut g = self.guards.clone();
+        g.extend(cfg_predicates(attrs));
+        g
+    }
+
+    /// Where an item with `attrs` here is built ([`guarded_built`] of
+    /// [`Counter::guards_with`]); a `cfg` it cannot read is an error, and
+    /// the item is taken as shipped.
     fn built(&mut self, attrs: &[Attribute]) -> Built {
-        match attrs_built(attrs, &self.atoms) {
+        match guarded_built(&self.guards_with(attrs), &self.atoms) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("{}: {e}", self.file.display());
@@ -998,9 +1725,26 @@ impl Counter {
         }
     }
 
+    /// Enters code (a module, `impl`, trait or `verus!` block) with `attrs`
+    /// whose `cfg` classes it `built`, other than test-only: returns what
+    /// [`Counter::leave`] restores.
+    fn enter(&mut self, built: Built, attrs: &[Attribute]) -> (bool, bool, usize) {
+        let was = (self.shipped, self.sure, self.guards.len());
+        self.shipped &= matches!(built, Built::Shipped | Built::Unsure);
+        self.sure &= built != Built::Unsure;
+        self.guards.extend(cfg_predicates(attrs));
+        was
+    }
+
+    /// Leaves the code [`Counter::enter`] entered.
+    fn leave(&mut self, (shipped, sure, guards): (bool, bool, usize)) {
+        (self.shipped, self.sure) = (shipped, sure);
+        self.guards.truncate(guards);
+    }
+
     /// Whether a shipped build compiles an item with `attrs` here.
     fn item_ships(&mut self, attrs: &[Attribute]) -> bool {
-        self.shipped && self.built(attrs) == Built::Shipped
+        self.shipped && matches!(self.built(attrs), Built::Shipped | Built::Unsure)
     }
 
     fn record(
@@ -1016,13 +1760,25 @@ impl Counter {
         if built == Built::Test {
             return None;
         }
-        // Verus's attribute form verifies a function outside `verus!`.
-        let in_verus = in_verus
-            || verus_attribute(attrs, &self.atoms).unwrap_or_else(|e| {
-                eprintln!("{}:{start}: {e}", self.file.display());
-                self.errors += 1;
-                false
-            });
+        // Verus's attribute form verifies a function outside `verus!`, if
+        // Verus's build applies it.
+        let (in_verus, applied) = if in_verus {
+            (true, true)
+        } else {
+            match verus_attribute(attrs, &self.guards_with(attrs), &self.atoms) {
+                Ok(Some(sure)) => (true, sure),
+                Ok(None) => (false, true),
+                Err(e) => {
+                    eprintln!("{}:{start}: {e}", self.file.display());
+                    self.errors += 1;
+                    (false, true)
+                }
+            }
+        };
+        // Whether Verus's build is sure to compile this function, and so
+        // to check it: no `cfg` on it or around it that Verus's build might
+        // not meet, and the attribute form sure to apply.
+        let sure = self.sure && built != Built::Unsure && applied;
         // Verus checks code built only for it, so its rlimits count for
         // the headroom check, though the code is not shipped.
         if in_verus {
@@ -1065,6 +1821,13 @@ impl Counter {
         let Some(class) = class else {
             self.tallies.entry(self.krate.clone()).or_default().ghost += 1;
             return None;
+        };
+        // A shipped function Verus's build might not compile ships with
+        // nothing to prove it checked: it is trusted.
+        let class = if class == Class::Verified && !sure {
+            Class::Trusted
+        } else {
+            class
         };
         let mut calls = Vec::new();
         let mut names = inputs::Body::default();
@@ -1349,8 +2112,7 @@ impl Counter {
                     if built == Built::Test {
                         continue;
                     }
-                    let was = self.shipped;
-                    self.shipped &= built == Built::Shipped;
+                    let was = self.enter(built, &i.attrs);
                     let outer = std::mem::replace(
                         &mut self.owner,
                         verus_syn::__private::ToTokens::to_token_stream(&*i.self_ty).to_string(),
@@ -1380,15 +2142,14 @@ impl Counter {
                         }
                     }
                     self.owner = outer;
-                    self.shipped = was;
+                    self.leave(was);
                 }
                 Item::Trait(t) => {
                     let built = self.built(&t.attrs);
                     if built == Built::Test {
                         continue;
                     }
-                    let was = self.shipped;
-                    self.shipped &= built == Built::Shipped;
+                    let was = self.enter(built, &t.attrs);
                     if self.shipped {
                         self.traits.insert(t.ident.to_string());
                     }
@@ -1414,19 +2175,18 @@ impl Counter {
                         }
                     }
                     self.owner = outer;
-                    self.shipped = was;
+                    self.leave(was);
                 }
                 Item::Mod(m) => {
                     let built = self.built(&m.attrs);
                     if built != Built::Test
                         && let Some((_, inner)) = &m.content
                     {
-                        let was = self.shipped;
-                        self.shipped &= built == Built::Shipped;
+                        let was = self.enter(built, &m.attrs);
                         self.module.push(m.ident.to_string());
                         self.items(inner, in_verus);
                         self.module.pop();
-                        self.shipped = was;
+                        self.leave(was);
                     }
                 }
                 Item::Static(s) if self.item_ships(&s.attrs) => {
@@ -1501,8 +2261,7 @@ impl Counter {
                     if built == Built::Test {
                         continue;
                     }
-                    let was = self.shipped;
-                    self.shipped &= built == Built::Shipped;
+                    let was = self.enter(built, &m.attrs);
                     match parse2::<verus_syn::File>(m.mac.tokens.clone()) {
                         Ok(f) => self.items(&f.items, true),
                         Err(e) => {
@@ -1510,7 +2269,7 @@ impl Counter {
                             self.errors += 1;
                         }
                     }
-                    self.shipped = was;
+                    self.leave(was);
                 }
                 _ => {}
             }
@@ -1852,39 +2611,38 @@ fn main() {
         }
         let mut files = Vec::new();
         rust_files(&k.join("src"), &mut files);
-        let mut skip = Vec::new();
-        let mut verus_only = Vec::new();
-        let mut bad = Vec::new();
+        let mut parsed = Vec::with_capacity(files.len());
         for f in &files {
             if let Ok(text) = fs::read_to_string(f)
                 && let Ok(file) = parse_file(&cfg.stand_in(&text))
             {
-                test_module_files(
-                    f,
-                    &file.items,
-                    &c.atoms,
-                    &mut skip,
-                    &mut verus_only,
-                    &mut bad,
-                );
                 if cfg.ledger.is_some() {
                     let module = ledger::module_path(&k.join("src"), f);
                     ledger::test_fns(&module, &file.items, &mut tests);
                 }
+                parsed.push((f.clone(), file));
             }
         }
+        let mut bad = Vec::new();
+        let mods = module_files(&parsed, crate_roots(k), &c.atoms, &mut bad);
         for e in &bad {
             eprintln!("{e}");
         }
         c.errors += bad.len();
         for f in files {
             let cf = fs::canonicalize(&f).unwrap_or_else(|_| f.clone());
-            match module_class(&cf, &skip, &verus_only) {
-                Built::Test => continue,
-                // A module built only for Verus is read for its rlimits alone.
-                Built::Verus => c.shipped = false,
-                Built::Shipped => c.shipped = true,
-            }
+            // A module built only for Verus is read for its rlimits alone,
+            // and one Verus's build might not compile counts no function
+            // verified. Its items are read under its modules' `cfg`s.
+            // test_module_files read each predicate, so their conjunction
+            // reads too.
+            (c.shipped, c.sure) = match module_class(&cf, &mods, &c.atoms) {
+                Ok(Built::Test) => continue,
+                Ok(Built::Verus) => (false, true),
+                Ok(Built::Unsure) => (true, false),
+                Ok(Built::Shipped) | Err(_) => (true, true),
+            };
+            c.guards = module_guards(&cf, &mods);
             let Ok(text) = fs::read_to_string(&f) else {
                 eprintln!("{}: unreadable", f.display());
                 c.errors += 1;
@@ -3751,12 +4509,15 @@ mod tests {
     use super::*;
 
     /// The `cfg` atoms of pcre3's configuration, which the fixtures use:
-    /// `test`, `kani` and the `test-util` feature test-only, and
-    /// `verus_keep_ghost` and the `verus` feature Verus-only.
+    /// `test`, `kani` and the `test-util` feature test-only,
+    /// `verus_keep_ghost` and the `verus` feature Verus-only, the `jit`
+    /// feature sure in Verus's build and `miri` never set there.
     fn atoms() -> Atoms {
         Atoms {
             test: vec!["test".into(), "kani".into(), "feature=\"test-util\"".into()],
             verus: vec!["verus_keep_ghost".into(), "feature=\"verus\"".into()],
+            sets: vec!["feature=\"jit\"".into()],
+            never: vec!["miri".into()],
         }
     }
 
@@ -3997,68 +4758,56 @@ mod tests {
         }
     }
 
-    /// A module declared for tests alone is left out with its file, and one
-    /// declared for Verus alone is read for its rlimits only, whichever of
-    /// the forms the cfg takes; a module a shipped build compiles is
-    /// neither.
+    /// A module declared for tests alone is left out with its file, one
+    /// declared for Verus alone is read for its rlimits only, and one whose
+    /// `cfg` Verus's build might not meet ships unsure, whichever of the
+    /// forms the cfg takes; a module a shipped build compiles, and Verus's
+    /// is sure to, is none of them.
     #[test]
     fn test_and_verification_modules_are_left_out() {
         let root = std::env::temp_dir().join(format!("verus-count-modules-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("src")).unwrap();
-        let lib = "#[cfg(any(test, verus_keep_ghost))]\nmod grouped;\n#[cfg(verus_keep_ghost)]\nmod layout;\n#[cfg(test)]\nmod tests;\nmod shipped;\n#[cfg(any(test, unix))]\nmod either;\n";
+        let lib = "#[cfg(any(test, verus_keep_ghost))]\nmod grouped;\n#[cfg(verus_keep_ghost)]\nmod layout;\n#[cfg(test)]\nmod tests;\nmod shipped;\n#[cfg(any(test, unix))]\nmod either;\n#[cfg(all(feature = \"jit\", not(miri)))]\nmod settled;\n";
         fs::write(root.join("src/lib.rs"), lib).unwrap();
-        for m in ["grouped", "layout", "tests", "shipped", "either"] {
+        for m in ["grouped", "layout", "tests", "shipped", "either", "settled"] {
             fs::write(root.join(format!("src/{m}.rs")), "").unwrap();
         }
+        // A test-only module inside an unsure one is test-only.
+        fs::create_dir_all(root.join("src/either")).unwrap();
+        fs::write(root.join("src/either.rs"), "#[cfg(test)]\nmod t;\n").unwrap();
+        fs::write(root.join("src/either/t.rs"), "").unwrap();
         let file = parse_file(lib).unwrap();
-        let (mut tests, mut verus, mut errors) = (Vec::new(), Vec::new(), Vec::new());
+        let mut mods = ModFiles {
+            roots: crate_roots(&root),
+            ..ModFiles::default()
+        };
+        let mut errors = Vec::new();
         test_module_files(
             &root.join("src/lib.rs"),
-            &file.items,
+            &file,
             &atoms(),
-            &mut tests,
-            &mut verus,
+            &mut mods,
             &mut errors,
         );
-        let stems = |fs: &[PathBuf]| -> Vec<String> {
-            let mut s: Vec<String> = fs
-                .iter()
-                .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
-                .collect();
-            s.sort();
-            s
-        };
-        let (tests, verus) = (stems(&tests), stems(&verus));
-        assert_eq!(
-            tests,
-            ["tests"],
-            "test-only: got = {tests:?}, wanted = [tests]"
-        );
-        assert_eq!(
-            verus,
-            ["grouped", "layout"],
-            "Verus-only: got = {verus:?}, wanted = [grouped, layout]"
+        test_module_files(
+            &root.join("src/either.rs"),
+            &parse_file("#[cfg(test)]\nmod t;\n").unwrap(),
+            &atoms(),
+            &mut mods,
+            &mut errors,
         );
         assert!(errors.is_empty(), "errors: got = {errors:?}, wanted = []");
-        // A file a test- or Verus-only module declares, at any depth,
-        // inherits its class, beside a `foo.rs` (`foo/bar.rs`) as beside a
-        // `mod.rs`.
-        let (mut tests_f, mut verus_f) = (Vec::new(), Vec::new());
-        test_module_files(
-            &root.join("src/lib.rs"),
-            &file.items,
-            &atoms(),
-            &mut tests_f,
-            &mut verus_f,
-            &mut errors,
-        );
+        // A file a test-, Verus-only or unsure module declares, at any
+        // depth, inherits its class, beside a `foo.rs` (`foo/bar.rs`) as
+        // beside a `mod.rs`.
         for sub in [
             "layout/deep.rs",
             "layout/deep/deeper.rs",
             "tests/inner.rs",
             "shipped/x.rs",
             "layout_other.rs",
+            "either/x.rs",
         ] {
             let p = root.join("src").join(sub);
             fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -4072,12 +4821,19 @@ mod tests {
             ("tests.rs", Built::Test),
             ("tests/inner.rs", Built::Test),
             ("shipped.rs", Built::Shipped),
-            ("shipped/x.rs", Built::Shipped),
-            ("layout_other.rs", Built::Shipped),
+            // Files no declaration names: unsure, under the guards of
+            // the modules whose directories hold them.
+            ("shipped/x.rs", Built::Unsure),
+            ("layout_other.rs", Built::Unsure),
+            ("lib.rs", Built::Shipped),
+            ("settled.rs", Built::Shipped),
+            ("either.rs", Built::Unsure),
+            ("either/x.rs", Built::Unsure),
+            ("either/t.rs", Built::Test),
         ] {
             let f = fs::canonicalize(root.join("src").join(sub)).unwrap();
-            let got = module_class(&f, &tests_f, &verus_f);
-            assert_eq!(got, want, "{sub}: got = {got:?}, wanted = {want:?}");
+            let got = module_class(&f, &mods, &atoms());
+            assert_eq!(got, Ok(want), "{sub}: got = {got:?}, wanted = {want:?}");
         }
         let _ = fs::remove_dir_all(&root);
     }
@@ -4414,13 +5170,140 @@ mod tests {
         for (cfg, want) in [
             (
                 "any (target_arch = \"aarch64\" , all (target_os = \"linux\" , not (miri)))",
-                Built::Shipped,
+                Built::Unsure,
             ),
             ("any (test , all (verus_keep_ghost , unix))", Built::Verus),
             ("all (test , any (verus_keep_ghost , unix))", Built::Test),
         ] {
             let got = cfg_built(cfg, &atoms());
             assert_eq!(got, Ok(want), "{cfg}: got = {got:?}, wanted = {want:?}");
+        }
+    }
+
+    /// A `cfg` a shipped build can meet is sure in Verus's build only
+    /// when the configuration settles it there: a `verus_sets` atom, `not`
+    /// of a `verus_never_sets` one, or a predicate those, the Verus atoms
+    /// and the test atoms decide. Anything else Verus's build might not
+    /// meet, the issue's `target_os = "windows"` included.
+    #[test]
+    fn only_settled_atoms_are_sure_in_verus_s_build() {
+        for (cfg, want) in [
+            ("feature = \"jit\"", Built::Shipped),
+            ("not (miri)", Built::Shipped),
+            ("all (feature = \"jit\" , not (miri))", Built::Shipped),
+            ("any (unix , feature = \"jit\")", Built::Shipped),
+            ("not (test)", Built::Shipped),
+            ("not (verus_keep_ghost)", Built::Unsure),
+            ("any (verus_keep_ghost , unix)", Built::Shipped),
+            ("target_os = \"windows\"", Built::Unsure),
+            ("unix", Built::Unsure),
+            ("miri", Built::Unsure),
+            ("not (feature = \"jit\")", Built::Unsure),
+            ("all (feature = \"jit\" , unix)", Built::Unsure),
+            ("feature = \"x86-jit\"", Built::Unsure),
+            ("any (miri , test)", Built::Unsure),
+        ] {
+            let got = cfg_built(cfg, &atoms());
+            assert_eq!(got, Ok(want), "{cfg}: got = {got:?}, wanted = {want:?}");
+        }
+        // Several `cfg`s that must hold together: the narrowest class.
+        let (shipped, unsure, verus, test) =
+            ("feature = \"jit\"", "unix", "verus_keep_ghost", "test");
+        for (a, b, want) in [
+            (shipped, unsure, Built::Unsure),
+            (unsure, verus, Built::Verus),
+            (unsure, test, Built::Test),
+            (shipped, shipped, Built::Shipped),
+        ] {
+            for (x, y) in [(a, b), (b, a)] {
+                let got = guarded_built(&[x.to_owned(), y.to_owned()], &atoms());
+                assert_eq!(
+                    got,
+                    Ok(want),
+                    "{x} and {y}: got = {got:?}, wanted = {want:?}"
+                );
+            }
+        }
+        // Two `cfg`s, each needing its own value of one key, hold in no
+        // build together, as their `all` does.
+        let arches = Atoms {
+            sets: vec![
+                "target_arch=\"x86_64\"".to_owned(),
+                "target_arch=\"aarch64\"".to_owned(),
+            ],
+            ..atoms()
+        };
+        let got = guarded_built(
+            &[
+                "target_arch = \"x86_64\"".to_owned(),
+                "target_arch = \"aarch64\"".to_owned(),
+            ],
+            &arches,
+        );
+        assert_eq!(
+            got,
+            Ok(Built::Test),
+            "two architectures' cfgs: got = {got:?}, wanted = Test"
+        );
+        // One key, two values: no build meets it, though each atom on its
+        // own is sure where both are declared (challoc's two runs). Keys
+        // rustc gives several values (`target_family`, `feature`) and a
+        // `not` of the impossible conjunction are not that.
+        let both = Atoms {
+            sets: vec![
+                "target_arch=\"x86_64\"".into(),
+                "target_arch=\"aarch64\"".into(),
+            ],
+            ..atoms()
+        };
+        for (cfg, want) in [
+            (
+                "all (target_arch = \"x86_64\" , target_arch = \"aarch64\")",
+                Built::Test,
+            ),
+            (
+                "all (target_arch = \"x86_64\" , any (target_arch = \"aarch64\" , test))",
+                Built::Test,
+            ),
+            (
+                "any (all (target_arch = \"x86_64\" , target_arch = \"aarch64\") , kani)",
+                Built::Test,
+            ),
+            (
+                "all (target_os = \"linux\" , all (unix , target_os = \"macos\"))",
+                Built::Test,
+            ),
+            ("all (panic = \"abort\" , panic = \"unwind\")", Built::Test),
+            (
+                "all (target_pointer_width = \"32\" , target_pointer_width = \"64\")",
+                Built::Test,
+            ),
+            (
+                "not (all (target_arch = \"x86_64\" , target_arch = \"aarch64\"))",
+                Built::Shipped,
+            ),
+            (
+                "all (target_family = \"unix\" , target_family = \"wasm\")",
+                Built::Unsure,
+            ),
+            ("all (feature = \"a\" , feature = \"b\")", Built::Unsure),
+            ("target_arch = \"x86_64\"", Built::Shipped),
+            // Each atom is read on its own: the aarch64 run checks this,
+            // but the counter cannot tell the runs apart.
+            ("not (target_arch = \"x86_64\")", Built::Unsure),
+        ] {
+            let got = cfg_built(cfg, &both);
+            assert_eq!(got, Ok(want), "{cfg}: got = {got:?}, wanted = {want:?}");
+        }
+        // Without the declarations, `jit` and `miri` are unsettled.
+        let plain = Atoms::of(&Config::parse("[crates]\ndir = \"crates\"\n").expect("parses"));
+        for cfg in ["feature = \"jit\"", "not (miri)"] {
+            let got = cfg_built(cfg, &plain);
+            assert_eq!(
+                got,
+                Ok(Built::Unsure),
+                "{cfg}: got = {got:?}, wanted = Unsure"
+            );
         }
     }
 
@@ -4900,6 +5783,67 @@ fn uncalled() {
         assert!(!documented("| `fn walk` | `crates/k/src/b.rs` | 3 |", &f));
         assert!(!documented("| `fn walker` | `crates/k/src/a.rs` | 3 |", &f));
         assert!(!documented("`fn walk` in `crates/k/src/a.rs`", &f));
+    }
+
+    /// The markers read through `cfg_attr` go through the one expander,
+    /// [`applied_attrs`]. `discharged_by = "kani"` counts nested or beside
+    /// other attributes, and only under predicates that hold in no build
+    /// whatever is declared; under one some build may meet it fails
+    /// closed. An `external_body` a `cfg_attr` applies counts whatever its
+    /// predicate (the function is trusted), and prose in a doc comment is
+    /// no attribute.
+    #[test]
+    fn markers_are_read_through_every_cfg_attr() {
+        let attrs = |src: &str| {
+            let f = parse_file(&format!("{src}\nfn f() {{}}\n")).unwrap();
+            let Item::Fn(func) = &f.items[0] else {
+                panic!("not a function: {src}")
+            };
+            func.attrs.clone()
+        };
+        for (src, want) in [
+            ("#[cfg_attr(any(), discharged_by = \"kani\")]", true),
+            (
+                "#[cfg_attr(unix, cfg_attr(any(), discharged_by = \"kani\"))]",
+                true,
+            ),
+            (
+                "#[cfg_attr(any(), cfg_attr(windows, discharged_by = \"kani\"))]",
+                true,
+            ),
+            ("#[cfg_attr(any(), inline, discharged_by = \"kani\")]", true),
+            (
+                "#[cfg_attr(all(target_arch = \"x86_64\", target_arch = \"aarch64\"), discharged_by = \"kani\")]",
+                true,
+            ),
+            ("#[cfg_attr(windows, discharged_by = \"kani\")]", false),
+            (
+                "#[cfg_attr(unix, cfg_attr(windows, discharged_by = \"kani\"))]",
+                false,
+            ),
+            ("#[cfg_attr(unix, inline, discharged_by = \"kani\")]", false),
+            ("#[cfg_attr(test, discharged_by = \"kani\")]", false),
+            ("#[cfg_attr(any(), discharged_by = \"other\")]", false),
+        ] {
+            let got = is_discharged(&attrs(src));
+            assert_eq!(got, want, "discharged {src}: got = {got}, wanted = {want}");
+        }
+        for (src, want) in [
+            ("#[verifier::external_body]", true),
+            (
+                "#[cfg_attr(unix, cfg_attr(feature = \"verus\", verifier::external_body))]",
+                true,
+            ),
+            (
+                "#[cfg_attr(windows, inline, verus_verify(external_body))]",
+                true,
+            ),
+            ("/// Not `external_body`: it is verified.", false),
+            ("#[verifier::external_fn_specification]", false),
+        ] {
+            let got = is_external(&attrs(src));
+            assert_eq!(got, want, "external {src}: got = {got}, wanted = {want}");
+        }
     }
 
     #[test]
@@ -5681,13 +6625,16 @@ fn outside() {}
 
     /// Verus's attribute form (expat-rs's: a contract in `verus_spec` under
     /// a `cfg_attr`, for a port whose MSRV is below vstd's) verifies a plain
-    /// function outside `verus!`; `verus_verify(external_body)` is trusted.
-    /// Negative: a `cfg_attr` of another attribute, a path that only
-    /// passes through a `verus_spec` module, or a `cfg_attr` whose
-    /// predicate Verus's build never meets (`any()`, `test`, a predicate
-    /// with a test atom, the negated Verus feature) or may not meet (a
-    /// platform, alone or beside the Verus feature), is not the attribute
-    /// form.
+    /// function outside `verus!`, under a predicate the configuration
+    /// settles (the Verus feature, a `verus_sets` feature, `not` of a
+    /// `verus_never_sets` atom); `verus_verify(external_body)` is trusted,
+    /// and so is a `cfg_attr` whose predicate Verus's build may not meet (a
+    /// platform, alone or beside the Verus feature), which may leave the
+    /// function unchecked. Negative: a `cfg_attr` of another attribute, a
+    /// path that only passes through a `verus_spec` module, or a `cfg_attr`
+    /// whose predicate Verus's build never meets (`any()`, `test`, a
+    /// predicate with a test atom, the negated Verus feature, a
+    /// `verus_never_sets` atom), is not the attribute form.
     #[test]
     fn the_attribute_form_counts_as_verus_code() {
         let src = r#"
@@ -5723,6 +6670,10 @@ fn on_one_platform() {}
 fn with_a_platform() {}
 #[cfg_attr(any(feature = "verus", unix), verus_verify)]
 fn either() {}
+#[cfg_attr(all(feature = "jit", not(miri)), verus_verify)]
+fn settled() {}
+#[cfg_attr(miri, verus_verify)]
+fn under_miri() {}
 fn plain() {}
 #[cfg(feature = "verus")]
 verus! {
@@ -5732,14 +6683,14 @@ verus! {
 "#;
         let (t, errors) = count(src);
         assert_eq!(errors, 0, "errors: got = {errors}, wanted = 0");
-        // spec_attr, direct, by_path and either (the Verus feature
-        // settles the `any`) verified; trusted_attr and assumes trusted;
-        // other_attr, through_a_module, never, in_tests, with_a_test_atom,
-        // not_for_verus, on_one_platform, with_a_platform and plain
-        // outside. The `verus!` block is built only for Verus
-        // (`feature = "verus"`), so its exec function and its spec
-        // function leave the tally.
-        let want = [4, 2, 9, 0];
+        // spec_attr, direct, by_path, either (the Verus feature settles
+        // the `any`) and settled verified; trusted_attr, assumes,
+        // on_one_platform and with_a_platform trusted; other_attr,
+        // through_a_module, never, in_tests, with_a_test_atom,
+        // not_for_verus, under_miri and plain outside. The `verus!` block
+        // is built only for Verus (`feature = "verus"`), so its exec
+        // function and its spec function leave the tally.
+        let want = [5, 4, 8, 0];
         assert_eq!(t.fns, want, "fns: got = {:?}, wanted = {want:?}", t.fns);
         assert_eq!(t.ghost, 0, "ghost: got = {}, wanted = 0", t.ghost);
         // With `verus_only_ghost`, the Verus-only spec function joins the
