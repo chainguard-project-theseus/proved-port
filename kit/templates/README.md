@@ -272,9 +272,9 @@ main at `0c42c50d` and wolfi-dev/expat-rs#202 (`98588c1f`).
 
 | template | copy to | what it holds |
 |---|---|---|
-| `.chainguard/ci/miri.yaml` | `.chainguard/ci/miri.yaml` | `miri` (Stacked Borrows, the thread seeds and the known tests) on every pull request and merge; `miri-tree` (Tree Borrows) on request |
+| `.chainguard/ci/miri.yaml` | `.chainguard/ci/miri.yaml` | `miri` (Stacked Borrows, the thread seeds and the plain known tests) on every pull request and merge; `miri-tree` (Tree Borrows and the `tree-borrows` known tests) on request |
 | `ci/miri.sh` | `ci/miri.sh` | the passes, sharded one per vCPU, with a dated nightly from rustup |
-| `ci/miri-known.txt` | `ci/miri-known.txt` | the tests that hit an open, Miri-confirmed bug: `TEST #ISSUE REASON` |
+| `ci/miri-known.txt` | `ci/miri-known.txt` | the tests that hit an open, Miri-confirmed bug: `TEST #ISSUE REASON`, or `TEST #ISSUE tree-borrows REASON` for a report only Tree Borrows makes |
 | `ci/lib.sh` | `ci/lib.sh` | `fetch`, `rust_host` and `rustup_pinned`, which pin rustup-init and the nightly's channel manifest by SHA-256 |
 
 The deps.yaml `miri` entry moves the nightly and the rustup-init pin. A
@@ -284,10 +284,14 @@ that script instead (pcre3's toolchain entry), and the `miri` entry
 leaves it alone.
 
 A known test must still fail with undefined behaviour (expat-rs's rule):
-ci/miri.sh runs each row's test alone under Stacked Borrows and fails
-when it passes, so the fix deletes its row, and when it fails another
-way, so the row is updated. A row that names no listed test, or no
-`#issue`, fails it too. A test Miri cannot run is not a row: it says so
+ci/miri.sh leaves a plain row's test out of every pass, runs it alone
+under Stacked Borrows (the `miri` check) and fails when it passes, so
+the fix deletes its row, and when it fails another way, so the row is
+updated. A `tree-borrows` row is for a report only Tree Borrows makes:
+its test runs in the Stacked Borrows passes (the thread seeds included)
+like any other, is left out of the Tree Borrows pass, and is run alone
+there (the `miri-tree` check) under the same rule. A row that names no
+listed test, or no `#issue`, fails it too. A test Miri cannot run is not a row: it says so
 with `cfg(miri)`, or its file goes in `nomiri`.
 
 Where the two ports differ, ci/miri.sh's settings choose:

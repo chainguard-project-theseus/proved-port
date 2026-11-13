@@ -22,6 +22,12 @@
 # another way, so its row is updated. A row that names no listed test, or
 # cites no issue, fails it too.
 #
+# A report only Tree Borrows makes (the test passes under Stacked
+# Borrows) has a row whose third word is `tree-borrows`. Its test runs in
+# the Stacked Borrows passes like any other, is left out of the Tree
+# Borrows pass, and that pass requires it to fail still, under Tree
+# Borrows, the same way.
+#
 # Runs, with the tests split round-robin into MIRI_JOBS shards (default
 # nproc) that run at once: every other test under Stacked Borrows, Miri's
 # default; with `thread_tests=yes`, the tests that start threads (found as
@@ -128,14 +134,22 @@ for bin in $bins; do
   echo "miri: $(binargs "$bin"): $n tests"
 done
 
-# The known rows: TEST #ISSUE REASON, '#' comments and blank lines aside.
-# Each must name exactly one listed test and cite an issue.
+# The known rows: TEST #ISSUE [tree-borrows] REASON, '#' comments and
+# blank lines aside. Each must name exactly one listed test and cite an
+# issue. rows holds the Stacked Borrows rows, tree_rows the Tree Borrows
+# ones; skip the tests the Stacked Borrows passes leave out, tree_skip
+# those the Tree Borrows pass does (both kinds).
 rows=$home/rows.txt
-awk '!/^[ \t]*(#|$)/' "$known" >"$rows"
+tree_rows=$home/tree-rows.txt
+awk '!/^[ \t]*(#|$)/' "$known" >"$home/all-rows.txt"
+: >"$rows"
+: >"$tree_rows"
 skip=$home/known.txt
+tree_skip=$home/tree-known.txt
 : >"$skip"
+: >"$tree_skip"
 bad=0
-while read -r name issue _; do
+while read -r name issue model _; do
   case $issue in
     \#[0-9]*) ;;
     *) echo "miri: ci/miri-known.txt: $name cites no issue (#n)" >&2; bad=1 ;;
@@ -146,19 +160,29 @@ while read -r name issue _; do
     echo "miri: ci/miri-known.txt: $name matches $c listed tests, not one" >&2
     bad=1
   fi
-  cat "$home/match.txt" >>"$skip"
-done <"$rows"
+  if [ "$model" = tree-borrows ]; then
+    echo "$name $issue" >>"$tree_rows"
+  else
+    echo "$name $issue" >>"$rows"
+    cat "$home/match.txt" >>"$skip"
+  fi
+  cat "$home/match.txt" >>"$tree_skip"
+done <"$home/all-rows.txt"
 [ "$bad" = 0 ] || exit 1
 list=$home/run.txt
+tree_list=$home/tree-run.txt
 sort "$all" >"$home/all.sorted"
 sort "$skip" | comm -23 "$home/all.sorted" - >"$list"
+sort "$tree_skip" | comm -23 "$home/all.sorted" - >"$tree_list"
 echo "miri: $(wc -l <"$skip") known (ci/miri-known.txt), $(wc -l <"$list") to run"
+echo "miri: $(wc -l <"$tree_rows") known under Tree Borrows only, $(wc -l <"$tree_list") to run there"
 
 # The tests that start threads: every #[test] fn of the binaries above
 # whose body calls thread::spawn or thread::scope, or carries a
 # "miri: threads" comment (for one that starts threads through a helper),
 # less those whose body carries a "miri: no-seeds" comment saying why and
-# the known ones. The scan reads source text, so it also selects a test
+# the plain known ones (a `tree-borrows` row's test runs over the seeds,
+# which use Stacked Borrows). The scan reads source text, so it also selects a test
 # that cfg(not(miri)) or a feature leaves out of the Miri build: a name
 # the listing above does not hold is skipped as not built under Miri. A
 # name that matches more than one listed test is an error.
@@ -273,10 +297,11 @@ run() {
   echo "miri: $label passed in $(($(date +%s) - t))s"
 }
 
-# still_fail FLAGS: each known test alone under MIRIFLAGS=FLAGS must still
-# fail with undefined behaviour, the failure its row cites. Passing, or
-# failing any other way (an unsupported operation, a leak, a panic), fails
-# the check, so the row is updated or deleted.
+# still_fail FLAGS ROWS: each known test of ROWS alone under
+# MIRIFLAGS=FLAGS must still fail with undefined behaviour, the failure
+# its row cites. Passing, or failing any other way (an unsupported
+# operation, a leak, a panic), fails the check, so the row is updated or
+# deleted.
 still_fail() {
   stale=
   while read -r name issue _; do
@@ -293,7 +318,7 @@ still_fail() {
       echo "miri: $name fails without undefined behaviour; its $issue row no longer describes it" >&2
       cat "$home/known.log" >&2
     fi
-  done <"$rows"
+  done <"$2"
   [ -z "$stale" ]
 }
 
@@ -305,9 +330,10 @@ if [ "${MIRI_STACKED_BORROWS:-1}" = 1 ]; then
     # One shard: -Zmiri-many-seeds runs the seeds in parallel itself.
     run "threads, seeds $seeds" "$base -Zmiri-many-seeds=$seeds" "$threads" 1
   fi
-  still_fail "$base"
+  still_fail "$base" "$rows"
 fi
 if [ "${MIRI_TREE_BORROWS:-1}" = 1 ]; then
-  run "tree borrows" "$base -Zmiri-tree-borrows" "$list" "$jobs"
+  run "tree borrows" "$base -Zmiri-tree-borrows" "$tree_list" "$jobs"
+  still_fail "$base -Zmiri-tree-borrows" "$tree_rows"
 fi
 echo "miri: passed in $(($(date +%s) - start))s"

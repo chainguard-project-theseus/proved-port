@@ -37,6 +37,27 @@ for p in CAPI_CRATE CAPI_CRATE_DIR KIT_VERSION KIT_SHA MIRI_NIGHTLY MIRI_MANIFES
 done
 echo "ok the README's pattern finds every placeholder"
 
+# Every place that gives the known list's row form or says which check
+# runs the known tests names the `tree-borrows` row, so a port's copy
+# does not describe plain rows only: the README's row-form cell and its
+# known-test paragraph, ci/miri-known.txt's header, ci/miri.sh's header
+# and thread-scan note, and miri.yaml's header and both descriptions. A
+# `.` in a pattern stands for a backquote, which shellcheck reads as a
+# command substitution in single quotes.
+grep -q '.TEST #ISSUE tree-borrows REASON.' "$templates/README.md" ||
+  fail "kit/templates/README.md gives no tree-borrows row form"
+grep -q 'A .tree-borrows. row is for a report only Tree Borrows makes' "$templates/README.md" ||
+  fail "kit/templates/README.md's known-test paragraph has no tree-borrows row"
+grep -q 'TEST #ISSUE tree-borrows REASON' "$templates/ci/miri-known.txt" ||
+  fail "ci/miri-known.txt's header gives no tree-borrows row form"
+grep -q 'third word is .tree-borrows.' "$templates/ci/miri.sh" ||
+  fail "ci/miri.sh's header has no tree-borrows row"
+grep -q 'a .tree-borrows. row.s test runs over the seeds' "$templates/ci/miri.sh" ||
+  fail "ci/miri.sh's thread-scan note has no tree-borrows row"
+[ "$(grep -c 'tree-borrows' "$templates/.chainguard/ci/miri.yaml")" -ge 4 ] ||
+  fail "miri.yaml's header and descriptions do not name the tree-borrows rows"
+echo "ok the templates name the tree-borrows row wherever they give the known list's rules"
+
 # fill THREAD_TESTS: the template into $port/ci/miri.sh, with
 # thread_tests=THREAD_TESTS and nomiri=clink.
 fill() {
@@ -90,8 +111,9 @@ EOF
 
 # The stub cargo: `miri setup` and `--no-run` succeed; `--list` prints
 # the binary's tests as MOCK_LIB and MOCK_API name them; a run prints
-# each test ok, or Miri's undefined behaviour line for one MOCK_UB names.
-# A run of the clink binary fails, since nomiri leaves it out.
+# each test ok, or Miri's undefined behaviour line for one MOCK_UB names
+# (or MOCK_TB_UB names, under Tree Borrows only). A run of the clink
+# binary fails, since nomiri leaves it out.
 cat >"$tmp/bin/cargo" <<'EOF'
 #!/bin/sh
 bin= list= exact= names=
@@ -121,9 +143,15 @@ fi
 rc=0
 for n in $names; do
   case " $MOCK_UB " in
-    *" $n "*) echo "error: Undefined Behavior: stub $n"; rc=1 ;;
-    *) echo "test $n ... ok" ;;
+    *" $n "*) echo "error: Undefined Behavior: stub $n"; rc=1; continue ;;
   esac
+  case "$MIRIFLAGS" in
+    *-Zmiri-tree-borrows*)
+      case " $MOCK_TB_UB " in
+        *" $n "*) echo "error: Undefined Behavior: stub tree borrows $n"; rc=1; continue ;;
+      esac ;;
+  esac
+  echo "test $n ... ok"
 done
 exit "$rc"
 EOF
@@ -136,7 +164,8 @@ miri() {
   shift 2
   if (cd "$port" && env PATH="$tmp/bin:$PATH" MIRI_JOBS=2 \
     MOCK_LIB="tests::plain tests::spawns tests::known_ub" MOCK_API=api_call \
-    MOCK_UB=tests::known_ub "$@" sh ci/miri.sh) >"$log" 2>&1; then
+    MOCK_UB=tests::known_ub MOCK_TB_UB= MIRI_STACKED_BORROWS=1 MIRI_TREE_BORROWS=1 \
+    "$@" sh ci/miri.sh) >"$log" 2>&1; then
     got=pass
   else
     got=fail
@@ -180,6 +209,30 @@ said "tests::gone matches 0 listed tests"
 printf 'tests::plain no-issue\n' >"$port/ci/miri-known.txt"
 miri fail "a row citing no issue"
 said "tests::plain cites no issue"
+
+# A report only Tree Borrows makes: a `tree-borrows` row's test runs
+# under Stacked Borrows, is left out of the Tree Borrows pass, and must
+# still fail there. A plain row for it fails, since the test passes under
+# Stacked Borrows.
+printf 'tests::known_ub #14 tree-borrows a protector violation\n' >"$port/ci/miri-known.txt"
+miri pass "a tree-borrows row that still fails there" MOCK_UB= MOCK_TB_UB=tests::known_ub
+said "0 known (ci/miri-known.txt), 4 to run"
+said "1 known under Tree Borrows only, 3 to run there"
+said "test tests::known_ub ... ok"
+said "tests::known_ub still fails (#14): error: Undefined Behavior: stub tree borrows"
+said "tree borrows passed"
+miri fail "a tree-borrows row whose test passes there" MOCK_UB=
+said "tests::known_ub passes; #14 may be fixed: delete its ci/miri-known.txt row"
+miri pass "a tree-borrows row under MIRI_TREE_BORROWS=0" MOCK_UB= MIRI_TREE_BORROWS=0
+printf 'tests::known_ub #14 a protector violation\n' >"$port/ci/miri-known.txt"
+miri fail "a plain row for a report only Tree Borrows makes" MOCK_UB= MOCK_TB_UB=tests::known_ub
+said "tests::known_ub passes; #14 may be fixed"
+# A tree-borrows row's thread test still runs over the seeds, which use
+# Stacked Borrows.
+printf 'tests::spawns #15 tree-borrows a retag under a protector\n' >"$port/ci/miri-known.txt"
+miri pass "a tree-borrows row's thread test" MOCK_UB= MOCK_TB_UB=tests::spawns
+grep -q '^  lib tests::spawns$' "$log" || fail "a tree-borrows row's thread test left the seeds pass"
+said "tests::spawns still fails (#15)"
 
 # The template's own known list has no rows: the thread tests must be
 # found with it, and their guard must hold (BusyBox grep -v -x -F -f
