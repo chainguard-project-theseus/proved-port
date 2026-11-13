@@ -35,14 +35,16 @@ adds the functions Kani discharges ("Kani").
 [FLOOR](FLOOR) holds the `shipped` row's four shares. `make verus` fails
 below any figure, and above one names the figure to record. With
 `VERUS_BASE=REV` (the verus check passes the pull request's base,
-verus-main the commit before its own) it also fails a figure set below
+verus-main `HEAD^`, which under squash merges is main before the merge)
+it also fails a figure set below
 REV's copy unless a new `lowered` line names that figure and value, and
 it fails when REV does not resolve. It never skips that comparison:
 with no `VERUS_BASE` it fails before it runs anything. `VERUS_BASE=none`
 (the counter's `--no-base`) runs with no base, for a local run and the
 proof pull request that adds the first FLOOR; no check passes it.
 FLOOR and the badge rise in a pull request of their own, to the figures
-the check names, never in the pull request that earns them (FLOOR's
+the check names, never in the pull request that earns them, but for the
+port's first proof pull request, which may raise them from 0.0 (FLOOR's
 header).
 
 The README's badge shows FLOOR's `functions` and `lines` figures and

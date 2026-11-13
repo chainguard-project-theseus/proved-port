@@ -12,8 +12,11 @@
 # splits them; kani.sh's header says how). The two share nothing,
 # so they are separate checks that run at once.
 #
-# Every run compares with a base, and none skips it: verus takes the pull
-# request's base, verus-main the commit before the one under test. Where
+# Every run compares with a base, and none skips it. On a pull request,
+# verus takes the pull request's base, which Checks always sets
+# (CHAINGUARD_BASE_REVISION). On main, verus-main takes HEAD^, the parent
+# of the commit under test: main is squash-merged, so the parent is main
+# before the merge. Where
 # verus/FLOOR exists, `make verus` passes `--base-rev "$(VERUS_BASE)"` to
 # the counter and fails when VERUS_BASE is empty; it never prints SKIP and
 # passes, since a run that skips the comparison lets FLOOR fall on main

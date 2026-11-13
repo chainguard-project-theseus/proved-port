@@ -194,8 +194,13 @@ Rules:
   their own, to the figures the check names on main, never in the PR
   that earns them, so parallel PRs never conflict there (pcre3's
   same-PR raises once cost #689 four updates from main;
-  `references/pitfalls.md`). The one exception is the first proof PR,
-  which brings the counter (`references/lifecycle.md`, phase 4).
+  `references/pitfalls.md`). The one exception is the port's first
+  proof PR, which may raise FLOOR from 0.0 in the same PR, whether it
+  brings the counter or the counter landed earlier at FLOOR 0.0
+  (`references/lifecycle.md`, phase 4).
+- FLOOR compares with one base: the PR's base on a PR, and on main
+  `HEAD^`, which under squash merges is main before the merge. A run with
+  no base fails; it never SKIPs.
 - The README's Verus badge carries FLOOR's `functions` and `lines`
   figures in its text, since shields.io cannot read a private
   repository. With `[badge]` in `verus/count.toml` the counter fails

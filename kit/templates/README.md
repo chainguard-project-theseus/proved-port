@@ -42,9 +42,11 @@ templates and their checks use.
 The FLOOR raise rule is the same in every port: FLOOR and the README
 badge rise in a pull request of their own, to the figures the check
 names, never in the pull request that earns them, so that pull requests
-landing in parallel do not conflict there. The first proof pull request,
-which brings the counter, is the one exception (FLOOR's header;
-`kit/count/README.md`, "Bootstrapping a port").
+landing in parallel do not conflict there. The one exception is the
+port's first proof pull request, which may raise FLOOR from 0.0 in the
+same pull request, whether it brings the counter or the counter landed
+earlier with FLOOR at 0.0 (FLOOR's header; `kit/count/README.md`,
+"Bootstrapping a port").
 
 | template | copy to | what it holds |
 |---|---|---|
@@ -85,8 +87,9 @@ which brings the counter, is the one exception (FLOOR's header;
    ```
 3. Start FLOOR at the counter's first run: record the figures its
    `shipped` row names, rounded down, as the check prints them. A port
-   with no proofs yet starts at `0.0` and rises with its first theorem.
-   From then on it rises only in pull requests of its own (above).
+   with no proofs yet starts at `0.0`, and its first proof pull request
+   may raise it in the same pull request. From then on it rises only in
+   pull requests of its own (above).
    README.md's badge line gives FLOOR's `functions` and `lines`, and with
    `[badge]` the check fails when it does not, so each change that moves
    those figures replaces the line with what `verus-count --badge .`
@@ -213,7 +216,14 @@ check in the port of a hand-edited counter, and a hand edit to
 `verus/make/` has no check there but the reviewer, whose prompt holds
 both copies to the commit `verus/count/KIT` names.
 
-Every verus run compares FLOOR with a base: the pull request's on
+The verus checks compare verus/FLOOR and verus/RLIMIT with one base, by
+one rule. On a pull request (`verus`, presubmit) the base is the pull
+request's base, which Checks always sets (`CHAINGUARD_BASE_REVISION`).
+On main (`verus-main`, postsubmit) it is `HEAD^`, the parent of the
+commit under test: main is squash-merged, so the parent is main before
+the merge. A run with no base fails rather than SKIP.
+
+Every verus run compares FLOOR with that base: the pull request's on
 `verus`, the commit before on `verus-main`. Where verus/FLOOR exists, a
 run with no base fails, never SKIPs: the port's `make verus` passes
 `--base-rev` and fails when `VERUS_BASE` is empty, as verus.yaml's

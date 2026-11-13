@@ -722,6 +722,13 @@ proof PR (the skill's lifecycle.md, phase 4):
    `verus-count --badge .` prints on the README's third line, under
    its title (The badge, above).
 
+A port that landed the counter before its first proof, with FLOOR at
+0.0 (one set up from the kit's templates, or one that adopted the
+counter in a PR of its own), skips steps 1, 2 and 4. Its first proof
+PR may still raise FLOOR, and the badge with it, from 0.0 to the
+figures the counter names on that PR, in the same PR (step 3). Every
+later raise is a PR of its own.
+
 A port with a `verus/floor/` directory names the FLOOR file something
 else (chainz: `verus/SHARES`), since `verus/FLOOR` and `verus/floor/`
 are one path on a case-insensitive file system. Name it in both places:
