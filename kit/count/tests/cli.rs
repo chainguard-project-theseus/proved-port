@@ -1977,6 +1977,103 @@ fn a_path_qualified_verus_is_verus() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// With both of challoc's architectures in `verus_sets`, an import of
+/// Verus's beside `use other::*;` settles a bare `verus!` only where
+/// every proof run that compiles the module compiles the import. Stacked
+/// guards for the two architectures (in either order, on the import,
+/// through a `cfg_attr`, or one on an enclosing module) hold in no build.
+/// One architecture's guard on the import itself, or on a `verus!` block
+/// around it, holds in one run only, and the other run compiles the
+/// invocation with `other`'s `verus`, as it does under a module guard
+/// every run meets (`any(target_arch = "x86_64", not(target_arch =
+/// "x86_64"))`), which forces no architecture. Each exits 1. An unguarded import,
+/// one under an atom every run sets, and one whose module's guard forces
+/// its own still settle the name. With both oses declared too, one os and
+/// one architecture together need two runs' atoms, and settle nothing.
+#[test]
+fn a_confirming_import_holds_under_its_combined_guards() {
+    let dir = crate_of("confirm-arches", &[("lib.rs", "")]);
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}verus_sets = ['target_arch = \"x86_64\"', 'target_arch = \"aarch64\"']\n"),
+    )
+    .expect("write");
+    let lib = dir.join("crates/a/src/lib.rs");
+    const SHADOWED: &str = "may not be Verus's `verus!`";
+    #[rustfmt::skip]
+    let never = [
+        "use other::*;\n#[cfg(target_arch = \"x86_64\")]\n#[cfg(target_arch = \"aarch64\")]\nuse vstd::prelude::*;\nverus! { fn unproved() {} }\n",
+        "use other::*;\n#[cfg(target_arch = \"x86_64\")]\n#[cfg(target_arch = \"aarch64\")]\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n",
+        "use other::*;\n#[cfg(target_arch = \"aarch64\")]\n#[cfg(target_arch = \"x86_64\")]\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n",
+        "use other::*;\n#[cfg(target_arch = \"x86_64\")]\n#[cfg(target_arch = \"aarch64\")]\nuse vstd::prelude::verus;\nverus! { pub fn f() {} }\n",
+        "use other::*;\n#[cfg(target_arch = \"x86_64\")]\n#[cfg_attr(target_arch = \"x86_64\", cfg(target_arch = \"aarch64\"))]\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n",
+        "#[cfg(target_arch = \"x86_64\")]\nmod m { use other::*; #[cfg(target_arch = \"aarch64\")] use vstd::prelude::*; verus! { pub fn f() {} } }\n",
+        "#[cfg(target_arch = \"aarch64\")]\nmod m { use other::*; #[cfg(target_arch = \"x86_64\")] use vstd::prelude::*; verus! { pub fn f() {} } }\n",
+        // One run's import beside an invocation every run compiles: the
+        // other run takes `other`'s `verus`.
+        "use other::*;\n#[cfg(target_arch = \"x86_64\")]\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n",
+        "use other::*;\n#[cfg(target_arch = \"aarch64\")]\n#[cfg(target_arch = \"aarch64\")]\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n",
+        "use other::*;\n#[cfg(target_arch = \"x86_64\")]\nuse vstd::prelude::verus;\nverus! { pub fn f() {} }\n",
+        "mod m { use other::*; #[cfg(target_arch = \"x86_64\")] use vstd::prelude::*; verus! { pub fn f() {} } }\n",
+        "use other::*;\n#[cfg(target_arch = \"x86_64\")]\nverus! { use vstd::prelude::*; }\nverus! { pub fn f() {} }\n",
+        "mod q { pub use other::*; #[cfg(target_arch = \"x86_64\")] pub use vstd::prelude::*; }\nuse q::*;\nverus! { pub fn f() {} }\n",
+        // A module guard that every run meets forces no architecture.
+        "#[cfg(any(target_arch = \"x86_64\", not(target_arch = \"x86_64\")))]\nmod m {\n    use other::*;\n    #[cfg(target_arch = \"x86_64\")]\n    use vstd::prelude::verus;\n    verus! { pub fn f() {} }\n}\n",
+    ];
+    for src in never {
+        fs::write(&lib, src).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 1 && err.contains(SHADOWED),
+            "{src}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {SHADOWED:?}"
+        );
+    }
+    #[rustfmt::skip]
+    let settled = [
+        "use other::*;\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n",
+        "use other::*;\n#[cfg(verus_keep_ghost)]\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n",
+        "#[cfg(target_arch = \"x86_64\")]\nmod m { use other::*; use vstd::prelude::*; verus! { pub fn f() {} } }\n",
+        "#[cfg(target_arch = \"x86_64\")]\nmod m { use other::*; #[cfg(target_arch = \"x86_64\")] use vstd::prelude::*; verus! { pub fn f() {} } }\n",
+        "#[cfg(target_arch = \"x86_64\")]\nmod m { use other::*; verus! { use vstd::prelude::*; pub fn f() {} } }\n",
+        "#[cfg(any(target_arch = \"x86_64\", test))]\nmod m { use other::*; #[cfg(target_arch = \"x86_64\")] use vstd::prelude::verus; verus! { pub fn f() {} } }\n",
+    ];
+    for src in settled {
+        fs::write(&lib, src).expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<(String, String)> = list_rows(&out)
+            .into_iter()
+            .map(|(class, _, name, _)| (class, name))
+            .collect();
+        let want = vec![("Verified".to_owned(), "f".to_owned())];
+        assert!(
+            got == 0 && rows == want,
+            "{src}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+    }
+    // With both oses declared too, an import under one os and one arch
+    // needs two runs' atoms at once: it may be built only on a host no
+    // run is, so it settles nothing, as a function there is not sure,
+    // even where both come from the modules around it.
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}verus_sets = ['target_arch = \"x86_64\"', 'target_arch = \"aarch64\"', 'target_os = \"linux\"', 'target_os = \"macos\"']\n"),
+    )
+    .expect("write");
+    for src in [
+        "use other::*;\n#[cfg(target_os = \"macos\")]\n#[cfg(target_arch = \"x86_64\")]\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n",
+        "#[cfg(target_os = \"macos\")]\nmod m { use other::*; #[cfg(target_arch = \"x86_64\")] use vstd::prelude::*; verus! { pub fn f() {} } }\n",
+        "#[cfg(target_os = \"macos\")]\nmod m { #[cfg(target_arch = \"x86_64\")] mod n { use other::*; use vstd::prelude::*; verus! { pub fn f() {} } } }\n",
+    ] {
+        fs::write(&lib, src).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 1 && err.contains(SHADOWED),
+            "{src}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {SHADOWED:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// The base revision's walk reads the edition a crate inherits from the
 /// workspace at that revision: with `--base-rev`, a `::vstd` block under
 /// an inherited 2024 edition reads the same on the base as on the head.
