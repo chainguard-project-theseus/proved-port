@@ -47,7 +47,9 @@
 #   verus-count-test  the vendored counter's own tests; installed, the
 #                     package's tests cover the counter, and this passes.
 #   verus-headers     headers.sh: the kit's Verus files against the kit
-#                     templates of the commit verus/count/KIT records:
+#                     templates of the commit KIT records (installed:
+#                     PROVED_PORT_HOME's templates and KIT; vendored:
+#                     verus/make/templates and verus/count/KIT):
 #                     the headers of verus/FLOOR, RLIMIT, REACH, MINTS and
 #                     count.toml, of .chainguard/ci/verus.yaml, miri.yaml
 #                     and .chainguard/reviewers.yaml, and the vendored-kit
@@ -63,8 +65,9 @@
 # for its scripts.
 PROVED_PORT_MAKE := $(dir $(lastword $(MAKEFILE_LIST)))
 # PROVED_PORT_INSTALLED: `yes` unless this file is the port's own
-# verus/make/proved-port.mk, the vendored copy.
-PROVED_PORT_INSTALLED := $(if $(filter $(abspath verus/make),$(abspath $(PROVED_PORT_MAKE))),,yes)
+# verus/make/proved-port.mk, the vendored copy. `override`, so that where
+# the file is decides it even under `make -e` or on the command line.
+override PROVED_PORT_INSTALLED := $(if $(filter $(abspath verus/make),$(abspath $(PROVED_PORT_MAKE))),,yes)
 # PROVED_PORT_HOME: the installed kit's root, which holds KIT and
 # templates/ (and make/, which a port includes this file from).
 PROVED_PORT_HOME ?= /usr/share/proved-port
@@ -221,7 +224,7 @@ verus-count-test: ## the vendored counter's tests (installed: covered by the pac
 
 verus-headers: ## the kit's Verus files against the kit's templates (verus/make/headers.sh)
 	$(proved_port_version_check)
-	VERUS_FLOOR=$(VERUS_FLOOR) sh $(PROVED_PORT_MAKE)headers.sh .
+	VERUS_FLOOR=$(VERUS_FLOOR) sh $(PROVED_PORT_MAKE)headers.sh $(if $(PROVED_PORT_INSTALLED),--installed $(PROVED_PORT_HOME)/templates $(PROVED_PORT_HOME)/KIT $(PROVED_PORT_MAKE)VERUS-FILES ).
 
 kani: ## the Kani harnesses, all or a shard (verus/make/kani.sh; KANI_SHARD/KANI_SHARDS; KANI_NONE=yes for none yet)
 	$(proved_port_version_check)
