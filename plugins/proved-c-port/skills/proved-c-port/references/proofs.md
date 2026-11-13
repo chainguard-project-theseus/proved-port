@@ -66,6 +66,14 @@ as verified, and code under the feature as built only for Verus, when
 `verus/count.toml` names the feature (`[crates] verus_features =
 ["verus"]`).
 
+The counter credits a proof only where the proof run is sure to compile
+it: a function under any other `cfg` (a platform, `not(miri)`, a default
+feature) counts as trusted until `verus/count.toml` says the proof run
+settles that atom (`verus_sets = ['feature = "jit"']`,
+`verus_never_sets = ["miri"]`; kit/count/README.md, "Verus's build").
+Declare only what `make verus` really sets: a declaration is a
+narrowing the configuration check holds to a `[[narrowed]]` reason.
+
 ## Refinement layering
 
 Each layer extends the spec first, then the code over it, in its own PR:

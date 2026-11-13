@@ -1093,3 +1093,904 @@ fn the_badge_is_held_to_the_floor() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// wolfi-dev/proved-port#12's reproducer: a function under a `cfg` Verus's
+/// build might not meet (`target_os = "windows"`, which a Linux proof run
+/// never sees) ships with nothing to prove Verus checked it, so it counts
+/// as trusted, not verified.
+#[test]
+fn a_platform_cfg_is_not_verified() {
+    let dir = repository("windows");
+    fs::write(
+        dir.join("crates/a/src/lib.rs"),
+        "#[cfg(target_os = \"windows\")]\n#[verus_verify]\npub fn f() {}\n\npub fn g() {}\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    let want = "a\t0\t1\t0\t1\t0.0%\t0.0%\t";
+    assert!(
+        got == 0 && out.lines().any(|l| l.starts_with(want)),
+        "got = exit {got}, {out:?}, {err:?}; wanted = exit 0, a row {want:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Each way a `cfg` reaches a function: its own attributes, an enclosing
+/// `impl`, trait, inline `mod` or `verus!` block, an out-of-line
+/// `#[cfg(..)] mod x;` whose file, and the files under it, it classes, and
+/// an inline module whose `cfg` the `mod child;` inside it carries to
+/// child's file and the files under that, or whose `mod child;` has its
+/// own, a file's inner `#![cfg(..)]`, which guards the files under it too,
+/// and `#[cfg_attr(P, cfg(Q))]`. Under `not(miri)` and `feature = "jit"`,
+/// which the configuration
+/// does not settle, every one of them is trusted; with `jit` in
+/// `verus_sets` and `miri` in `verus_never_sets`, each is verified.
+/// `windows` and the file under a `windows` inline module stay trusted,
+/// `sure` and the file under an unguarded inline module verified, and
+/// `plain` outside throughout.
+#[test]
+fn every_cfg_path_is_sure_only_when_settled() {
+    const LIB: &str = r#"
+#[cfg(target_os = "windows")]
+#[verus_verify]
+pub fn windows() {}
+pub fn plain() {}
+pub struct S;
+verus! {
+pub fn sure() {}
+#[cfg(not(miri))]
+pub fn own() {}
+#[cfg(not(miri))]
+impl S {
+    pub fn in_impl(&self) {}
+}
+#[cfg(not(miri))]
+pub trait T {
+    fn in_trait(&self) {}
+}
+#[cfg(not(miri))]
+pub mod inline {
+    pub fn in_mod() {}
+}
+}
+#[cfg(not(miri))]
+verus! {
+pub fn in_block() {}
+}
+#[cfg(all(feature = "jit", not(miri)))]
+mod exec;
+#[cfg(not(miri))]
+mod inline_guarded {
+    mod child;
+}
+mod inline_plain {
+    #[cfg(not(miri))]
+    mod child;
+}
+#[cfg(target_os = "windows")]
+mod inline_windows {
+    mod child;
+}
+mod inline_sure {
+    mod child;
+}
+mod inner_attr;
+verus! {
+#[cfg_attr(unix, cfg(not(miri)))]
+pub fn in_cfg_attr() {}
+}
+"#;
+    let dir = repository("paths");
+    let src = dir.join("crates/a/src");
+    fs::write(src.join("lib.rs"), LIB).expect("write");
+    let files = [
+        ("exec.rs", "mod deeper;\nverus! {\npub fn in_file() {}\n}\n"),
+        ("exec/deeper.rs", "verus! {\npub fn in_deeper() {}\n}\n"),
+        (
+            "inline_guarded/child.rs",
+            "mod deeper;\nverus! {\npub fn in_inline_file() {}\n}\n",
+        ),
+        (
+            "inline_guarded/child/deeper.rs",
+            "verus! {\npub fn in_inline_deeper() {}\n}\n",
+        ),
+        (
+            "inline_plain/child.rs",
+            "verus! {\npub fn in_inline_decl() {}\n}\n",
+        ),
+        (
+            "inline_windows/child.rs",
+            "verus! {\npub fn windows_inline() {}\n}\n",
+        ),
+        (
+            "inline_sure/child.rs",
+            "verus! {\npub fn sure_inline() {}\n}\n",
+        ),
+        (
+            "inner_attr.rs",
+            "#![cfg(not(miri))]\nmod deeper;\nverus! {\npub fn in_inner_attr() {}\n}\n",
+        ),
+        (
+            "inner_attr/deeper.rs",
+            "verus! {\npub fn in_inner_deeper() {}\n}\n",
+        ),
+    ];
+    for (path, text) in files {
+        let p = src.join(path);
+        fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+        fs::write(p, text).expect("write");
+    }
+    let paths = [
+        "own",
+        "in_impl",
+        "in_trait",
+        "in_mod",
+        "in_block",
+        "in_file",
+        "in_deeper",
+        "in_inline_file",
+        "in_inline_deeper",
+        "in_inline_decl",
+        "in_inner_attr",
+        "in_inner_deeper",
+        "in_cfg_attr",
+    ];
+    for (config, class) in [
+        (PLAIN.to_owned(), "Trusted"),
+        (
+            format!("{PLAIN}verus_sets = ['feature = \"jit\"']\nverus_never_sets = [\"miri\"]\n"),
+            "Verified",
+        ),
+    ] {
+        fs::write(dir.join("verus/count.toml"), &config).expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        assert_eq!(
+            got, 0,
+            "{config:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+        );
+        let class_of = |name: &str| {
+            out.lines()
+                .find(|l| l.ends_with(&format!("\t{name}")))
+                .and_then(|l| l.split('\t').nth(1))
+                .unwrap_or("missing")
+                .to_owned()
+        };
+        for (name, want) in paths.iter().map(|n| (*n, class)).chain([
+            ("windows", "Trusted"),
+            ("windows_inline", "Trusted"),
+            ("sure", "Verified"),
+            ("sure_inline", "Verified"),
+            ("plain", "Outside"),
+        ]) {
+            let got = class_of(name);
+            assert_eq!(
+                got, want,
+                "{config:?}: {name}: got = {got}, wanted = {want}"
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The class of the function `name` in `--list`'s rows `out`, or
+/// "missing" when no row names it.
+fn class_in(out: &str, name: &str) -> String {
+    out.lines()
+        .find(|l| l.ends_with(&format!("\t{name}")))
+        .and_then(|l| l.split('\t').nth(1))
+        .unwrap_or("missing")
+        .to_owned()
+}
+
+/// A crate root's inner `#![cfg(target_os = "windows")]` guards every file
+/// of the crate, so nothing in it is verified; a module file's
+/// `#![cfg(test)]`, and a `#[cfg(test)] mod t;` inside an inline module,
+/// leave their files out.
+#[test]
+fn an_inner_cfg_guards_its_file_and_those_under_it() {
+    let dir = repository("inner");
+    let src = dir.join("crates/a/src");
+    fs::create_dir_all(src.join("m")).expect("mkdir");
+    for (path, text) in [
+        (
+            "lib.rs",
+            "#![cfg(target_os = \"windows\")]\nmod below;\nmod tests_file;\nmod m {\n    #[cfg(test)]\n    mod t;\n}\nverus! {\npub fn at_root() {}\n}\n",
+        ),
+        ("below.rs", "verus! {\npub fn below() {}\n}\n"),
+        (
+            "tests_file.rs",
+            "#![cfg(test)]\nverus! {\npub fn in_test_file() {}\n}\n",
+        ),
+        ("m/t.rs", "verus! {\npub fn in_inline_test() {}\n}\n"),
+    ] {
+        fs::write(src.join(path), text).expect("write");
+    }
+    let (got, out, err) = count(&dir, &["--list"]);
+    assert_eq!(
+        got, 0,
+        "got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    for (name, want) in [
+        ("at_root", "Trusted"),
+        ("below", "Trusted"),
+        ("in_test_file", "missing"),
+        ("in_inline_test", "missing"),
+    ] {
+        let got = class_in(&out, name);
+        assert_eq!(got, want, "{name}: got = {got}, wanted = {want}");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The module declarations the first pass must find and place. A file
+/// declared twice is built where either declaration holds, so it stays in
+/// the count: `unix.rs` (two `#[path]` declarations, linux and macos) and
+/// `fast.rs` (x86_64 and aarch64) are trusted with nothing declared and
+/// verified once the proof runs settle their atoms; `imp.rs`, under `std`
+/// and `not(std)`, stays trusted, as the counter reads each atom on its
+/// own. A file declared inside a `cfg_if!` body is trusted whatever is
+/// declared, since the counter does not evaluate the macro (one a `#[path]`
+/// there names too, with the files it declares beside it, whatever
+/// visibility or other attributes stand between the `#[path]` and the
+/// `mod`), and one
+/// declared under a `cfg` inside `verus!` takes that `cfg`. A file a
+/// `#[path]` names declares its modules beside it, as a `mod.rs` does,
+/// and they take its guard; so does a file a `#[path]` on an inline module
+/// in a module file places, beside that file.
+#[test]
+fn module_declarations_are_found_and_placed() {
+    const LIB: &str = r#"
+#[cfg(target_os = "linux")]
+#[path = "unix.rs"]
+mod sys;
+#[cfg(target_os = "macos")]
+#[path = "unix.rs"]
+mod sys;
+#[cfg(target_arch = "x86_64")]
+pub mod fast;
+#[cfg(target_arch = "aarch64")]
+mod fast;
+#[cfg(feature = "std")]
+pub mod imp;
+#[cfg(not(feature = "std"))]
+mod imp;
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "windows")] {
+        mod win;
+        #[path = "windows_impl.rs"]
+        mod platform;
+        #[path = "vis_pub.rs"]
+        #[cfg(unix)]
+        pub mod named_pub;
+        #[path = "vis_crate.rs"]
+        pub(crate) mod named_crate;
+        #[path = "vis_super.rs"]
+        #[allow(dead_code)]
+        pub(super) mod named_super;
+        #[path = "vis_in.rs"]
+        pub(in crate::x) mod named_in;
+    } else {
+        mod other;
+    }
+}
+verus! {
+#[cfg(target_os = "windows")]
+mod verus_win;
+}
+#[cfg(target_os = "windows")]
+#[path = "arch/win.rs"]
+mod pwin;
+#[cfg(target_os = "windows")]
+mod host;
+"#;
+    let dir = repository("decls");
+    let src = dir.join("crates/a/src");
+    for (path, text) in [
+        ("lib.rs", LIB),
+        ("unix.rs", "verus! {\npub fn in_unix() {}\n}\n"),
+        ("fast.rs", "verus! {\npub fn in_fast() {}\n}\n"),
+        ("imp.rs", "verus! {\npub fn in_imp() {}\n}\n"),
+        ("win.rs", "verus! {\npub fn in_cfg_if() {}\n}\n"),
+        ("other.rs", ""),
+        (
+            "windows_impl.rs",
+            "mod wchild;\nverus! {\npub fn in_cfg_if_path() {}\n}\n",
+        ),
+        ("wchild.rs", "verus! {\npub fn in_cfg_if_child() {}\n}\n"),
+        ("vis_pub.rs", "verus! {\npub fn in_vis_pub() {}\n}\n"),
+        ("vis_crate.rs", "verus! {\npub fn in_vis_crate() {}\n}\n"),
+        ("vis_super.rs", "verus! {\npub fn in_vis_super() {}\n}\n"),
+        ("vis_in.rs", "verus! {\npub fn in_vis_in() {}\n}\n"),
+        ("verus_win.rs", "verus! {\npub fn in_verus_mod() {}\n}\n"),
+        // arch/ sorts before lib.rs, so the first pass reads win.rs
+        // before the `#[path]` that names it.
+        (
+            "arch/win.rs",
+            "mod child;\n#[cfg(not(miri))]\nmod guarded;\n",
+        ),
+        ("arch/child.rs", "verus! {\npub fn in_path_child() {}\n}\n"),
+        (
+            "arch/guarded.rs",
+            "verus! {\npub fn in_path_guarded() {}\n}\n",
+        ),
+        ("host.rs", "#[path = \"d\"]\nmod inline {\n    mod x;\n}\n"),
+        ("d/x.rs", "verus! {\npub fn in_inline_path() {}\n}\n"),
+    ] {
+        let p = src.join(path);
+        fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+        fs::write(p, text).expect("write");
+    }
+    let settled = "verus_sets = ['target_os = \"linux\"', 'target_os = \"windows\"', 'target_arch = \"x86_64\"', 'target_arch = \"aarch64\"']\nverus_never_sets = [\"miri\"]\n";
+    for (keys, wants) in [
+        (
+            "",
+            [
+                ("in_unix", "Trusted"),
+                ("in_fast", "Trusted"),
+                ("in_imp", "Trusted"),
+                ("in_cfg_if", "Trusted"),
+                ("in_cfg_if_path", "Trusted"),
+                ("in_cfg_if_child", "Trusted"),
+                ("in_vis_pub", "Trusted"),
+                ("in_vis_crate", "Trusted"),
+                ("in_vis_super", "Trusted"),
+                ("in_vis_in", "Trusted"),
+                ("in_verus_mod", "Trusted"),
+                ("in_path_child", "Trusted"),
+                ("in_path_guarded", "Trusted"),
+                ("in_inline_path", "Trusted"),
+            ],
+        ),
+        (
+            settled,
+            [
+                ("in_unix", "Verified"),
+                ("in_fast", "Verified"),
+                ("in_imp", "Trusted"),
+                ("in_cfg_if", "Trusted"),
+                ("in_cfg_if_path", "Trusted"),
+                ("in_cfg_if_child", "Trusted"),
+                ("in_vis_pub", "Trusted"),
+                ("in_vis_crate", "Trusted"),
+                ("in_vis_super", "Trusted"),
+                ("in_vis_in", "Trusted"),
+                ("in_verus_mod", "Verified"),
+                ("in_path_child", "Verified"),
+                ("in_path_guarded", "Verified"),
+                ("in_inline_path", "Verified"),
+            ],
+        ),
+    ] {
+        fs::write(dir.join("verus/count.toml"), format!("{PLAIN}{keys}")).expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        assert_eq!(
+            got, 0,
+            "{keys:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+        );
+        for (name, want) in wants {
+            let got = class_in(&out, name);
+            assert_eq!(got, want, "{keys:?}: {name}: got = {got}, wanted = {want}");
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `#[cfg_attr(P, path = "..")]` names the module's file where `P` holds,
+/// and the default file where none does, so `windows.rs` is built only
+/// where `windows` is and `sys.rs` only where neither atom is. A crate
+/// file no declaration names (`orphan.rs`) is unsure, never verified.
+/// With `unix` sure and `windows` never set in the proof run, only
+/// `unix.rs` and the plainly declared `plain.rs` are verified.
+#[test]
+fn conditional_paths_and_undeclared_files_are_placed() {
+    const LIB: &str = r#"
+#[cfg_attr(windows, path = "windows.rs")]
+#[cfg_attr(unix, path = "unix.rs")]
+mod sys;
+mod plain;
+"#;
+    let dir = repository("cfgpath");
+    let src = dir.join("crates/a/src");
+    for (path, text) in [
+        ("lib.rs", LIB),
+        ("windows.rs", "verus! {\npub fn in_windows() {}\n}\n"),
+        ("unix.rs", "verus! {\npub fn in_unix() {}\n}\n"),
+        ("sys.rs", "verus! {\npub fn in_default() {}\n}\n"),
+        ("plain.rs", "verus! {\npub fn in_plain() {}\n}\n"),
+        ("orphan.rs", "verus! {\npub fn in_orphan() {}\n}\n"),
+    ] {
+        fs::write(src.join(path), text).expect("write");
+    }
+    for (keys, wants) in [
+        (
+            "",
+            [
+                ("in_windows", "Trusted"),
+                ("in_unix", "Trusted"),
+                ("in_default", "Trusted"),
+                ("in_plain", "Verified"),
+                ("in_orphan", "Trusted"),
+            ],
+        ),
+        (
+            "verus_sets = [\"unix\"]\nverus_never_sets = [\"windows\"]\n",
+            [
+                ("in_windows", "Trusted"),
+                ("in_unix", "Verified"),
+                ("in_default", "Trusted"),
+                ("in_plain", "Verified"),
+                ("in_orphan", "Trusted"),
+            ],
+        ),
+    ] {
+        fs::write(dir.join("verus/count.toml"), format!("{PLAIN}{keys}")).expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        assert_eq!(
+            got, 0,
+            "{keys:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+        );
+        for (name, want) in wants {
+            let got = class_in(&out, name);
+            assert_eq!(got, want, "{keys:?}: {name}: got = {got}, wanted = {want}");
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// rustc takes a module's first path attribute in effect, in source
+/// order. With `unix` and `linux` sure in the proof run:
+/// - `sys`: `cfg_attr(unix, path = "unix_sys.rs")` then a bare `#[path =
+///   "generic.rs"]`, so `generic.rs` is the fallback where `unix` does not
+///   hold, and is trusted;
+/// - `overlap`: `cfg_attr(unix, ..)` then `cfg_attr(linux, ..)`, so
+///   `second.rs` is built only where linux holds and unix does not, which
+///   the proof run never sees, and is trusted, as is the default
+///   `overlap.rs`;
+/// - `bare`: a bare `#[path]` first ends the list, so the later
+///   `cfg_attr`'s `never.rs` is no declaration of it, and counts as
+///   undeclared.
+#[test]
+fn path_attributes_take_the_first_in_effect() {
+    const LIB: &str = r#"
+#[cfg_attr(unix, path = "unix_sys.rs")]
+#[path = "generic.rs"]
+mod sys;
+#[cfg_attr(unix, path = "first.rs")]
+#[cfg_attr(target_os = "linux", path = "second.rs")]
+mod overlap;
+#[path = "bare_first.rs"]
+#[cfg_attr(unix, path = "never.rs")]
+mod bare;
+"#;
+    let dir = repository("pathorder");
+    let src = dir.join("crates/a/src");
+    for (path, text) in [
+        ("lib.rs", LIB),
+        ("unix_sys.rs", "verus! {\npub fn in_unix_sys() {}\n}\n"),
+        ("generic.rs", "verus! {\npub fn in_generic() {}\n}\n"),
+        ("first.rs", "verus! {\npub fn in_first() {}\n}\n"),
+        ("second.rs", "verus! {\npub fn in_second() {}\n}\n"),
+        (
+            "overlap.rs",
+            "verus! {\npub fn in_overlap_default() {}\n}\n",
+        ),
+        ("bare_first.rs", "verus! {\npub fn in_bare_first() {}\n}\n"),
+        ("never.rs", "verus! {\npub fn in_never() {}\n}\n"),
+    ] {
+        fs::write(src.join(path), text).expect("write");
+    }
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}verus_sets = [\"unix\", 'target_os = \"linux\"']\n"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &["--list"]);
+    assert_eq!(
+        got, 0,
+        "got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    for (name, want) in [
+        ("in_unix_sys", "Verified"),
+        ("in_generic", "Trusted"),
+        ("in_first", "Verified"),
+        ("in_second", "Trusted"),
+        ("in_overlap_default", "Trusted"),
+        ("in_bare_first", "Verified"),
+        ("in_never", "Trusted"),
+    ] {
+        let got = class_in(&out, name);
+        assert_eq!(got, want, "{name}: got = {got}, wanted = {want}");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `cfg_attr`s apply as rustc expands them, nested to any depth and with
+/// several attributes each, for a module's path, a `cfg`, and Verus's
+/// attribute form alike: each applies where every predicate around it
+/// holds. With nothing declared each is trusted; with `unix`, `linux` and
+/// `feature = "fast"` sure, `linux.rs` (two levels), `deep.rs` (three),
+/// `multi.rs` (a path after another attribute) and the attribute forms
+/// are verified, the default files stay trusted, and a function under a
+/// `cfg(windows)` two levels down is trusted, as is `outer_off.rs`, whose
+/// inner `linux` holds but whose outer `windows` the run does not settle.
+#[test]
+fn nested_cfg_attrs_apply_as_rustc_expands_them() {
+    const LIB: &str = r#"
+#[cfg_attr(unix, cfg_attr(target_os = "linux", path = "linux.rs"))]
+mod sys;
+#[cfg_attr(unix, cfg_attr(target_os = "linux", cfg_attr(feature = "fast", path = "deep.rs")))]
+mod three;
+#[cfg_attr(unix, allow(dead_code), path = "multi.rs")]
+mod multi;
+#[cfg_attr(windows, cfg_attr(target_os = "linux", path = "outer_off.rs"))]
+mod outer;
+verus! {
+#[cfg_attr(unix, cfg_attr(target_os = "linux", cfg(windows)))]
+pub fn nested_cfg() {}
+}
+#[cfg_attr(unix, cfg_attr(target_os = "linux", verus_verify))]
+pub fn nested_attr() {}
+#[cfg_attr(unix, allow(dead_code), verus_verify)]
+pub fn multi_attr() {}
+"#;
+    let dir = repository("nested");
+    let src = dir.join("crates/a/src");
+    for (path, text) in [
+        ("lib.rs", LIB),
+        ("linux.rs", "verus! {\npub fn in_linux() {}\n}\n"),
+        ("sys.rs", "verus! {\npub fn in_sys_default() {}\n}\n"),
+        ("deep.rs", "verus! {\npub fn in_deep() {}\n}\n"),
+        ("three.rs", "verus! {\npub fn in_three_default() {}\n}\n"),
+        ("multi.rs", "verus! {\npub fn in_multi() {}\n}\n"),
+        ("outer_off.rs", "verus! {\npub fn in_outer_off() {}\n}\n"),
+    ] {
+        fs::write(src.join(path), text).expect("write");
+    }
+    for (keys, wants) in [
+        (
+            "",
+            [
+                ("in_linux", "Trusted"),
+                ("in_sys_default", "Trusted"),
+                ("in_deep", "Trusted"),
+                ("in_three_default", "Trusted"),
+                ("in_multi", "Trusted"),
+                ("nested_cfg", "Trusted"),
+                ("nested_attr", "Trusted"),
+                ("multi_attr", "Trusted"),
+                ("in_outer_off", "Trusted"),
+            ],
+        ),
+        (
+            "verus_sets = [\"unix\", 'target_os = \"linux\"', 'feature = \"fast\"']\n",
+            [
+                ("in_linux", "Verified"),
+                ("in_sys_default", "Trusted"),
+                ("in_deep", "Verified"),
+                ("in_three_default", "Trusted"),
+                ("in_multi", "Verified"),
+                ("nested_cfg", "Trusted"),
+                ("nested_attr", "Verified"),
+                ("multi_attr", "Verified"),
+                ("in_outer_off", "Trusted"),
+            ],
+        ),
+    ] {
+        fs::write(dir.join("verus/count.toml"), format!("{PLAIN}{keys}")).expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        assert_eq!(
+            got, 0,
+            "{keys:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+        );
+        for (name, want) in wants {
+            let got = class_in(&out, name);
+            assert_eq!(got, want, "{keys:?}: {name}: got = {got}, wanted = {want}");
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// An inline module's directory follows its path attributes as an
+/// out-of-line module's file does: under `cfg_attr(unix, path = "u")`,
+/// `u/x.rs` is the one built where unix holds and `inline/x.rs` the one
+/// where it does not. A crate's roots are the targets its Cargo.toml
+/// declares: with `autobins = false` and a `[[bin]]` at `src/bin/tool.rs`,
+/// `tool.rs` is a root whose `#[cfg(windows)] mod x;` is `src/bin/x.rs`
+/// beside it, and an undeclared `src/bin/stray.rs` is no root, so is never
+/// verified; with the default `autobins`, `src/bin/solo.rs` is a root.
+#[test]
+fn inline_paths_and_declared_targets_place_files() {
+    let dir = repository("targets");
+    let crates = dir.join("crates");
+    for (path, text) in [
+        (
+            "a/src/lib.rs",
+            "#[cfg_attr(unix, path = \"u\")]\nmod inline {\n    mod x;\n}\n",
+        ),
+        ("a/src/u/x.rs", "verus! {\npub fn in_u() {}\n}\n"),
+        (
+            "a/src/inline/x.rs",
+            "verus! {\npub fn in_default_dir() {}\n}\n",
+        ),
+        (
+            "b/Cargo.toml",
+            "[package]\nname = \"b\"\nversion = \"0.0.0\"\nautobins = false\n\n[[bin]]\nname = \"tool\"\npath = \"src/bin/tool.rs\"\n",
+        ),
+        (
+            "b/src/bin/tool.rs",
+            "#[cfg(windows)]\nmod x;\nverus! {\npub fn in_tool() {}\n}\n",
+        ),
+        ("b/src/bin/x.rs", "verus! {\npub fn in_tool_child() {}\n}\n"),
+        ("b/src/bin/stray.rs", "verus! {\npub fn in_stray() {}\n}\n"),
+        (
+            "c/Cargo.toml",
+            "[package]\nname = \"c\"\nversion = \"0.0.0\"\n",
+        ),
+        ("c/src/main.rs", "fn main() {}\n"),
+        ("c/src/bin/solo.rs", "verus! {\npub fn in_solo() {}\n}\n"),
+    ] {
+        let p = crates.join(path);
+        fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+        fs::write(p, text).expect("write");
+    }
+    for (keys, wants) in [
+        (
+            "",
+            [
+                ("in_u", "Trusted"),
+                ("in_default_dir", "Trusted"),
+                ("in_tool", "Verified"),
+                ("in_tool_child", "Trusted"),
+                ("in_stray", "Trusted"),
+                ("in_solo", "Verified"),
+            ],
+        ),
+        (
+            "verus_sets = [\"unix\", \"windows\"]\n",
+            [
+                ("in_u", "Verified"),
+                ("in_default_dir", "Trusted"),
+                ("in_tool", "Verified"),
+                ("in_tool_child", "Verified"),
+                ("in_stray", "Trusted"),
+                ("in_solo", "Verified"),
+            ],
+        ),
+    ] {
+        fs::write(dir.join("verus/count.toml"), format!("{PLAIN}{keys}")).expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        assert_eq!(
+            got, 0,
+            "{keys:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+        );
+        for (name, want) in wants {
+            let got = class_in(&out, name);
+            assert_eq!(got, want, "{keys:?}: {name}: got = {got}, wanted = {want}");
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// With two runs' atoms declared for two single-valued keys (an x86_64
+/// Linux run and an aarch64 macOS run), a function is sure only under one
+/// of those atoms: under two, from one `cfg` or several (its own, its
+/// module's), it may ship on a host neither run is (x86_64 macOS), so it
+/// is trusted. Under one it is verified, and with one key declared twice
+/// and the other once, the other's atom does not count. An atom under two
+/// `not`s counts as one under none, a `cfg_attr(not(P), cfg(Q))` included,
+/// and each alternative of an `any` is a way of its own.
+#[test]
+fn several_runs_atoms_together_are_not_sure() {
+    const LIB: &str = r#"
+#[cfg(target_os = "macos")]
+mod mac {
+    #[cfg(target_arch = "x86_64")]
+    #[verus_verify]
+    pub fn enclosing() {}
+}
+verus! {
+#[cfg(target_os = "macos")]
+#[cfg(target_arch = "x86_64")]
+pub fn stacked() {}
+#[cfg(all(target_arch = "x86_64", any(target_arch = "aarch64", unix)))]
+pub fn nested() {}
+#[cfg(target_arch = "x86_64")]
+pub fn one_arch() {}
+#[cfg(target_os = "macos")]
+pub fn one_os() {}
+}
+#[cfg_attr(all(target_os = "linux", target_arch = "aarch64"), verus_verify)]
+pub fn attr_form() {}
+#[cfg(not(not(target_os = "macos")))]
+mod mac2 {
+    #[cfg(target_arch = "x86_64")]
+    #[verus_verify]
+    pub fn double_not() {}
+}
+#[cfg_attr(not(target_os = "macos"), cfg(feature = "portable"))]
+mod mac3 {
+    #[cfg(target_arch = "x86_64")]
+    #[verus_verify]
+    pub fn attr_not() {}
+}
+verus! {
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub fn either_arch() {}
+}
+"#;
+    let dir = repository("runs");
+    fs::write(dir.join("crates/a/src/lib.rs"), LIB).expect("write");
+    let both = "verus_sets = ['target_arch = \"x86_64\"', 'target_arch = \"aarch64\"', 'target_os = \"linux\"', 'target_os = \"macos\"']\n";
+    let arches = "verus_sets = ['target_arch = \"x86_64\"', 'target_arch = \"aarch64\"', 'target_os = \"macos\"']\n";
+    for (keys, wants) in [
+        (
+            both,
+            [
+                ("enclosing", "Trusted"),
+                ("stacked", "Trusted"),
+                ("nested", "Trusted"),
+                ("one_arch", "Verified"),
+                ("one_os", "Verified"),
+                ("attr_form", "Trusted"),
+                ("double_not", "Trusted"),
+                ("attr_not", "Trusted"),
+                ("either_arch", "Verified"),
+            ],
+        ),
+        (
+            arches,
+            [
+                ("enclosing", "Verified"),
+                ("stacked", "Verified"),
+                ("nested", "Trusted"),
+                ("one_arch", "Verified"),
+                ("one_os", "Verified"),
+                ("attr_form", "Trusted"),
+                ("double_not", "Verified"),
+                ("attr_not", "Verified"),
+                ("either_arch", "Verified"),
+            ],
+        ),
+    ] {
+        fs::write(dir.join("verus/count.toml"), format!("{PLAIN}{keys}")).expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        assert_eq!(
+            got, 0,
+            "{keys:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+        );
+        for (name, want) in wants {
+            let got = class_in(&out, name);
+            assert_eq!(got, want, "{keys:?}: {name}: got = {got}, wanted = {want}");
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// With both of challoc's architectures in `verus_sets`, a `cfg` that
+/// needs both at once holds in no build: a function under it is left
+/// out, and Verus's attribute form under it is never applied, so the
+/// function is outside. The same holds when the two values come from
+/// different `cfg`s that must hold together: two on the function, or one
+/// on it and one on its `impl`, inline module or module file. Each
+/// architecture's own code stays verified, and `not` of one stays trusted,
+/// since the counter reads each atom on its own.
+#[test]
+fn two_values_of_one_key_are_never_verified() {
+    const LIB: &str = r#"
+pub fn plain() {}
+verus! {
+#[cfg(target_arch = "x86_64")]
+pub fn x86() {}
+#[cfg(all(target_arch = "x86_64", target_arch = "aarch64"))]
+pub fn both() {}
+#[cfg(all(target_arch = "x86_64", any(target_arch = "aarch64", kani)))]
+pub fn both_nested() {}
+#[cfg(not(target_arch = "x86_64"))]
+pub fn not_x86() {}
+}
+#[cfg_attr(all(target_arch = "x86_64", target_arch = "aarch64"), verus_verify)]
+pub fn both_attr() {}
+#[cfg(target_arch = "x86_64")]
+#[cfg(target_arch = "aarch64")]
+#[verus_verify]
+pub fn stacked() {}
+#[cfg(target_arch = "x86_64")]
+#[cfg_attr(target_arch = "aarch64", verus_verify)]
+pub fn stacked_attr() {}
+pub struct S;
+verus! {
+#[cfg(target_arch = "x86_64")]
+impl S {
+    #[cfg(target_arch = "aarch64")]
+    pub fn in_impl(&self) {}
+    pub fn x86_impl(&self) {}
+}
+}
+#[cfg(target_arch = "x86_64")]
+mod inline {
+    verus! {
+    #[cfg(target_arch = "aarch64")]
+    pub fn in_mod() {}
+    }
+}
+#[cfg(target_arch = "x86_64")]
+mod x86;
+"#;
+    let dir = repository("arches");
+    fs::write(dir.join("crates/a/src/lib.rs"), LIB).expect("write");
+    fs::write(
+        dir.join("crates/a/src/x86.rs"),
+        "verus! {\n#[cfg(target_arch = \"aarch64\")]\npub fn in_file() {}\npub fn x86_file() {}\n}\n",
+    )
+    .expect("write");
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}verus_sets = ['target_arch = \"x86_64\"', 'target_arch = \"aarch64\"']\n"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &["--list"]);
+    assert_eq!(
+        got, 0,
+        "got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    for (name, want) in [
+        ("plain", "Outside"),
+        ("x86", "Verified"),
+        ("both", "missing"),
+        ("both_nested", "missing"),
+        ("not_x86", "Trusted"),
+        ("both_attr", "Outside"),
+        ("stacked", "missing"),
+        ("stacked_attr", "Outside"),
+        ("in_impl", "missing"),
+        ("x86_impl", "Verified"),
+        ("in_mod", "missing"),
+        ("in_file", "missing"),
+        ("x86_file", "Verified"),
+    ] {
+        let got = out
+            .lines()
+            .find(|l| l.ends_with(&format!("\t{name}")))
+            .and_then(|l| l.split('\t').nth(1))
+            .unwrap_or("missing");
+        assert_eq!(got, want, "{name}: got = {got}, wanted = {want}");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A configuration that would settle one atom two ways, or names
+/// something other than one atom, does not parse.
+#[test]
+fn verus_atoms_must_be_atoms_and_settled_once() {
+    let dir = repository("atoms");
+    for (keys, want) in [
+        (
+            "verus_never_sets = [\"not(miri)\"]\n",
+            "[crates] verus_never_sets entry \"not(miri)\" is not one cfg atom",
+        ),
+        (
+            "verus_sets = [\"miri\"]\nverus_never_sets = [\"miri\"]\n",
+            "[crates] verus_never_sets entry \"miri\" is already in verus_sets",
+        ),
+        (
+            "verus_sets = [\"test\"]\n",
+            "[crates] verus_sets entry \"test\" is already a test atom",
+        ),
+        (
+            "verus_never_sets = [\"verus_keep_ghost\"]\n",
+            "[crates] verus_never_sets entry \"verus_keep_ghost\" is already a Verus atom",
+        ),
+        (
+            "verus_features = [\"verus\"]\nverus_sets = ['feature = \"verus\"']\n",
+            "[crates] verus_sets entry \"feature = \\\"verus\\\"\" is already a Verus atom",
+        ),
+    ] {
+        fs::write(dir.join("verus/count.toml"), format!("{PLAIN}{keys}")).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 2 && err.contains(want),
+            "{keys:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 2, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}

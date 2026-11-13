@@ -14,6 +14,15 @@ test_cfgs = ["test", "kani", "challoc_tls_check"]
 stand_ins = [["let tracked =", "let trackd_ ="]]
 # challoc's ghost column counts the proofs of Verus-only code too.
 verus_only_ghost = true
+# challoc runs Verus twice, on x86_64 (`verus`) and natively on aarch64
+# (`verus-arm64`), so each architecture's code is checked by one of the
+# runs. Verus never sets `loom` (vspec's `new`s are `#[cfg(not(loom))]`).
+# Read from the 11-10 snapshot `0497dc34` (.chainguard/ci/verus.yaml's
+# `verus` and `verus-arm64`, both presubmit, both `make verus`, whose
+# `cargo verus verify --locked` passes no `--cfg loom`); re-measured on
+# challoc's own re-sync.
+verus_sets = ['target_arch = "x86_64"', 'target_arch = "aarch64"']
+verus_never_sets = ["loom"]
 
 [floor]
 path = "verus/FLOOR"

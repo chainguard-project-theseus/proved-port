@@ -12,6 +12,11 @@ test_features = ["test-util"]
 # `assert` is a Verus keyword; pcre3 has a module of that name
 # (vm/assert.rs).
 stand_ins = [["assert::", "assrtx::"]]
+# `make verus` builds pcre3-capi's default features, which include `jit`
+# (exec.rs is `#[cfg(all(feature = "jit", not(miri)))]`), and Verus never
+# sets `miri` (tables.rs's `Libc` ctype items are `#[cfg(not(miri))]`).
+verus_sets = ['feature = "jit"']
+verus_never_sets = ["miri"]
 
 [floor]
 path = "verus/FLOOR"

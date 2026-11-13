@@ -10,6 +10,12 @@
 # Each subdirectory with a src/ is a crate; one whose Cargo.toml says
 # `publish = false` does not ship.
 dir = "crates"
+# A function under a `cfg` the proof run might not meet counts as
+# trusted, not verified (README.md, "Verus's build"). Name the atoms
+# `make verus` is sure to set (the host, the default features it keeps)
+# and those Verus never sets, one atom each, as a `cfg` writes it:
+# verus_sets = ['feature = "jit"', 'target_arch = "aarch64"']
+# verus_never_sets = ["miri"]
 
 [floor]
 path = "verus/FLOOR"

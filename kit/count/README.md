@@ -60,7 +60,9 @@ its name somewhere else, as a member moved is, or reads as a member
 with `ships` set to anything but `true` at a path the base's
 configuration does not compare;
 a `test_cfgs`, `test_features`
-or `verus_features` name added; a `stand_ins` pair added; or a crate
+or `verus_features` name added; a `verus_sets` or `verus_never_sets`
+atom added (compared as atoms, so respacing one is not a change); a
+`stand_ins` pair added; or a crate
 whose own Cargo.toml gains `publish = false`, where the base read it
 with its Cargo.toml deciding whether it ships (a `dir` crate, or a
 member without `ships`), at the same directory or under the same name,
@@ -141,6 +143,8 @@ crate.
 | | `test_cfgs` | `cfg` names only test builds set (default `test`, `kani`) |
 | | `test_features` | features only tests enable; a workspace build that enables one fails the run (`cargo tree`) |
 | | `verus_features` | features only Verus's build enables, as `verus_keep_ghost` |
+| | `verus_sets` | `cfg` atoms Verus's build is sure to set, which shipped builds may set too (`'feature = "jit"'` for a default feature the proof run keeps, `"unix"`): "Verus's build", below |
+| | `verus_never_sets` | `cfg` atoms Verus's build never sets (`"miri"`), so `not(miri)` is sure there |
 | | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords; one that would rewrite a name the counter classes code by (`external_body`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, `unsafe`, a test cfg, a configured macro or mint, ...) is refused |
 | | `verus_only_ghost` | count the ghost functions of Verus-only code in the ghost column |
 | `[floor]` | `path`, `checked`, `renamed_from` | the FLOOR file (default `verus/FLOOR`); the prefix of the two verified-or-discharged figures (default `checked`); an older prefix the base revision's copy may still give them under, for the change that renames them (challoc's `combined`) |
@@ -161,6 +165,142 @@ A minimal configuration is two lines:
 [crates]
 dir = "crates"
 ```
+
+### Verus's build
+
+A function counts as verified only when Verus's build is sure to
+compile it. A `cfg` reaches a function from its own attributes, from an
+enclosing `impl`, trait, inline `mod` or `verus!` block, from an
+out-of-line `#[cfg(..)] mod x;`, which classes `x`'s file and every file
+it declares, from an inline module or `verus!` block around such a
+declaration (`#[cfg(..)] mod inline { mod x; }`), and from a file's inner
+`#![cfg(..)]`, which classes it and every file it declares (a crate
+root's, the whole crate). `cfg_attr`s apply as rustc expands them,
+nested to any depth (`cfg_attr(P, cfg_attr(R, ..))` applies under
+`all(P, R)`) and each attribute of `cfg_attr(P, a, b)` under `P`, for
+`cfg`s, `#[path]`s and Verus's attribute form alike: `#[cfg_attr(P,
+cfg(Q))]` counts as the `cfg` `any(not(P), Q)`. Every `cfg` a function is under, its own and those
+around it, is read as one conjunction. A file declared more than once
+(`#[cfg(target_os = "linux")] #[path = "unix.rs"] mod sys;` beside the
+same for macos) is built where any declaration holds. A file a `#[path]`
+names declares its modules beside it, as a `mod.rs` does. A
+`#[cfg_attr(P, path = "..")]` names the module's file where `P` holds
+and no earlier path attribute applies, as rustc takes the first in
+effect: a bare `#[path]` applies wherever none earlier does and ends the
+list, and the default `name.rs` is the file where none applies. An inline
+module's directory is chosen the same way. A file declared only
+inside another macro's body (`cfg_if! { if #[cfg(windows)] { mod win; }
+}`, or the file a `#[path]` there names) is unsure whatever the
+configuration settles, since the counter does not evaluate the macro.
+So is any crate file but a root that no declaration the counter reads
+names: nothing shows where it is built, so it is never verified. The
+roots are the targets the crate's Cargo.toml declares (the `[lib]`
+`path`, each `[[bin]]`, `[[example]]`, `[[test]]` and `[[bench]]`
+`path`), with `src/lib.rs` unless `autolib = false` and, unless
+`autobins = false`, the binaries cargo finds (`src/main.rs`,
+`src/bin/NAME.rs`, `src/bin/NAME/main.rs`). A root declares its modules
+beside it, as `lib.rs` does. A function some shipped build compiles, under a `cfg` Verus's
+build might not meet, counts as trusted: it ships, and nothing proves
+Verus compiled it. Its proof cannot count, and a shipped function's
+proof may rest on it, as on any trusted function (so REACH and the
+recursion check treat it as one).
+
+Only the atoms the configuration settles are sure there:
+`verus_keep_ghost` and the `verus_features` (set), the test atoms (never
+set), and the two lists below. Every other atom, a platform
+(`target_os = "windows"`, `unix`), `miri`, or a default feature, may be
+either, since the counter cannot tell what the proof run passes. A port
+declares what its proof run (the host, the features `make verus`
+enables) settles:
+
+```toml
+[crates]
+dir = "crates"
+# The proof run builds the default features, which include jit.
+verus_sets = ['feature = "jit"']
+# Verus never sets miri.
+verus_never_sets = ["miri"]
+```
+
+Each entry is one atom, written as a `cfg` writes it (a name, or `name =
+"value"`), and the run fails (exit 2) on a predicate (`not(miri)`), and
+on an atom the configuration already settles (a test atom, a Verus atom,
+or one named in both lists). Adding one is a narrowing (Configuration,
+above), since it lets the functions it guards count as verified: name it
+with a `[[narrowed]]` line. A feature in `verus_sets` still ships: one
+that only Verus's build enables belongs in `verus_features`, which takes
+its items out of the shipped tally.
+
+A port that runs Verus on several hosts names each run's atoms (challoc,
+which runs it on x86_64 and natively on aarch64: `verus_sets =
+['target_arch = "x86_64"', 'target_arch = "aarch64"']`), since a
+function under either is checked by the run that sets it.
+
+A predicate that needs two values of one key rustc gives each target
+one value of (`target_arch`, `target_os`, `target_env`, `target_abi`,
+`target_vendor`, `target_endian`, `target_pointer_width`, `panic`; not
+`target_family`, `feature` or `target_feature`) holds in no build,
+whatever the atoms say on their own. So with both architectures
+declared, an item under `all(target_arch = "x86_64", target_arch =
+"aarch64")`, or `all(target_arch = "x86_64", any(target_arch =
+"aarch64", test))`, is left out as no build compiles it, and Verus's
+attribute form under such a `cfg_attr` never applies, so the function is
+outside. The same holds for two `cfg`s that must hold together, on the
+function (`#[cfg(target_arch = "x86_64")] #[cfg(target_arch =
+"aarch64")]`) or one on it and one around it.
+
+Otherwise the counter reads each atom on its own, not each run's set,
+so it cannot tell the runs apart. Where `verus_sets` holds two values of
+a single-valued key, a function is sure only if every way the `cfg`s it
+is under can hold together needs at most one of the atoms of such keys
+true (an atom under an even number of `not`s counts; each alternative of
+an `any` is a way of its own, so `any(target_arch = "x86_64",
+target_arch = "aarch64")` is sure): `target_arch = "x86_64"` alone is
+checked by the run that sets it. Under two, it may ship on a host no run
+is, so it counts as trusted. With an
+x86_64 Linux run and an aarch64 macOS run (both arches and both oses
+declared), `#[cfg(target_os = "macos")] mod mac { #[cfg(target_arch =
+"x86_64")] fn f() }` ships on x86_64 macOS, which neither run is, and
+`f` is trusted, as it is with the module under `not(not(target_os =
+"macos"))`; so is a function under `all(target_arch = "x86_64",
+any(target_arch = "aarch64", unix))`. `not(target_arch = "x86_64")`
+stays unsure too: the function counts as trusted though the aarch64 run
+checks it. A model of each run's atoms would credit these where a run
+checks them:
+[wolfi-dev/proved-port#21](https://github.com/wolfi-dev/proved-port/issues/21).
+Since each atom is read on its own, a file declared under `feature =
+"std"` and again under `not(feature = "std")`, which every build
+compiles, stays unsure too, unless the configuration settles `std`.
+
+#### Bringing this rule in on a re-sync
+
+The re-sync that brings in this counter carries the port's declarations
+in the same PR, each with a `[[narrowed]]` line: with neither list,
+every verified function under an unsettled `cfg` turns trusted at once,
+and FLOOR (and REACH, for one an entry point reaches) fails on that PR.
+
+- pcre3: `verus_sets = ['feature = "jit"']` and `verus_never_sets =
+  ["miri"]`, as [configs/pcre3.toml](configs/pcre3.toml) has. Without
+  them, 27 verified functions of pcre3-capi count as trusted
+  (functions 91.5% to 90.8%), and REACH fails on exec.rs.
+- expat-rs and chainz: none. Neither has a verified function under an
+  unsettled `cfg`, and `--list` is unchanged.
+- challoc: [configs/challoc.toml](configs/challoc.toml)'s declarations,
+  measured on the 11-10 snapshot `0497dc34`; they are re-measured on
+  challoc's own re-sync.
+
+A function that stays trusted under honest declarations is verified
+more: bring its proof under a `cfg` the proof run settles. Where a
+figure still drops, FLOOR takes a `lowered` line with the measured
+change and its reason, as for any other drop. Declaring an atom the
+proof run does not set, to get the figure back, is the one wrong
+answer: it credits a proof no run checked.
+
+An atom applies to every crate under `[crates]`, while a cargo feature
+is per crate. `feature = "jit"` in `verus_sets` asserts that the proof
+run enables `jit` in every configured crate that has a feature of that
+name, so a second crate with a non-default `jit` would be credited
+wrongly. In pcre3 only pcre3-capi has `jit`.
 
 ## The badge
 
@@ -215,7 +355,11 @@ the file sits, so keep the file at the root.
 - **The Kani marker** (pcre3): a trusted function carries
   `#[cfg_attr(any(), discharged_by = "kani")]` and a `kani-*.md` record
   quotes it. The report is one table with a `discharged` column, and the
-  checked figures add the discharged functions.
+  checked figures add the discharged functions. The marker is read through
+  `cfg_attr`s as rustc expands them, nested or beside other attributes,
+  and counts only where the predicates around it hold in no build
+  whatever the configuration declares (`any()`); under one some build may
+  meet (`windows`) the function is not discharged.
 - **The generated ledger** (challoc, `[ledger]`): `verus/seams.sh`
   writes `verus/ledger/**.rs.md` from the source, and each entry's
   status says whether its seam is discharged, partly checked or
@@ -226,13 +370,17 @@ the file sits, so keep the file at the root.
 Verus's attribute form (`#[verus_verify]`, `#[verus_spec(..)]`, alone
 or under a `cfg_attr`) counts as code inside `verus!`, for a port whose
 MSRV keeps vstd optional (the skill's proofs.md, "When vstd cannot be a
-dependency of every build"). Under a `cfg_attr` it counts only when
-Verus's build is sure to meet the predicate: a configured
-`verus_features` feature or `verus_keep_ghost`, or a predicate those
-settle. A platform or any other name the counter cannot settle
+dependency of every build"). Under a `cfg_attr` it is verified only when
+Verus's build is sure to meet the predicate ("Verus's build", above): a
+configured `verus_features` feature, `verus_keep_ghost`, a `verus_sets`
+atom, `not` of a `verus_never_sets` one, or a predicate those settle. A
+platform or any other atom the configuration does not settle
 (`target_os = "windows"`, or `all(feature = "verus", unix)`) may leave
 the attribute off where Verus runs, and the function unchecked, so it
-counts as outside.
+counts as trusted, as a function under a `cfg` Verus might not meet
+does. A predicate Verus's build never meets (`any()`, `test`, a
+`verus_never_sets` atom) never applies the attribute, so the function is
+outside.
 
 ## Parity
 
@@ -270,6 +418,21 @@ Where the counters still differ, on inputs neither port has today:
   configured crates; it credits Verus's attribute form under a
   `cfg_attr` only when Verus's build is sure to meet the predicate.
   Neither port has a stand-in, root or attribute these refuse.
+- The kit counts a function under a `cfg` Verus's build might not meet
+  as trusted ("Verus's build"); pcre3's and challoc's counters take
+  every atom they do not configure to hold where Verus runs. On
+  wolfi-dev/pcre3 main
+  `b5633f1d`, pcre3-capi's `jit` and `miri` guards are the only such
+  `cfg`s on a verified or trusted function. With `verus_sets = ['feature
+  = "jit"']` and `verus_never_sets = ["miri"]`, as
+  [configs/pcre3.toml](configs/pcre3.toml) has, `--list` is the same as
+  pcre3's counter's rule gives; without them, 27 verified functions
+  of pcre3-capi (exec.rs and tables.rs's `Libc` ctype items) count as
+  trusted. On wolfi-dev/challoc main `0497dc34`, its `target_arch` and
+  `loom` guards are the only ones: with
+  [configs/challoc.toml](configs/challoc.toml)'s declarations `--list`
+  is the same as challoc's counter's rule gives, and without them 7
+  verified functions count as trusted.
 - With `--base-rev`, the kit also compares `verus/count.toml` with the
   base revision's (Configuration, above), which neither port's counter
   had, and prints one `ok configuration` line first. The rest of the
