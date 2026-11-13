@@ -10,9 +10,12 @@
 # crate, or one harness, or one shard of them, and fails when any call
 # fails, when KANI_FAIL_PATTERN appears in a call's output, or when the
 # selection leaves nothing to run. --list prints the harnesses instead,
-# one `CRATE NAME` a line, from `cargo kani list` (CRATE is `-` for
-# cargo's default package selection). It first runs `cargo fetch
-# --locked`, since cargo kani takes no --locked.
+# one `CRATE NAME FILE` a line, from `cargo kani list` (CRATE is `-` for
+# cargo's default package selection, FILE the source file the list
+# keys the harness by, from the workspace root). A harness is its name
+# and its file: crates of cargo's default selection can each have a
+# `tests::check`, and kani.sh counts, lists and shards each. It first
+# runs `cargo fetch --locked`, since cargo kani takes no --locked.
 #
 # Nothing to run is a failure even where cargo kani would pass: cargo
 # kani exits 0 on a crate with no harnesses, so before a run of every
@@ -37,6 +40,9 @@
 #                      KANI_SHARDS) of them, each by its full name
 #                      (--exact); shard 0 prints the split and runs
 #                      nothing. Every shard splits them the same way.
+#                      Harnesses of one name in several files of cargo's
+#                      default selection go to one shard, since its
+#                      --harness NAME runs all of them.
 #   KANI_WEIGHTS       a file of `NAME SECONDS [alone]` rows, `#` lines
 #                      comments (challoc's ci/kani-regular.sh table, NAME
 #                      the full name `--list` prints) that the split balances
@@ -44,7 +50,8 @@
 #                      time so far; a harness marked alone gets a shard of
 #                      its own, from shard 1 up (they must leave a shard
 #                      for the rest, or kani.sh exits 2), and one not
-#                      listed counts as 2 seconds
+#                      listed counts as 2 seconds; a NAME's row weighs
+#                      each harness of that name
 #   KANI_FLAGS         flags for every cargo kani call, before `list` too
 #                      (challoc: -Z unstable-options -Z stubbing
 #                      -Z mem-predicates --ignore-global-asm, its features)
@@ -168,13 +175,15 @@ fname() {
   if [ "$1" = - ]; then echo default; else echo "$1"; fi
 }
 
-# harnesses CRATE [ARGS]: CRATE's harnesses, `CRATE NAME` a line, from
-# the kani-list.json `cargo kani list` writes, ARGS before `list`. A
-# harness is a bare string in an array (keys end in `: [` or `: {`, file
-# paths hold `/`); the count must match the file's totals, which must
-# give both counts, each a number on its own line, as Kani 0.68.0 writes
-# them. A file in another shape fails rather than read as no harnesses,
-# which KANI_NONE=yes would pass.
+# harnesses CRATE [ARGS]: CRATE's harnesses, `CRATE NAME FILE` a line,
+# from the kani-list.json `cargo kani list` writes, ARGS before `list`.
+# The harnesses are the "standard-harnesses" and "contract-harnesses"
+# maps, each a file key holding an array of names, one a line, as Kani
+# 0.68.0 writes them; the "contracts" array names contract harnesses a
+# second time, so it is not read. A line of those maps in another shape
+# fails. The count must match the file's totals, which must give both
+# counts, each a number on its own line. A file in another shape fails
+# rather than read as no harnesses, which KANI_NONE=yes would pass.
 harnesses() {
   lc=$1
   shift
@@ -182,8 +191,16 @@ harnesses() {
   # shellcheck disable=SC2046,SC2086
   cargo kani $(pflag "$lc") ${KANI_FLAGS:-} "$@" list ${KANI_LIST_FLAGS:-} --format json > /dev/null
   mv kani-list.json "$json"
-  awk '/^ *"[A-Za-z0-9_:]*",?$/ { n = $0; gsub(/[ ",]/, "", n); print n }' "$json" \
-    | LC_ALL=C sort -u > "$out/names"
+  awk '
+    /^ *"(standard|contract)-harnesses": *[{] *$/ { m = 1; next }
+    !m { next }
+    f == "" && /^ *[}],? *$/ { m = 0; next }
+    f == "" && /^ *"[^"\\[:space:]]+": *\[ *$/ { f = $0; sub(/^ *"/, "", f); sub(/".*/, "", f); next }
+    f != "" && /^ *"[A-Za-z0-9_:]+",? *$/ { n = $0; gsub(/[ ",]/, "", n); print n, f; next }
+    f != "" && /^ *\],? *$/ { f = ""; next }
+    { printf "kani: %s:%d: not a line of a harness map as Kani 0.68.0 writes it: %s\n", FILENAME, NR, $0 > "/dev/stderr"; exit 1 }
+  ' "$json" > "$out/pairs" || exit 1
+  LC_ALL=C sort "$out/pairs" > "$out/names"
   total=$(awk '
     /^ *"totals": *[{] *$/ { t = 1; next }
     t && /^ *"(standard|contract)-harnesses": *[0-9]+,? *$/ {
@@ -205,21 +222,28 @@ harnesses() {
   awk -v c="$lc" '{ print c, $0 }' "$out/names"
 }
 
-# pick_shard: of the `CRATE NAME` lines on stdin, shard $shard's. The
-# split goes to stderr.
+# pick_shard: of the `CRATE NAME FILE` lines on stdin, shard $shard's.
+# The split is of `CRATE NAME` units, what one --harness picks: under
+# cargo's default selection it picks the name in every file, so those
+# harnesses share a shard. The split goes to stderr.
 pick_shard() {
   weights=${KANI_WEIGHTS:-/dev/null}
   awk -v shard="$shard" -v shards="$shards" -v def=2 -v weights="$weights" '
     FILENAME == weights { if (NF >= 2 && $1 !~ /^#/) { w[$1] = $2; if ($3 == "alone" && shards > 1) alone[$1] = 1 }; next }
-    { n++; line[n] = $0; name[n] = $2; t[n] = ($2 in w) ? w[$2] : def }
+    {
+      u = $1 " " $2
+      if (!(u in idx)) { n++; idx[u] = n; line[n] = u; name[n] = $2 }
+      i = idx[u]; files[i]++; t[i] += ($2 in w) ? w[$2] : def
+      r++; rec[r] = $0; of[r] = i
+    }
     END {
       # A harness marked alone takes a shard of its own, from shard 1 up.
-      first = 1
-      for (i = 1; i <= n; i++) if (name[i] in alone) { at[i] = first; load[first] = t[i]; first++ }
+      first = 1; lone = 0
+      for (i = 1; i <= n; i++) if (name[i] in alone) { at[i] = first; load[first] = t[i]; first++; lone += files[i] }
       if (first - 1 > shards) { print "kani: more harnesses marked alone than shards" > "/dev/stderr"; exit 2 }
       # The rest need a shard past them, or no shard would run them.
-      if (first > shards && n > first - 1) {
-        printf "kani: the %d harnesses marked alone fill all %d shards, leaving %d harnesses no shard\n", first - 1, shards, n - (first - 1) > "/dev/stderr"
+      if (first > shards && r > lone) {
+        printf "kani: the %d harnesses marked alone fill all %d shards, leaving %d harnesses no shard\n", lone, shards, r - lone > "/dev/stderr"
         exit 2
       }
       # Longest first (ties by name), each to the least-loaded shard.
@@ -236,10 +260,10 @@ pick_shard() {
         load[best] += t[ord[i]]; at[ord[i]] = best
       }
       for (s = 1; s <= shards; s++) {
-        c = 0; for (i = 1; i <= n; i++) if (at[i] == s) c++
+        c = 0; for (i = 1; i <= n; i++) if (at[i] == s) c += files[i]
         printf "kani: shard %d: %d harnesses, ~%d s\n", s, c, load[s] > "/dev/stderr"
       }
-      for (i = 1; i <= n; i++) if (at[i] == shard) print line[i]
+      for (j = 1; j <= r; j++) if (at[of[j]] == shard) print rec[j]
     }' "$weights" -
 }
 
@@ -247,7 +271,7 @@ if [ -n "$shards" ]; then
   : > "$out/all"
   for c in $selected; do harnesses "$c" "$@" >> "$out/all"; done
   pick_shard < "$out/all" > "$out/shard"
-  echo "kani: shard $shard of $shards: $(wc -l < "$out/shard") of $(wc -l < "$out/all") harnesses"
+  echo "kani: shard $shard of $shards: $(wc -l < "$out/shard" | tr -d ' ') of $(wc -l < "$out/all" | tr -d ' ') harnesses"
   if [ -n "$list" ]; then
     cat "$out/shard"
     exit 0
@@ -313,7 +337,7 @@ run() {
 
 for c in $selected; do
   if [ -n "$shards" ]; then
-    picks=$(awk -v c="$c" '$1 == c { printf " --harness %s", $2 }' "$out/shard")
+    picks=$(awk -v c="$c" '$1 == c && !seen[$2]++ { printf " --harness %s", $2 }' "$out/shard")
     [ -n "$picks" ] || continue
     run "$c" " --exact$picks" "$@"
   elif [ -n "$harness" ]; then
