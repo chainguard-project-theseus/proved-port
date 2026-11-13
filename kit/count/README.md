@@ -139,7 +139,7 @@ crate.
 | section | key | meaning |
 |---|---|---|
 | `[crates]` | `dir` | each subdirectory with a `src/` is a crate, named for it |
-| | `members` | `{ name, path, ships }` crates named explicitly; `ships` overrides the `publish = false` rule |
+| | `members` | `{ name, path, ships }` crates named explicitly; `ships` overrides the `publish = false` rule (a crate ships unless its Cargo.toml, read as TOML, sets `[package]` `publish = false`; one under `[package.metadata]` does not count) |
 | | `test_cfgs` | `cfg` names only test builds set (default `test`, `kani`) |
 | | `test_features` | features only tests enable; a workspace build that enables one fails the run (`cargo tree`) |
 | | `verus_features` | features only Verus's build enables, as `verus_keep_ghost` |
@@ -437,13 +437,36 @@ nested repetitions; `$crate`; a `$name` the rule does not bind written
 through, as a macro that writes a `macro_rules!` needs; an invocation
 the expansion writes is expanded in turn), and each function in it
 counts as outside `verus!`, since `verus!` does not expand the macros it
-holds. An expansion is read under its invocation's `cfg`s, as code a
+holds.
+
+The fragments match by the crate's edition, as rustc's do. An
+`expr_2021` begins at neither `const` nor `_` (and no `expr` at `let`),
+and below edition 2024 an `expr` is an `expr_2021`; below 2021 a `pat`
+is a `pat_param`, which takes no top-level `|`. The edition is that of
+the targets whose files the counter reads: the library (`[lib] edition`,
+else the package's), each binary (each `[[bin]]`'s, else the package's,
+and those cargo finds under `autobins`), and any `[[test]]`, `[[bench]]`
+or `[[example]]` whose `path` is under `src/`, with `edition.workspace =
+true` followed and 2015 when no key is given. The counter does not split
+a crate's files by target, so a crate whose read targets sit on both
+sides of 2021 or of 2024 fails the run (exit 1); give them one edition
+there.
+
+An expansion is read under its invocation's `cfg`s, as code a
 module holds is: one under a `cfg` Verus's build might not meet
 (`#[cfg(unix)] vone!(v1);`) ships its functions trusted, never
 verified, and a definition under such a `cfg` is a candidate, never
 dropped. The walks (REACH, recursion, compile inputs, mints) read only the
 code outside expansions, with `[reach]`'s `exports_macro` and
-`fn_ptr_macro` as before. The rlimit check reads the base revision's
+`fn_ptr_macro` as before. REACH scans every shipped file for the
+exports macro's blocks, found by their tokens (the name, plain or raw,
+then `!` and a delimited group, so `exports != n` is none), and fails
+closed: a file that does not lex or parse, one that imports the macro
+under another name (`use width::exports as wrap;`), and one whose
+invocations outnumber the blocks the scan reads (an invocation inside
+another macro, a function body or an initializer) each fail the run.
+Write each block at the top of a module or `verus!` block, under the
+macro's own name. The rlimit check reads the base revision's
 sources the same way, so a `#[verifier::rlimit]` a macro writes is held
 to the base's.
 

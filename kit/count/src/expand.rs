@@ -20,10 +20,37 @@
 //! written through, as rustc writes it (a macro that writes a
 //! `macro_rules!`); anywhere else the expansion then does not parse.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use proc_macro2::{Delimiter, Group, Ident, TokenStream, TokenTree};
 use verus_syn::parse::{ParseStream, Parser};
+
+thread_local! {
+    /// The edition of the crate whose macros are expanded: below 2024, an
+    /// `expr` fragment is what 2024 calls `expr_2021`, and below 2021 a
+    /// `pat` is a `pat_param`, which takes no top-level `|` (the Rust
+    /// reference, "Metavariables"). The walk sets it per crate
+    /// ([`set_edition`]).
+    static EDITION: Cell<u32> = const { Cell::new(2024) };
+}
+
+/// Sets the edition the matcher reads `expr` and `pat` by, for the crate
+/// the walk is in.
+pub(crate) fn set_edition(edition: u32) {
+    EDITION.with(|e| e.set(edition));
+}
+
+/// Which of the editions the matcher tells apart `edition` falls in:
+/// below 2021, 2021 up to 2024, and 2024 on. Two editions of one era match
+/// every fragment alike.
+pub(crate) fn matcher_era(edition: u32) -> u8 {
+    match edition {
+        ..2021 => 0,
+        2021..2024 => 1,
+        _ => 2,
+    }
+}
 
 /// More ways than this to match one repetition is an error, not a search.
 const MAX_MATCHES: usize = 4096;
@@ -415,6 +442,20 @@ fn tokens_taken(kind: &str, input: &[TokenTree]) -> Option<usize> {
             Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => Some(1),
             _ => None,
         },
+        // rustc's matcher begins no `expr` at `let`, and no `expr_2021` at
+        // `let`, `const` or `_` (`nonterminal_may_begin_with` in
+        // `rustc_parse`; the Rust reference, "Metavariables", leaves const
+        // blocks and `_` out of `expr_2021`): the rule does not match there
+        // and the next is tried. syn's `Expr` reads all three. Below
+        // edition 2024 an `expr` is an `expr_2021`.
+        "expr" | "expr_2021"
+            if matches!(first, Some(TokenTree::Ident(i))
+                if i == "let"
+                    || ((kind == "expr_2021" || EDITION.with(Cell::get) < 2024)
+                        && (i == "const" || i == "_"))) =>
+        {
+            None
+        }
         _ => {
             let ts: TokenStream = input.iter().cloned().collect();
             let left = |s: ParseStream| -> verus_syn::Result<usize> {
@@ -424,8 +465,11 @@ fn tokens_taken(kind: &str, input: &[TokenTree]) -> Option<usize> {
                     "ty" => drop(s.parse::<verus_syn::Type>()?),
                     "expr" | "expr_2021" => drop(s.parse::<verus_syn::Expr>()?),
                     "path" => drop(s.parse::<verus_syn::Path>()?),
-                    "pat" => drop(verus_syn::Pat::parse_multi_with_leading_vert(s)?),
-                    "pat_param" => drop(verus_syn::Pat::parse_single(s)?),
+                    // Below edition 2021 a `pat` is a `pat_param`.
+                    "pat" if EDITION.with(Cell::get) >= 2021 => {
+                        drop(verus_syn::Pat::parse_multi_with_leading_vert(s)?)
+                    }
+                    "pat" | "pat_param" => drop(verus_syn::Pat::parse_single(s)?),
                     "stmt" => stmt(s)?,
                     _ => drop(s.parse::<verus_syn::Item>()?),
                 }
@@ -759,6 +803,69 @@ mod tests {
         let got = expand(def, "@inner c").expect("expands");
         let want = flat("fn c() {}");
         assert_eq!(got, want, "inner rule: got = {got}, wanted = {want}");
+    }
+
+    /// An `expr_2021` is not tried at `const` (a const block) or `_`, nor
+    /// either `expr` at `let`, so the fallback rule writes the function, as
+    /// rustc's matcher selects it; an `expr` takes `const` and `_`.
+    #[test]
+    fn an_expr_2021_is_no_const_block_or_underscore() {
+        let def = |kind: &str| {
+            format!(
+                "($e:{kind}) => {{ fn first() {{}} }}; ($($t:tt)*) => {{ fn fallback() {{}} }};"
+            )
+        };
+        for (kind, invocation, want) in [
+            ("expr_2021", "1 + 2", "fnfirst(){}"),
+            ("expr_2021", "const { 1 }", "fnfallback(){}"),
+            ("expr_2021", "_", "fnfallback(){}"),
+            ("expr_2021", "let x = 1", "fnfallback(){}"),
+            ("expr", "const { 1 }", "fnfirst(){}"),
+            ("expr", "_", "fnfirst(){}"),
+            ("expr", "let x = 1", "fnfallback(){}"),
+        ] {
+            let got = expand(&def(kind), invocation).expect("expands");
+            assert_eq!(
+                got, want,
+                "{kind} {invocation}: got = {got}, wanted = {want}"
+            );
+        }
+        // Below edition 2024 an `expr` is an `expr_2021`.
+        set_edition(2021);
+        for invocation in ["const { 1 }", "_"] {
+            let got = expand(&def("expr"), invocation).expect("expands");
+            assert_eq!(
+                got, "fnfallback(){}",
+                "edition 2021, expr {invocation}: got = {got}"
+            );
+        }
+        // Below edition 2021 a `pat` is a `pat_param`: no top-level `|`.
+        for (edition, kind, want) in [
+            (2021, "pat", "fnfirst(){}"),
+            (2018, "pat", "fnfallback(){}"),
+            (2015, "pat", "fnfallback(){}"),
+            (2021, "pat_param", "fnfallback(){}"),
+        ] {
+            set_edition(edition);
+            let got = expand(&def(kind), "A | B").expect("expands");
+            assert_eq!(
+                got, want,
+                "edition {edition}, {kind} A | B: got = {got}, wanted = {want}"
+            );
+            let got = expand(&def(kind), "A").expect("expands");
+            assert_eq!(
+                got, "fnfirst(){}",
+                "edition {edition}, {kind} A: got = {got}, wanted = fnfirst(){{}}"
+            );
+        }
+        set_edition(2024);
+        // An empty first rule would hide the fallback's `unproved`.
+        let got = expand(
+            "($e:expr_2021) => {}; ($t:tt) => { fn unproved() {} };",
+            "_",
+        )
+        .expect("expands");
+        assert_eq!(got, "fnunproved(){}", "m!(_): got = {got}");
     }
 
     /// Doc comments match `$(#[$attr:meta])*`, and visibility may be empty.

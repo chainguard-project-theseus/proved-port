@@ -90,6 +90,67 @@ pub(crate) fn check_added(head: &[Row], base: &[Row], rev: &str, list: &str) -> 
         .collect()
 }
 
+/// Whether `tokens` invoke `mac!` at any depth: the identifier, `!` and a
+/// delimited group, read as tokens, so whitespace between them
+/// (`width::exports !`) does not hide an invocation, and neither a
+/// mention in a comment nor a comparison (`exports != n`) is one.
+fn invokes(tokens: proc_macro2::TokenStream, mac: &str) -> bool {
+    let trees: Vec<TokenTree> = tokens.into_iter().collect();
+    (0..trees.len()).any(|i| invoked_at(&trees, i, mac))
+        || trees.iter().any(|t| match t {
+            TokenTree::Group(g) => invokes(g.stream(), mac),
+            _ => false,
+        })
+}
+
+/// Whether `trees[i..]` begin `mac ! (..)`, a group of any delimiter.
+fn invoked_at(trees: &[TokenTree], i: usize, mac: &str) -> bool {
+    matches!(
+        trees.get(i..i + 3),
+        Some([TokenTree::Ident(m), TokenTree::Punct(p), TokenTree::Group(_)])
+            if names(m, mac) && p.as_char() == '!'
+    )
+}
+
+/// Whether `id` names `mac`, written plain or raw (`r#exports` is the
+/// identifier `exports`, but compares unequal to it).
+fn names(id: &proc_macro2::Ident, mac: &str) -> bool {
+    let id = id.to_string();
+    id.strip_prefix("r#").unwrap_or(&id) == mac
+}
+
+/// How many times `tokens` invoke `mac!` at any depth, but inside the body
+/// of `macro_rules! mac` itself (its own definition, whose invocations are
+/// its expansions'), and whether they rename it (`mac as`, an import under
+/// another name, whose invocations the scan cannot see).
+fn invocations(tokens: proc_macro2::TokenStream, mac: &str) -> (usize, bool) {
+    let trees: Vec<TokenTree> = tokens.into_iter().collect();
+    let (mut n, mut renamed) = (0, false);
+    for (i, t) in trees.iter().enumerate() {
+        match t {
+            TokenTree::Ident(id) if names(id, mac) => match trees.get(i + 1) {
+                _ if invoked_at(&trees, i, mac) => n += 1,
+                Some(TokenTree::Ident(a)) if a == "as" => renamed = true,
+                _ => {}
+            },
+            TokenTree::Group(g) => {
+                let own = matches!(
+                    (i.checked_sub(3).map(|k| &trees[k]), i.checked_sub(1).map(|k| &trees[k])),
+                    (Some(TokenTree::Ident(kw)), Some(TokenTree::Ident(name)))
+                        if kw == "macro_rules" && names(name, mac)
+                );
+                if !own {
+                    let (m, r) = invocations(g.stream(), mac);
+                    n += m;
+                    renamed |= r;
+                }
+            }
+            _ => {}
+        }
+    }
+    (n, renamed)
+}
+
 /// How a row names a function: `Owner::name` for a method (its owner's
 /// base type), else `name`.
 pub(crate) fn key(owner: &str, name: &str) -> String {
@@ -105,8 +166,9 @@ pub(crate) fn key(owner: &str, name: &str) -> String {
 /// the block, at any depth (inside an inline `mod` or a `verus!` block
 /// too). Files are parsed with `stand_ins` applied
 /// ([`crate::config::stand_in`]). Fails closed: a file that cannot be
-/// read, or one that names `mac!` and does not parse, is an error, since
-/// its roots would otherwise drop out unseen.
+/// read or split into tokens, or one that invokes `mac!` ([`invokes`])
+/// and does not parse, is an error, since its roots would otherwise drop
+/// out unseen.
 pub(crate) fn exported(
     root: &Path,
     files: &BTreeSet<PathBuf>,
@@ -117,23 +179,30 @@ pub(crate) fn exported(
         f: &Path,
         items: &[Item],
         mac: &str,
-        out: &mut BTreeSet<(PathBuf, String)>,
+        (out, seen): (&mut BTreeSet<(PathBuf, String)>, &mut usize),
         errs: &mut Vec<String>,
     ) {
         for item in items {
             match item {
                 Item::Mod(m) => {
                     if let Some((_, inner)) = &m.content {
-                        scan(f, inner, mac, out, errs);
+                        scan(f, inner, mac, (out, seen), errs);
                     }
                 }
                 Item::Macro(m) if crate::verus_path(&m.mac.path) => {
                     match verus_syn::parse2::<verus_syn::File>(m.mac.tokens.clone()) {
-                        Ok(v) => scan(f, &v.items, mac, out, errs),
+                        Ok(v) => scan(f, &v.items, mac, (out, seen), errs),
                         Err(e) => errs.push(format!("{}: verus! block: {e}", f.display())),
                     }
                 }
-                Item::Macro(m) if m.mac.path.segments.last().is_some_and(|s| s.ident == mac) => {
+                Item::Macro(m)
+                    if m.mac
+                        .path
+                        .segments
+                        .last()
+                        .is_some_and(|s| names(&s.ident, mac)) =>
+                {
+                    *seen += 1;
                     let toks: Vec<TokenTree> = m.mac.tokens.clone().into_iter().collect();
                     for w in toks.windows(3) {
                         if let [
@@ -162,12 +231,42 @@ pub(crate) fn exported(
                 continue;
             }
         };
-        if !text.contains(&format!("{mac}!")) {
-            continue;
+        let text = crate::config::stand_in(stand_ins, &text);
+        let (invoked, renamed) = match text.parse::<proc_macro2::TokenStream>() {
+            Ok(t) => {
+                if !invokes(t.clone(), mac) && !invocations(t.clone(), mac).1 {
+                    continue;
+                }
+                invocations(t, mac)
+            }
+            Err(e) => {
+                errs.push(format!("{}: {e}", f.display()));
+                continue;
+            }
+        };
+        if renamed {
+            errs.push(format!(
+                "{}: `{mac}` is imported under another name, whose `!` invocations the scan does not read; invoke `{mac}!` by its own name",
+                f.display()
+            ));
         }
-        match parse_file(&crate::config::stand_in(stand_ins, &text)) {
-            Ok(file) => scan(f, &file.items, mac, &mut out, &mut errs),
-            Err(e) => errs.push(format!("{}: {e}", f.display())),
+        let mut seen = 0;
+        match parse_file(&text) {
+            Ok(file) => scan(f, &file.items, mac, (&mut out, &mut seen), &mut errs),
+            Err(e) => {
+                errs.push(format!("{}: {e}", f.display()));
+                continue;
+            }
+        }
+        // An invocation the scan does not reach (inside another macro's
+        // tokens, a function body, an initializer) roots nothing it
+        // exports: an error, not a root that drops out.
+        if seen < invoked {
+            errs.push(format!(
+                "{}: {} of its {invoked} `{mac}!` invocations sit where the scan does not read them (inside another macro, a function body or an initializer); write each at the top of a module or `verus!` block",
+                f.display(),
+                invoked - seen
+            ));
         }
     }
     (out, errs)
@@ -474,7 +573,17 @@ mod tests {
         let _ = fs::create_dir_all(&dir);
         let src = "width::exports! {\n    /// doc\n    fn body_a [a_8, a_16, a_32] (x: i32) -> i32;\n    fn body_b [b_8, b_16, b_32] ();\n}\nfn body_a<U>(x: i32) -> i32 { x }\n";
         let _ = fs::write(dir.join("m.rs"), src);
-        let files: BTreeSet<PathBuf> = [PathBuf::from("m.rs")].into();
+        // Whitespace between the name and its `!` is still an invocation;
+        // a mention in a comment is none (the file would not parse).
+        let _ = fs::write(
+            dir.join("w.rs"),
+            "width::exports ! { fn body_c [c_8, c_16, c_32] (); }\nexports\n!{ fn body_d [d_8, d_16, d_32] (); }\n",
+        );
+        let _ = fs::write(dir.join("c.rs"), "// see exports! in w.rs\nfn fn fn;\n");
+        let files: BTreeSet<PathBuf> = ["m.rs", "w.rs", "c.rs"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
         let (got, errs) = exported(&dir, &files, "exports", &stand_ins());
         // Under another macro name, the block names nothing.
         let (other, _) = exported(&dir, &files, "wrappers", &stand_ins());
@@ -482,6 +591,8 @@ mod tests {
         let want: BTreeSet<(PathBuf, String)> = [
             (PathBuf::from("m.rs"), "body_a".to_string()),
             (PathBuf::from("m.rs"), "body_b".to_string()),
+            (PathBuf::from("w.rs"), "body_c".to_string()),
+            (PathBuf::from("w.rs"), "body_d".to_string()),
         ]
         .into();
         assert_eq!(got, want);
@@ -503,21 +614,91 @@ mod tests {
             dir.join("bad.rs"),
             "width::exports! { fn x [a, b, c] (); }\nfn (\n",
         );
-        let files: BTreeSet<PathBuf> = ["n.rs", "bad.rs", "gone.rs"]
-            .into_iter()
-            .map(PathBuf::from)
-            .collect();
+        // Balanced, so it lexes and invokes `exports!`, but not Rust: the
+        // parse fails.
+        let _ = fs::write(
+            dir.join("invalid.rs"),
+            "width::exports! { fn x [a, b, c] (); }\nfn fn;\n",
+        );
+        // An import under another name, and an invocation inside another
+        // macro's tokens: neither is read, so each is an error. The
+        // macro's own definition invoking itself is none.
+        let _ = fs::write(
+            dir.join("renamed.rs"),
+            "use width::exports as wrap;\nwrap! { fn x [a, b, c] (); }\n",
+        );
+        let _ = fs::write(
+            dir.join("wrapped.rs"),
+            "macro_rules! both { ($($t:tt)*) => { width::exports! { $($t)* } } }\nboth! { fn x [a, b, c] (); }\n",
+        );
+        let _ = fs::write(
+            dir.join("def.rs"),
+            "macro_rules! exports { () => {}; ($x:ident) => { exports!(); } }\n",
+        );
+        // A comparison of a binding named like the macro (`exports != n`)
+        // invokes nothing: the file's one block is read, with no error.
+        let _ = fs::write(
+            dir.join("compare.rs"),
+            "width::exports! { fn cmp [a, b, c] (); }\nfn different(exports: u8, n: u8) -> bool { exports != n }\n",
+        );
+        // A raw identifier names the same macro: `r#exports!` at item
+        // position is read, and one inside another macro is an error.
+        let _ = fs::write(
+            dir.join("raw.rs"),
+            "width::r#exports! { fn raw_body [a, b, c] (); }\n",
+        );
+        let _ = fs::write(
+            dir.join("raw_wrapped.rs"),
+            "macro_rules! both { ($($t:tt)*) => { width::r#exports! { $($t)* } } }\nboth! { fn x [a, b, c] (); }\n",
+        );
+        let files: BTreeSet<PathBuf> = [
+            "raw.rs",
+            "raw_wrapped.rs",
+            "compare.rs",
+            "n.rs",
+            "bad.rs",
+            "invalid.rs",
+            "gone.rs",
+            "renamed.rs",
+            "wrapped.rs",
+            "def.rs",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
         let (got, errs) = exported(&dir, &files, "exports", &stand_ins());
         let _ = fs::remove_dir_all(&dir);
         let want: BTreeSet<(PathBuf, String)> = [
+            (PathBuf::from("compare.rs"), "cmp".to_string()),
             (PathBuf::from("n.rs"), "in_mod".to_string()),
             (PathBuf::from("n.rs"), "in_verus".to_string()),
             (PathBuf::from("n.rs"), "in_path".to_string()),
+            (PathBuf::from("raw.rs"), "raw_body".to_string()),
         ]
         .into();
         assert_eq!(got, want);
-        assert_eq!(errs.len(), 2, "{errs:?}");
+        assert_eq!(errs.len(), 6, "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.starts_with("raw_wrapped.rs:")
+                && e.contains("1 of its 1 `exports!` invocations")),
+            "{errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.starts_with("renamed.rs:") && e.contains("imported under another name")),
+            "{errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.starts_with("wrapped.rs:")
+                    && e.contains("1 of its 1 `exports!` invocations")),
+            "{errs:?}"
+        );
         assert!(errs.iter().any(|e| e.starts_with("bad.rs:")), "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.starts_with("invalid.rs:")),
+            "{errs:?}"
+        );
         assert!(errs.iter().any(|e| e.starts_with("gone.rs:")), "{errs:?}");
     }
 }

@@ -48,7 +48,12 @@
 //! invocation and the definition it came from. An item macro the crate
 //! does not define counts as one function outside `verus!`, named
 //! `NAME!`, so no function leaves the tally for being written by a macro;
-//! one the crate defines that does not expand fails the run.
+//! one the crate defines that does not expand fails the run. Fragments
+//! match by the crate's edition ([`walked_editions`]): below 2024 an
+//! `expr` is an `expr_2021` (no `const` block, no `_`), and below 2021 a
+//! `pat` is a `pat_param` (no top-level `|`). A crate whose read targets
+//! (library, binaries, and tests, benches or examples under `src/`) sit
+//! on both sides of 2021 or of 2024 fails the run.
 //! `compile_error!`, which writes nothing that ships ([`STD_NO_FN`]),
 //! counts nothing where it is provably the standard library's
 //! ([`Counter::std_writes_nothing`]). `verus!` is Verus's bare or as
@@ -120,7 +125,11 @@
 //! a `FromC` conversion) is neither verified nor discharged nor a row of
 //! verus/REACH, on a row that is verified or unreached, on a seam citation
 //! no seams table has, and, with `--base-rev REV`, on a row
-//! `REV:verus/REACH` lacks that is not marked `new`.
+//! `REV:verus/REACH` lacks that is not marked `new`. It also fails on a
+//! shipped file whose export blocks it cannot read ([`reach::exported`]):
+//! one that does not parse, one that imports the exports macro under
+//! another name, and one whose invocations of it (found by tokens, plain
+//! or raw) outnumber the blocks the scan reads.
 //!
 //! With `[mints]`, it checks the C caller's token mints ([`mints`],
 //! verus/MINTS): it fails on a kind of token (`impl CToken for KIND`) or a
@@ -186,6 +195,10 @@ struct Counter {
     discharged: Vec<(PathBuf, String)>,
     /// Every executable function, for [`recursive`].
     fns: Vec<FnRef>,
+    /// Each source file a shipped build compiles, with its crate, whether
+    /// or not it holds a function: the files [`entry_reach`] scans for
+    /// export blocks.
+    files: Vec<(String, PathBuf)>,
     /// Every `static`, for the compile-inputs check ([`inputs`]).
     statics: Vec<inputs::Static>,
     /// The structs, enums and aliases, for which statics are plain data
@@ -383,6 +396,7 @@ impl Counter {
             errors: 0,
             discharged: Vec::new(),
             fns: Vec::new(),
+            files: Vec::new(),
             statics: Vec::new(),
             types: BTreeMap::new(),
             aliases: BTreeMap::new(),
@@ -650,13 +664,7 @@ fn crate_manifest(root: &Path, dir: &Path) -> (u32, Vec<(String, String)>) {
     let workspace = workspace.get("workspace");
     let inherits =
         |v: &toml::Value| v.get("workspace").and_then(toml::Value::as_bool) == Some(true);
-    let package = match manifest.get("package").and_then(|p| p.get("edition")) {
-        Some(toml::Value::String(e)) => e.parse().unwrap_or(2015),
-        Some(t @ toml::Value::Table(_)) if inherits(t) => workspace
-            .and_then(|w| w.get("package")?.get("edition")?.as_str()?.parse().ok())
-            .unwrap_or(2015),
-        _ => 2015,
-    };
+    let package = package_edition(&manifest, workspace);
     // A target may set its own edition (`[lib] edition = "2015"`): the
     // lowest of the package's and every target's is the crate's.
     let targets = manifest.get("lib").into_iter().chain(
@@ -713,6 +721,128 @@ fn crate_manifest(root: &Path, dir: &Path) -> (u32, Vec<(String, String)>) {
         }
     }
     (edition, renamed)
+}
+
+/// The `[package] edition` of `manifest`, or with `edition.workspace =
+/// true` the `[workspace.package] edition` of `workspace` (the root's
+/// `[workspace]` table); 2015 when none is given, as cargo reads it.
+fn package_edition(manifest: &toml::Table, workspace: Option<&toml::Value>) -> u32 {
+    match manifest.get("package").and_then(|p| p.get("edition")) {
+        Some(toml::Value::String(e)) => e.parse().unwrap_or(2015),
+        Some(t @ toml::Value::Table(_))
+            if t.get("workspace").and_then(toml::Value::as_bool) == Some(true) =>
+        {
+            workspace
+                .and_then(|w| w.get("package")?.get("edition")?.as_str()?.parse().ok())
+                .unwrap_or(2015)
+        }
+        _ => 2015,
+    }
+}
+
+/// The editions of the crate's targets whose files the walk reads, by
+/// which its macros are matched ([`expand::set_edition`]): the library's
+/// (`[lib] edition`, else the package's) and each binary's (`[[bin]]
+/// edition`, else the package's), with workspace inheritance as
+/// [`crate_manifest`] reads it. The binaries are the `[[bin]]` tables and,
+/// unless `autobins = false`, those cargo finds as [`crate_roots`] does
+/// (`src/main.rs`, each `src/bin/NAME.rs` and `src/bin/NAME/main.rs`), at
+/// the package's edition but where a `[[bin]]` of that name or path gives
+/// its own. A `[[test]]`, `[[bench]]` or `[[example]]` ships nothing, but
+/// one whose `path` is a file under `src/` is a root the walk reads as
+/// shipped, so its edition is listed too; one outside `src/` is never
+/// read.
+fn walked_editions(root: &Path, dir: &Path) -> Vec<u32> {
+    let read = |p: &Path| -> toml::Table {
+        fs::read_to_string(p.join("Cargo.toml"))
+            .ok()
+            .and_then(|t| toml::from_str(&t).ok())
+            .unwrap_or_default()
+    };
+    let manifest = read(dir);
+    let workspace = read(root);
+    let package = package_edition(&manifest, workspace.get("workspace"));
+    let own = |t: &toml::Value| {
+        t.get("edition").map_or(package, |e| {
+            e.as_str().and_then(|e| e.parse().ok()).unwrap_or(2015)
+        })
+    };
+    let mut out = vec![manifest.get("lib").map_or(package, own)];
+    let bins: Vec<&toml::Value> = manifest
+        .get("bin")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect();
+    out.extend(bins.iter().map(|b| own(b)));
+    let src = fs::canonicalize(dir.join("src")).ok();
+    for kind in ["test", "bench", "example"] {
+        out.extend(
+            manifest
+                .get(kind)
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|t| {
+                    t.get("path")
+                        .and_then(toml::Value::as_str)
+                        .and_then(|p| fs::canonicalize(dir.join(p)).ok())
+                        .is_some_and(|p| src.as_ref().is_some_and(|s| p.starts_with(s)))
+                })
+                .map(own),
+        );
+    }
+    let autobins = manifest
+        .get("package")
+        .and_then(|p| p.get("autobins"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(true);
+    if autobins {
+        let src = dir.join("src");
+        let package_name = manifest
+            .get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or_default();
+        let mut found: Vec<(String, PathBuf)> = Vec::new();
+        if src.join("main.rs").is_file() {
+            found.push((package_name.to_owned(), src.join("main.rs")));
+        }
+        if let Ok(rd) = fs::read_dir(src.join("bin")) {
+            for e in rd.flatten() {
+                let p = e.path();
+                let (name, file) = if p.is_dir() {
+                    (
+                        e.file_name().to_string_lossy().into_owned(),
+                        p.join("main.rs"),
+                    )
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    let stem = p.file_stem().unwrap_or_default().to_string_lossy();
+                    (stem.into_owned(), p)
+                } else {
+                    continue;
+                };
+                if file.is_file() {
+                    found.push((name, file));
+                }
+            }
+        }
+        let declared = |name: &str, file: &Path| {
+            bins.iter().any(|b| {
+                b.get("name").and_then(toml::Value::as_str) == Some(name)
+                    || b.get("path")
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(|p| canonical(&dir.join(p)) == canonical(file))
+            })
+        };
+        out.extend(
+            found
+                .iter()
+                .filter(|(name, file)| !declared(name, file))
+                .map(|_| package),
+        );
+    }
+    out
 }
 
 /// The root files of the crate in `dir`, canonical, as its Cargo.toml
@@ -2286,23 +2416,70 @@ impl Counter {
     }
 
     /// The functions declared in `stmts`, the body of a function of class
-    /// `class`: free functions, and the methods of an `impl` written there
-    /// (such as a guard's `Drop`), each of that class. They are recorded
+    /// `class`, at any depth of its blocks and expressions: free
+    /// functions, and the methods of an `impl` written there (such as a
+    /// guard's `Drop`), each of that class. They are recorded
     /// for the recursion check ([`recursive`]) and the walks ([`inputs`],
     /// [`reach`]); no tally counts them, as none counts a nested function.
     fn nested(&mut self, stmts: &[verus_syn::Stmt], class: Class) {
         use verus_syn::__private::ToTokens;
-        for s in stmts {
-            let (owner, fns): (String, Vec<NestedFn>) = match s {
-                verus_syn::Stmt::Item(Item::Fn(g)) => {
-                    (String::new(), vec![(&g.attrs[..], &g.sig, &*g.block)])
+        use verus_syn::visit::Visit;
+        // The items written anywhere in the body's expressions (an `if`'s
+        // block, a closure's, a `match` arm's), not only among its own
+        // statements; each one's own body is read in turn below.
+        // An item is kept, and an inline module's items, and those in a
+        // `const` or `static`'s initializer (`const _: () = { .. };`), are
+        // read too; a function's own body is read where it is recorded.
+        struct BodyItems<'a>(Vec<&'a Item>);
+        impl<'a> Visit<'a> for BodyItems<'a> {
+            fn visit_item(&mut self, i: &'a Item) {
+                self.0.push(i);
+                match i {
+                    Item::Mod(m) => {
+                        for inner in m.content.iter().flat_map(|(_, items)| items) {
+                            self.visit_item(inner);
+                        }
+                    }
+                    Item::Const(c) => {
+                        if let Some(e) = &c.expr {
+                            self.visit_expr(e);
+                        }
+                    }
+                    Item::Static(s) => {
+                        if let Some(e) = &s.expr {
+                            self.visit_expr(e);
+                        }
+                    }
+                    _ => {}
                 }
-                verus_syn::Stmt::Item(Item::Impl(i)) => (
+            }
+        }
+        let mut found = BodyItems(Vec::new());
+        for s in stmts {
+            found.visit_stmt(s);
+        }
+        for item in found.0 {
+            let (owner, fns): (String, Vec<NestedFn>) = match item {
+                Item::Fn(g) => (String::new(), vec![(&g.attrs[..], &g.sig, &*g.block)]),
+                Item::Impl(i) => (
                     i.self_ty.to_token_stream().to_string(),
                     i.items
                         .iter()
                         .filter_map(|ii| match ii {
                             ImplItem::Fn(f) => Some((&f.attrs[..], &f.sig, &f.block)),
+                            _ => None,
+                        })
+                        .collect(),
+                ),
+                // A trait's default methods.
+                Item::Trait(t) => (
+                    t.ident.to_string(),
+                    t.items
+                        .iter()
+                        .filter_map(|ti| match ti {
+                            TraitItem::Fn(f) => {
+                                f.default.as_ref().map(|b| (&f.attrs[..], &f.sig, b))
+                            }
                             _ => None,
                         })
                         .collect(),
@@ -2745,6 +2922,19 @@ impl Counter {
         self.modules.clear();
         self.macro_use.clear();
         (self.edition, self.renamed_deps) = crate_manifest(root, k);
+        // Macros match by the edition of the target compiling them. The
+        // counter does not split the files it reads by target, so targets
+        // that read `expr` or `pat` differently fail the run.
+        let walked = walked_editions(root, k);
+        let era = |e: &u32| expand::matcher_era(*e);
+        if walked.iter().map(era).min() != walked.iter().map(era).max() {
+            eprintln!(
+                "{}: the targets whose files are read (the library, binaries, and any test, bench or example under src/) set editions {walked:?}, which read a macro's `expr` or `pat` fragment differently (2024's `expr` takes `const` blocks and `_`, 2021's `pat` a top-level `|`); give them one side of 2021 and of 2024",
+                k.join("Cargo.toml").display()
+            );
+            self.errors += 1;
+        }
+        expand::set_edition(walked[0]);
         let mut bindings = Vec::new();
         for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
             let Some(Ok(file)) = p else { continue };
@@ -2852,6 +3042,9 @@ impl Counter {
             };
             self.guards = classes[i].1.clone();
             self.file = f.strip_prefix(root).unwrap_or(f).to_path_buf();
+            if self.shipped {
+                self.files.push((self.krate.clone(), self.file.clone()));
+            }
             self.module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
             match p {
                 Some(Ok(file)) => self.items(&file.items, false),
@@ -4092,10 +4285,15 @@ fn ships(krate: &Path) -> bool {
     fs::read_to_string(krate.join("Cargo.toml")).map_or(true, |t| !unpublished(&t))
 }
 
-/// Whether the Cargo.toml `text` says `publish = false`.
+/// Whether the Cargo.toml `text` sets its package's `publish` to `false`,
+/// read as TOML: a `publish = false` in another table
+/// (`[package.metadata]`) is not the package's. A manifest that does not
+/// parse, or a `publish` of any other value, publishes: the crate ships.
 fn unpublished(text: &str) -> bool {
-    text.lines()
-        .any(|l| l.split_whitespace().collect::<String>() == "publish=false")
+    toml::from_str::<toml::Table>(text)
+        .ok()
+        .and_then(|t| t.get("package")?.get("publish")?.as_bool())
+        == Some(false)
 }
 
 /// A crate the counter reads: its name, its directory (holding `src/`),
@@ -4520,12 +4718,25 @@ fn main() {
         failed |= !ok;
     }
     if let Some(s) = stats {
-        // The crates with `verus!` code, as Verus spells their names.
+        // The crates with code Verus checks, as Verus spells their names:
+        // each with a function the walk recorded for Verus
+        // ([`Counter::verus_fns`]), its proofs built only for Verus
+        // (`verus_keep_ghost`) too, which no coverage tally counts, and
+        // each whose tally counts a function inside `verus!`.
         let verus_crates: Vec<String> = c
-            .tallies
-            .iter()
-            .filter(|(_, t)| t.ghost + t.fns.iter().sum::<usize>() > t.fns[Class::Outside as usize])
-            .map(|(k, _)| k.replace('-', "_"))
+            .verus_fns
+            .keys()
+            .filter_map(|n| n.split("::").next().map(str::to_owned))
+            .chain(
+                c.tallies
+                    .iter()
+                    .filter(|(_, t)| {
+                        t.ghost + t.fns.iter().sum::<usize>() > t.fns[Class::Outside as usize]
+                    })
+                    .map(|(k, _)| k.replace('-', "_")),
+            )
+            .collect::<std::collections::BTreeSet<String>>()
+            .into_iter()
             .collect();
         failed |= !check_rlimit(&root, &cfg, &crates, &s, &verus_crates, &c, base.as_ref());
     }
@@ -6088,13 +6299,20 @@ fn entry_reach(
     let shipped: std::collections::BTreeSet<&str> = fns
         .iter()
         .map(|f| f.krate.as_str())
+        .chain(c.files.iter().map(|(k, _)| k.as_str()))
         .filter(|k| !unshipped.iter().any(|u| u == k))
         .collect();
     let crates: Vec<&str> = shipped.into_iter().collect();
-    let files: std::collections::BTreeSet<PathBuf> = fns
+    // Every file a shipped build compiles, not only those holding a
+    // function (an export block in a file of `use`s alone still exports),
+    // and each that holds one.
+    let files: std::collections::BTreeSet<PathBuf> = c
+        .files
         .iter()
-        .filter(|f| crates.contains(&f.krate.as_str()))
-        .map(|f| f.file.clone())
+        .map(|(k, f)| (k, f))
+        .chain(fns.iter().map(|f| (&f.krate, &f.file)))
+        .filter(|(k, _)| crates.contains(&k.as_str()))
+        .map(|(_, f)| f.clone())
         .collect();
     let (exported, unread) = match &r.exports_macro {
         Some(mac) => reach::exported(root, &files, mac, stand_ins),
@@ -7113,6 +7331,39 @@ mod tests {
                 false
             ),
             ["inner: inner -> inner"]
+        );
+        // A nested function in an expression's block: an `if`'s, a
+        // closure's, a `match` arm's, a block's, a loop's; and an `impl`'s
+        // method in one.
+        assert_eq!(
+            recursing(
+                "fn outer(c: bool) { if c { fn a(n: u32) { a(n) } a(1) } \
+                 let _ = || { fn b(n: u32) { b(n) } }; \
+                 match c { true => { fn d(n: u32) { d(n) } } _ => {} } \
+                 { fn e(n: u32) { e(n) } } \
+                 loop { fn g(n: u32) { g(n) } break; } \
+                 if c { struct S; impl S { fn h(&self) { self.h() } } } }",
+                false
+            ),
+            [
+                "a: a -> a",
+                "b: b -> b",
+                "d: d -> d",
+                "e: e -> e",
+                "g: g -> g",
+                "h: h -> h"
+            ]
+        );
+        // A function in a module, a trait's default method, and one in a
+        // `const` initializer, each written in a body.
+        assert_eq!(
+            recursing(
+                "fn outer() { mod m { fn i(n: u32) { i(n) } } \
+                 trait T { fn j(&self) { self.j() } } \
+                 const _: () = { fn k(n: u32) { k(n) } }; }",
+                false
+            ),
+            ["i: i -> i", "j: j -> j", "k: k -> k"]
         );
         assert_eq!(
             recursing(
@@ -8752,6 +9003,93 @@ verus! {
             );
         }
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The editions macros match by are the library's and each binary's,
+    /// their own or the package's (inherited from the workspace too), and
+    /// those of the tests, benches and examples whose `path` is a file
+    /// under `src/`; one with no `path`, or a path outside `src/`, is not
+    /// read.
+    #[test]
+    fn the_walked_targets_give_the_matching_editions() {
+        let root = std::env::temp_dir().join(format!("verus-count-shipped-{}", std::process::id()));
+        let k = root.join("crates/k");
+        fs::create_dir_all(k.join("src")).unwrap();
+        fs::create_dir_all(k.join("tests")).unwrap();
+        fs::write(k.join("src/legacy.rs"), "").unwrap();
+        fs::write(k.join("tests/t.rs"), "").unwrap();
+        for (ws, krate, want) in [
+            (
+                "",
+                "[package]\nedition = \"2024\"\n[[test]]\nname = \"t\"\npath = \"src/legacy.rs\"\nedition = \"2021\"\n",
+                vec![2024, 2021],
+            ),
+            (
+                "",
+                "[package]\nedition = \"2024\"\n[[bench]]\nname = \"b\"\npath = \"src/legacy.rs\"\nedition = \"2018\"\n",
+                vec![2024, 2018],
+            ),
+            (
+                "",
+                "[package]\nedition = \"2024\"\n[[example]]\nname = \"e\"\npath = \"src/../src/legacy.rs\"\n",
+                vec![2024, 2024],
+            ),
+            (
+                "",
+                "[package]\nedition = \"2024\"\n[[test]]\nname = \"t\"\npath = \"tests/t.rs\"\nedition = \"2021\"\n[[example]]\nname = \"e\"\npath = \"src/missing.rs\"\nedition = \"2021\"\n",
+                vec![2024],
+            ),
+            ("", "[package]\nedition = \"2024\"\n", vec![2024]),
+            ("", "[package]\nname = \"k\"\n", vec![2015]),
+            (
+                "",
+                "[package]\nedition = \"2024\"\n[[test]]\nname = \"t\"\nedition = \"2021\"\n[[bench]]\nname = \"b\"\nedition = \"2021\"\n[[example]]\nname = \"e\"\nedition = \"2015\"\n",
+                vec![2024],
+            ),
+            (
+                "[workspace.package]\nedition = \"2024\"\n",
+                "[package]\nedition.workspace = true\n[lib]\nedition = \"2021\"\n[[bin]]\nname = \"a\"\n[[bin]]\nname = \"b\"\nedition = \"2018\"\n",
+                vec![2021, 2024, 2018],
+            ),
+        ] {
+            fs::write(root.join("Cargo.toml"), ws).unwrap();
+            fs::write(k.join("Cargo.toml"), krate).unwrap();
+            let got = walked_editions(&root, &k);
+            assert_eq!(got, want, "{krate:?}: got = {got:?}, wanted = {want:?}");
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `publish = false` is the package's only in its `[package]` table:
+    /// one under `[package.metadata]` or another table, in a comment or a
+    /// string, or in a manifest that does not parse leaves the crate
+    /// shipped.
+    #[test]
+    fn publish_is_read_from_the_package_table() {
+        for (text, want) in [
+            ("[package]\nname = \"a\"\npublish = false\n", true),
+            ("[package]\npublish=false # never\n", true),
+            ("package = { name = \"a\", publish = false }\n", true),
+            (
+                "[package]\nname = \"a\"\n\n[package.metadata]\npublish = false\n",
+                false,
+            ),
+            (
+                "[package]\nname = \"a\"\n\n[package.metadata.x]\npublish = false\n",
+                false,
+            ),
+            ("[package]\nname = \"a\"\n# publish = false\n", false),
+            (
+                "[package]\ndescription = \"\"\"\npublish = false\n\"\"\"\n",
+                false,
+            ),
+            ("[package]\npublish = true\n", false),
+            ("[package]\npublish = [\"crates-io\"]\n", false),
+            ("[package\npublish = false\n", false),
+        ] {
+            let got = unpublished(text);
+            assert!(got == want, "{text:?}: got = {got}, wanted = {want}");
+        }
     }
 
     /// The crates come from the configuration: `dir`'s subdirectories with a
