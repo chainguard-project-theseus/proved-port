@@ -6,13 +6,17 @@
 # in parallel shards, one per vCPU. The tests that hit an open,
 # Miri-confirmed bug are listed, each with its issue, in
 # ci/miri-known.txt: left out of the runs, and required to fail still
-# with undefined behaviour, so a fix deletes its row.
+# with undefined behaviour, so a fix deletes its row. A `tree-borrows`
+# row, for a report only Tree Borrows makes, is left out of the Tree
+# Borrows pass alone and checked there; its test runs under Stacked
+# Borrows like any other.
 # miri, on every pull request and merge: every other test under Stacked
 # Borrows, then the thread tests over several schedules, then the known
-# ones. miri-tree, on request only (label ci/run:miri-tree, or
-# `chainctl checks run . --check miri-tree` on a pushed commit): every
-# other test under Tree Borrows, which is slower. Worth requesting on
-# changes to {CAPI_CRATE}'s unsafe code. `make miri` runs every pass in a
+# ones but the `tree-borrows` rows. miri-tree, on request only (label
+# ci/run:miri-tree, or `chainctl checks run . --check miri-tree` on a
+# pushed commit): every other test under Tree Borrows, which is slower,
+# then the `tree-borrows` rows. Worth requesting on changes to
+# {CAPI_CRATE}'s unsafe code. `make miri` runs every pass in a
 # development session.
 # kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
@@ -27,9 +31,9 @@ checks:
   miri:
     description: >-
       {CAPI_CRATE}'s tests under Miri's Stacked Borrows, then its thread
-      tests over several seeds, but those ci/miri-known.txt lists (each
-      citing its open issue), which must still fail; a pinned nightly
-      from rustup (ci/miri.sh).
+      tests over several seeds, but the plain rows ci/miri-known.txt
+      lists (each citing its open issue), which must still fail; a
+      pinned nightly from rustup (ci/miri.sh).
     trigger: [presubmit, postsubmit]
     resources: medium-amd64
     timeout: 20m
@@ -43,8 +47,9 @@ checks:
     when: {requested: true}
     description: >-
       {CAPI_CRATE}'s tests under Miri's Tree Borrows, but those
-      ci/miri-known.txt lists, with a pinned nightly from rustup
-      (ci/miri.sh). Worth running on changes to its unsafe code.
+      ci/miri-known.txt lists, and its `tree-borrows` rows, which must
+      still fail there; a pinned nightly from rustup (ci/miri.sh). Worth
+      running on changes to its unsafe code.
     resources: medium-amd64
     timeout: 30m
     vars:

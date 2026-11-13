@@ -8,6 +8,12 @@
 # support, a C call) is not a row: it says so with cfg(miri), or its file
 # goes in ci/miri.sh's `nomiri`.
 #
+# A report only Tree Borrows makes (the test passes under Stacked
+# Borrows) has `tree-borrows` as its row's third word, before what Miri
+# flags: `TEST #ISSUE tree-borrows REASON`. ci/miri.sh runs that test
+# under Stacked Borrows, leaves it out of the Tree Borrows pass, and
+# requires it to fail still there.
+#
 # {What the rows share, if they share a cause, and the issue that tracks
 # Miri over the crate; or delete this paragraph.}
 # kit: proved-port v{KIT_VERSION} ({KIT_SHA})
