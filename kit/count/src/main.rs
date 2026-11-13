@@ -1715,6 +1715,84 @@ fn guarded_built(guards: &[String], atoms: &Atoms) -> Result<Built, String> {
     }
 }
 
+/// Whether Verus's build is sure to compile an item under every one of
+/// the `cfg` predicates `guards`: their conjunction, read as one predicate
+/// as [`guarded_built`] reads it, cannot be false there and needs at most
+/// one run's atoms ([`names_several_runs`]). Two guards needing two values
+/// of one single-valued key, each sure alone, hold in no build.
+fn guarded_verus_sure(guards: &[String], atoms: &Atoms) -> Result<bool, String> {
+    if guards.is_empty() {
+        return Ok(true);
+    }
+    let all = format!("all({})", guards.join(","));
+    let can = cfg_eval(&all, true, atoms)?;
+    Ok(can.t && !can.f && !names_several_runs(&all, atoms)?)
+}
+
+/// Whether every proof run that compiles a module is sure to compile an
+/// item in it: the item under the module's `cfg`s `shared` (those of the
+/// file and the modules around it, which every invocation in the module
+/// is under too) and its own `own` (its attributes and the `verus!`
+/// blocks around it). Their conjunction must be sure
+/// ([`guarded_verus_sure`]), and `own` must hold in each run, not only in
+/// one: where `verus_sets` holds two values of a single-valued key
+/// ([`SINGLE_VALUED`]), each run sets one of them, so an atom of that key
+/// is unsettled for `own` unless `shared` forces the key's value
+/// ([`cfg_forced`], read with those atoms unsettled as well), which every
+/// run compiling the module then has. So
+/// `#[cfg(target_arch = "x86_64")] use vstd::prelude::*;` beside an
+/// unguarded `verus!` is not sure, as the aarch64 run compiles the
+/// invocation without the import, while the same import in a module under
+/// `target_arch = "x86_64"` is.
+fn every_run_sure(shared: &[String], own: &[String], atoms: &Atoms) -> Result<bool, String> {
+    if !guarded_verus_sure(&[shared, own].concat(), atoms)? {
+        return Ok(false);
+    }
+    if own.is_empty() {
+        return Ok(true);
+    }
+    let key = |a: &str| a.split_once('=').map(|(k, _)| k.to_owned());
+    let multi: Vec<&str> = SINGLE_VALUED
+        .iter()
+        .copied()
+        .filter(|k| {
+            atoms
+                .sets
+                .iter()
+                .filter(|a| key(a).as_deref() == Some(*k))
+                .count()
+                > 1
+        })
+        .collect();
+    if multi.is_empty() {
+        return Ok(true);
+    }
+    let mut each = atoms.clone();
+    each.sets
+        .retain(|a| key(a).is_none_or(|k| !multi.contains(&k.as_str())));
+    // What `shared` forces is read with those atoms unsettled too: read
+    // with them sure, `any(target_arch = "x86_64", not(target_arch =
+    // "x86_64"))` would skip its second alternative as unable to hold,
+    // and force a value the aarch64 run does not have.
+    let forced = match shared {
+        [] => Forced::new(),
+        _ => cfg_forced(&format!("all({})", shared.join(",")), true, &each)?.unwrap_or_default(),
+    };
+    for a in &atoms.sets {
+        let Some(k) = key(a) else { continue };
+        let Some(v) = forced.get(&k).filter(|_| multi.contains(&k.as_str())) else {
+            continue;
+        };
+        if *a == format!("{k}={v}") {
+            each.sets.push(a.clone());
+        } else {
+            each.never.push(a.clone());
+        }
+    }
+    let can = cfg_eval(&format!("all({})", own.join(",")), true, &each)?;
+    Ok(can.t && !can.f)
+}
+
 /// Where `attrs`' `cfg`s, all of which must hold, let an item be built.
 fn attrs_built(attrs: &[Attribute], atoms: &Atoms) -> Result<Built, String> {
     guarded_built(&cfg_predicates(attrs), atoms)
@@ -2594,6 +2672,7 @@ impl Counter {
                     file: &file,
                     module: self.module.clone(),
                     guards: Vec::new(),
+                    shared: 0,
                 };
                 bindings_in(
                     std::slice::from_ref(item),
@@ -3000,6 +3079,7 @@ impl Counter {
                 file: f.strip_prefix(root).unwrap_or(f),
                 module,
                 guards: classes[i].1.clone(),
+                shared: classes[i].1.len(),
             };
             bindings_in(&file.items, &at, &self.atoms, &mut bindings);
         }
@@ -3664,7 +3744,8 @@ impl Counter {
     /// among the crate's bindings and `extra`'s, read in Verus's build: a
     /// `*` of another crate, or of a module of this one where such a `*`
     /// is, unless the module that holds it also imports Verus's where
-    /// Verus's build is sure to compile the import. A `use`
+    /// every proof run that compiles the module is sure to compile the
+    /// import ([`every_run_sure`]). A `use`
     /// of Verus's by name shadows a `*`, and a `*` of Verus's beside one
     /// that brought another would make the name ambiguous, which rustc
     /// refuses. `seen` holds the modules already read.
@@ -4046,11 +4127,14 @@ fn breaks(b: &Binding, kind: Took, name: &str, at: &[String]) -> bool {
 }
 
 /// Where [`bindings_in`] reads: the file, the module, and the `cfg`s of
-/// the file and the items around.
+/// the file and the items around, of which the first `shared` are the
+/// module's own (the file's and the modules' around), which every item
+/// in the module is under ([`every_run_sure`]).
 struct BindAt<'a> {
     file: &'a Path,
     module: Vec<String>,
     guards: Vec<String>,
+    shared: usize,
 }
 
 /// Adds to `out` the bindings among `items` (in inline modules and
@@ -4085,14 +4169,12 @@ fn bindings_in(items: &[Item], at: &BindAt, atoms: &Atoms, out: &mut Vec<Binding
                 .all(|p| cfg_eval(p, verus, atoms).map_or(true, |c| c.t))
         };
         let (shipped, verus) = (sees(false), sees(true));
-        let verus_sure = guards
-            .iter()
-            .all(|p| cfg_eval(p, true, atoms).is_ok_and(|c| !c.f));
         let base = Binding {
             module: at.module.clone(),
             shipped,
             verus,
-            verus_sure,
+            verus_sure: every_run_sure(&guards[..at.shared], &guards[at.shared..], atoms)
+                .unwrap_or(false),
             ..Binding::default()
         };
         let line = |s: proc_macro2::Span| format!("{}:{}", at.file.display(), s.start().line);
@@ -4145,21 +4227,24 @@ fn bindings_in(items: &[Item], at: &BindAt, atoms: &Atoms, out: &mut Vec<Binding
                 ..base.clone()
             });
         }
-        let inner = |module: Vec<String>| BindAt {
+        let inner = |module: Vec<String>, shared: usize| BindAt {
             file: at.file,
             module,
             guards: guards.clone(),
+            shared,
         };
         match item {
+            // An inline module's `cfg`s are its own items' shared ones; a
+            // `verus!` block's cover only what it holds.
             Item::Mod(m) => {
                 if let Some((_, items)) = &m.content {
                     let module = [&at.module[..], &[m.ident.to_string()]].concat();
-                    bindings_in(items, &inner(module), atoms, out);
+                    bindings_in(items, &inner(module, guards.len()), atoms, out);
                 }
             }
             Item::Macro(m) if verus_path(&m.mac.path) => {
                 if let Ok(f) = parse2::<verus_syn::File>(m.mac.tokens.clone()) {
-                    bindings_in(&f.items, &inner(at.module.clone()), atoms, out);
+                    bindings_in(&f.items, &inner(at.module.clone(), at.shared), atoms, out);
                 }
             }
             _ => {}
