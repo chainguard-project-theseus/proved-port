@@ -137,7 +137,11 @@ pub(crate) type Types = BTreeMap<String, Vec<TokenStream>>;
 
 /// The names a `type` alias or a `use .. as` rename introduces, each with
 /// the names it stands for (the target's last segment). A name renamed in
-/// several places stands for all of its targets.
+/// several places stands for all of its targets. One of `std::env`'s
+/// function names imported under its own name stands for the segment it
+/// is imported from with it (`use process::var;` makes `var` stand for
+/// `process::var`), which no function is named, so that the environment
+/// read is found through a rename of `env` ([`findings`]).
 pub(crate) type Aliases = BTreeMap<String, BTreeSet<String>>;
 
 /// One function, as the check sees it.
@@ -868,33 +872,47 @@ fn renames(toks: &[TokenTree], out: &mut Aliases) {
 /// [`renames`] in a `use` group whose path ends in `parent` (`env` for
 /// `std::env::{..}`): a `self as name` there renames `parent`. A `self`
 /// whose parent the tokens do not show is kept as `self`. One of
-/// `std::env`'s functions imported from a path ending in `env` under its
-/// own name (`use std::env::var;`, `{var, args}`, `*`) stands for itself,
-/// so a call of that name reads the environment even beside a function
-/// of the crate's own by that name.
+/// `std::env`'s functions imported under its own name (`use std::env::var;`,
+/// `use process::{var, args};`, `use cfg::*;`) stands for the segment it is
+/// imported from with it (`env::var`, `process::var`): whether that segment
+/// is `env` or a rename of it is known only once every crate's renames are
+/// ([`findings`]).
 fn renames_under(toks: &[TokenTree], parent: Option<&str>, out: &mut Aliases) {
     let punct =
         |k: usize, c: char| matches!(toks.get(k), Some(TokenTree::Punct(p)) if p.as_char() == c);
-    // Whether the segment at `i` follows `env::`, or begins a group under `env`.
-    let under_env = |i: usize| {
+    // The segment the name at `i` is imported from: the one before its
+    // `::`, or the group's when it begins a group or follows a `,`.
+    let from = |i: usize| {
         if i >= 3 && punct(i - 1, ':') && punct(i - 2, ':') {
-            matches!(&toks[i - 3], TokenTree::Ident(s) if s == "env")
+            match &toks[i - 3] {
+                TokenTree::Ident(s) => Some(s.to_string()),
+                _ => None,
+            }
+        } else if i == 0 || punct(i - 1, ',') {
+            parent.map(str::to_owned)
         } else {
-            parent == Some("env") && (i == 0 || punct(i - 1, ','))
+            None
         }
     };
     for (i, t) in toks.iter().enumerate() {
         match t {
             TokenTree::Ident(n)
                 if ENV_FNS.contains(&n.to_string().as_str())
-                    && under_env(i)
                     && !matches!(toks.get(i + 1), Some(TokenTree::Ident(a)) if a == "as") =>
             {
-                out.entry(n.to_string()).or_default().insert(n.to_string());
+                if let Some(m) = from(i) {
+                    out.entry(n.to_string())
+                        .or_default()
+                        .insert(format!("{m}::{n}"));
+                }
             }
-            TokenTree::Punct(p) if p.as_char() == '*' && under_env(i) => {
-                for n in ENV_FNS {
-                    out.entry(n.to_owned()).or_default().insert(n.to_owned());
+            TokenTree::Punct(p) if p.as_char() == '*' => {
+                if let Some(m) = from(i) {
+                    for n in ENV_FNS {
+                        out.entry(n.to_owned())
+                            .or_default()
+                            .insert(format!("{m}::{n}"));
+                    }
                 }
             }
             TokenTree::Group(g) => {
@@ -1215,7 +1233,21 @@ pub(crate) fn findings(
     // chains of renames. The alias table keeps no paths, so a rename of
     // any `env` or `var` counts: it fails closed.
     let env_mod = renamed_to(aliases, &["env"]);
-    let env_fns = renamed_to(aliases, &ENV_FNS);
+    let mut env_fns = renamed_to(aliases, &ENV_FNS);
+    // And the names a `use` imports under their own name from `env` or one
+    // of its renames (`use process::var;`, recorded as `process::var`).
+    env_fns.extend(
+        aliases
+            .iter()
+            .filter(|(n, targets)| {
+                targets.iter().any(|t| {
+                    t.strip_suffix(n.as_str())
+                        .and_then(|m| m.strip_suffix("::"))
+                        .is_some_and(|m| m == "env" || env_mod.contains(m))
+                })
+            })
+            .map(|(n, _)| n.as_str()),
+    );
     let inputs_of = |b: &Body| -> Vec<String> {
         let mut inputs: Vec<String> = b
             .idents
@@ -1227,8 +1259,8 @@ pub(crate) fn findings(
         // (`get(..)`) or by a path (`reads::var(..)`, `self::get(..)`,
         // through a module that re-exports or globs it), called or passed
         // by name; a name the crates define for a free function of their
-        // own is theirs, unless a `use` imports it from `env` under that
-        // name ([`renames_under`]).
+        // own is theirs, unless a `use` imports it under that name from
+        // `env` or a rename of it ([`renames_under`]).
         let env_call = |n: &str| (ENV_FNS.contains(&n) && !free.contains(n)) || env_fns.contains(n);
         let imported_env = b.sites.iter().any(|s| match s {
             Site::Free(n, _) | Site::Path(_, n, _) => env_call(n),
@@ -1827,6 +1859,36 @@ mod tests {
             (
                 "mod reads { pub use std::env::*; } fn var() {} impl Regex { fn new(p: u8) { reads::var(\"X\"); } }",
                 true,
+            ),
+            // The same through a rename of `env`, beside a function of
+            // the crate's own by that name: by `as`, by a grouped
+            // `self as`, globbed, and in a module called by a path. (The
+            // fixtures' scan reads no inline module's functions, so the
+            // crate's own `var` is at the top.)
+            (
+                "use std::env as process; use process::var; fn var(x: u8) {} impl Regex { fn new(p: u8) { var(\"X\"); } }",
+                true,
+            ),
+            (
+                "use std::env::{self as cfg}; use cfg::{var}; fn var(x: u8) {} impl Regex { fn new(p: u8) { var(\"X\"); } }",
+                true,
+            ),
+            (
+                "use std::env as process; use process::*; fn var(x: u8) {} impl Regex { fn new(p: u8) { var(\"X\"); } }",
+                true,
+            ),
+            (
+                "mod reads { use std::env as process; pub use process::var; } fn var(x: u8) {} impl Regex { fn new(p: u8) { reads::var(\"X\"); } }",
+                true,
+            ),
+            // An import of that name from a module that is not `env`.
+            (
+                "use other::var; fn var(x: u8) {} impl Regex { fn new(p: u8) { var(1); } }",
+                false,
+            ),
+            (
+                "use other::*; fn var(x: u8) {} impl Regex { fn new(p: u8) { var(1); } }",
+                false,
             ),
             // The crate's own `ENV_FNS`-named function, with no import of
             // `env`'s, or with it imported only under another name.
