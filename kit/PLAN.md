@@ -185,9 +185,11 @@ check's `environment: packages:` pinned with `~`, the way pcre3 already
 pins `verus~0.2026.10.18` and `kani~0.68.0`, and puts the same pin in
 `.chainguard/ci/env/dev.yaml` for development sessions. A port moves to
 a new kit in its own PR that changes those pins and nothing else, so
-every check runs against the new kit before it lands. For `make verus`
-on a Mac, the Makefile names the pin once (`KIT_VERSION`) and refuses a
-locally installed counter whose `--version` differs.
+every check runs against the new kit before it lands. The Makefile
+names the pin once (`PROVED_PORT_VERSION`), and kit/make/proved-port.mk's
+installed mode refuses an installed kit whose KIT records another
+release, and, for `make verus` (on a Mac too), a counter on PATH whose
+`--version` differs.
 
 Rejected:
 

@@ -1,16 +1,31 @@
-# verus/make/proved-port.mk: the proof targets every proved port shares.
-# kit/sync.sh vendors it, with kani.sh, headers.sh and templates/, from
-# the proved-port kit's kit/make into a port's verus/make/, beside the
-# counter it vendors into verus/count/; verus/count/KIT records the kit
-# commit of both, and kit/sync.sh --check covers both. Do not edit the
-# copy: change kit/make there, then re-sync.
+# proved-port.mk: the proof targets every proved port shares. A port
+# takes it one of two ways:
+#
+# - Installed: the theseus-proved-port package installs it, with
+#   kani.sh, headers.sh and VERUS-FILES, in /usr/share/proved-port/make/,
+#   the kit's templates in /usr/share/proved-port/templates/, the kit's
+#   commit and tag in /usr/share/proved-port/KIT, and the counter as
+#   verus-count on PATH. The port pins the package
+#   (theseus-proved-port~X.Y.Z) in its check and session environments.
+# - Vendored: kit/sync.sh copies kit/make into the port's verus/make/
+#   and the counter's source into verus/count/; verus/count/KIT records
+#   the kit commit of both, and kit/sync.sh --check covers both. Do not
+#   edit the copy: change kit/make in the kit, then re-sync.
+#
+# Which one is decided by where the file is: included from the port's
+# own verus/make/, it is vendored; from anywhere else, installed.
 #
 # A port's Makefile sets the variables below that differ from their
-# defaults, then includes this file, and runs make from its root:
+# defaults, then includes this file, and runs make from its root.
+# Installed:
 #
 #   VERUS_CRATES = pcre3-unicode pcre3-syntax pcre3 pcre3-capi
 #   KANI_CRATES  = $(VERUS_CRATES)
-#   include verus/make/proved-port.mk
+#   PROVED_PORT_VERSION = 0.2.5
+#   PROVED_PORT_HOME ?= /usr/share/proved-port
+#   include $(PROVED_PORT_HOME)/make/proved-port.mk
+#
+# Vendored: the same variables, then `include verus/make/proved-port.mk`.
 #
 # The targets run where make is invoked: the checks run them in the
 # guest, and a development session runs them with the port's own
@@ -23,12 +38,14 @@
 #                     command (.chainguard/ci/verus.yaml).
 #   verus-proofs      cargo verus over VERUS_CRATES, Verus's statistics
 #                     (--time-expanded --output-json) into VERUS_STATS.
-#   verus-count       build the vendored counter, then run it over the
-#                     port: the coverage floor (VERUS_FLOOR), with the
-#                     rlimit headroom (verus/RLIMIT) from VERUS_STATS, and
-#                     the comparison with VERUS_BASE, which verus and
-#                     verus-count require (VERUS_BASE=none for none).
-#   verus-count-test  the vendored counter's own tests.
+#   verus-count       the counter (VERUS_COUNT; vendored, built first)
+#                     over the port: the coverage floor (VERUS_FLOOR),
+#                     with the rlimit headroom (verus/RLIMIT) from
+#                     VERUS_STATS, and the comparison with VERUS_BASE,
+#                     which verus and verus-count require (VERUS_BASE=none
+#                     for none).
+#   verus-count-test  the vendored counter's own tests; installed, the
+#                     package's tests cover the counter, and this passes.
 #   verus-headers     headers.sh: the kit's Verus files against the kit
 #                     templates of the commit verus/count/KIT records:
 #                     the headers of verus/FLOOR, RLIMIT, REACH, MINTS and
@@ -42,8 +59,23 @@
 #   kani-list         kani.sh --list: the harnesses, one `CRATE NAME FILE`
 #                     a line (or this shard's, with KANI_SHARDS).
 
-# The directory this file is in (verus/make/), for its scripts.
+# The directory this file is in (verus/make/, or the package's make/),
+# for its scripts.
 PROVED_PORT_MAKE := $(dir $(lastword $(MAKEFILE_LIST)))
+# PROVED_PORT_INSTALLED: `yes` unless this file is the port's own
+# verus/make/proved-port.mk, the vendored copy.
+PROVED_PORT_INSTALLED := $(if $(filter $(abspath verus/make),$(abspath $(PROVED_PORT_MAKE))),,yes)
+# PROVED_PORT_HOME: the installed kit's root, which holds KIT and
+# templates/ (and make/, which a port includes this file from).
+PROVED_PORT_HOME ?= /usr/share/proved-port
+# PROVED_PORT_VERSION: the kit release the port pins
+# (theseus-proved-port~X.Y.Z). Installed, every kit target fails unless
+# it is set and PROVED_PORT_HOME/KIT records `tag vX.Y.Z`; and verus and
+# verus-count fail unless `$(VERUS_COUNT) --version` prints `verus-count`
+# and the release KIT records. So a port that drops or misspells the pin,
+# a stale install, and another counter earlier on PATH all fail.
+# Vendored, it is not read: verus/count/KIT is the record there.
+PROVED_PORT_VERSION ?=
 
 # --- Verus ---------------------------------------------------------------
 # VERUS_CRATES: the packages cargo verus checks, each passed as -p. Empty
@@ -82,6 +114,18 @@ VERUS_RLIMIT ?= yes
 VERUS_BASE ?=
 # VERUS_COUNT_FLAGS: further counter flags (--list, --config FILE).
 VERUS_COUNT_FLAGS ?=
+# VERUS_COUNT: the counter to run, with no build step. Installed, it
+# defaults to the package's verus-count, from PATH. Vendored, only a
+# command-line VERUS_COUNT counts (`make verus VERUS_COUNT=...`, a
+# counter from `cargo install`, for one run); one from the environment
+# (with or without -e) or from a Makefile line, before the include or
+# after it, does not, and verus-count builds the copy at VERUS_COUNT_DIR
+# and runs that. The choice is made when a recipe expands
+# (verus_count_bin), so a later assignment cannot change it.
+ifeq ($(PROVED_PORT_INSTALLED),yes)
+VERUS_COUNT ?= verus-count
+endif
+verus_count_bin = $(if $(PROVED_PORT_INSTALLED),$(VERUS_COUNT),$(if $(filter command line,$(origin VERUS_COUNT)),$(VERUS_COUNT)))
 # VERUS_COUNT_DIR: the vendored counter. VERUS_COUNT_TARGET: its cargo
 # target directory, outside the copy so the copy stays byte-identical to
 # the kit's.
@@ -93,22 +137,40 @@ verus_proofs_cmd = cargo verus $(VERUS_MODE) --locked \
   -- --time-expanded --output-json \
   $(if $(VERUS_THREADS),--num-threads $(VERUS_THREADS)) $(VERUS_FLAGS) \
   > $(VERUS_STATS)
-verus_count_build_cmd = cargo build --locked --release \
-  --manifest-path $(VERUS_COUNT_DIR)/Cargo.toml --target-dir $(VERUS_COUNT_TARGET)
-verus_count_cmd = $(VERUS_COUNT_TARGET)/release/verus-count --floor $(VERUS_FLOOR) \
+verus_count_build_cmd = $(if $(verus_count_bin),,cargo build --locked --release \
+  --manifest-path $(VERUS_COUNT_DIR)/Cargo.toml --target-dir $(VERUS_COUNT_TARGET))
+verus_count_cmd = $(or $(verus_count_bin),$(VERUS_COUNT_TARGET)/release/verus-count) --floor $(VERUS_FLOOR) \
   $(if $(VERUS_RLIMIT),--rlimit $(VERUS_STATS)) \
   $(if $(filter none,$(VERUS_BASE)),--no-base,--base-rev $(VERUS_BASE)) $(VERUS_COUNT_FLAGS) .
 # Expanded with the recipe, so it fails `make verus` (and `make -n
 # verus`) before the proofs run, and leaves other targets alone.
 verus_base_missing = no VERUS_BASE to compare $(VERUS_FLOOR) with: give the revision (the verus check passes the pull request's base, verus-main HEAD^), or VERUS_BASE=none for a local run or the proof PR that adds the first FLOOR
 verus_base_check = $(if $(VERUS_BASE),,$(error $(verus_base_missing)))
+# Installed: PROVED_PORT_VERSION must be set, and the release
+# PROVED_PORT_HOME/KIT records must be that one. Expanded with each kit
+# target's recipe, so a missing pin or a mismatch fails it (and `make -n`
+# of it) before any command runs. Vendored, both expand to nothing.
+proved_port_kit_tag = $(shell sed -n 's/^tag v//p' $(PROVED_PORT_HOME)/KIT 2>/dev/null)
+proved_port_kit_got = $(if $(proved_port_kit_tag),tag v$(proved_port_kit_tag),no tag)
+proved_port_version_unset = PROVED_PORT_VERSION is not set: the port's Makefile names the kit release it pins (theseus-proved-port~X.Y.Z) as PROVED_PORT_VERSION = X.Y.Z before the include ($(PROVED_PORT_HOME)/KIT records $(proved_port_kit_got))
+proved_port_version_mismatch = PROVED_PORT_VERSION is $(PROVED_PORT_VERSION), but $(PROVED_PORT_HOME)/KIT records $(proved_port_kit_got): install theseus-proved-port~$(PROVED_PORT_VERSION), or move the port's pin and PROVED_PORT_VERSION together
+proved_port_version_check = $(if $(PROVED_PORT_INSTALLED),$(if $(PROVED_PORT_VERSION),$(if $(filter $(PROVED_PORT_VERSION),$(proved_port_kit_tag)),,$(error $(proved_port_version_mismatch))),$(error $(proved_port_version_unset))))
+# Installed, for the counter verus and verus-count run: its --version
+# must name the release KIT records, whatever the pin says.
+proved_port_count_got = $(strip $(shell $(verus_count_bin) --version 2>/dev/null))
+proved_port_count_want = verus-count $(proved_port_kit_tag)
+proved_port_count_mismatch = $(PROVED_PORT_HOME)/KIT records $(proved_port_kit_got), but `$(verus_count_bin) --version` prints $(or $(proved_port_count_got),nothing): put the package's verus-count first on PATH, or give VERUS_COUNT the installed counter
+proved_port_count_check = $(if $(PROVED_PORT_INSTALLED),$(if $(and $(proved_port_kit_tag),$(findstring $(proved_port_count_want),$(proved_port_count_got)),$(findstring $(proved_port_count_got),$(proved_port_count_want))),,$(error $(proved_port_count_mismatch))))
 
 define verus_proofs_recipe
+$(proved_port_version_check)
 mkdir -p $(dir $(VERUS_STATS))
 $(verus_proofs_cmd)
 endef
 
 define verus_count_recipe
+$(proved_port_version_check)
+$(proved_port_count_check)
 $(verus_base_check)
 $(verus_count_build_cmd)
 $(verus_count_cmd)
@@ -150,17 +212,21 @@ verus: ## the Verus proofs, then the coverage floor and rlimit headroom (verus/m
 verus-proofs: ## cargo verus over VERUS_CRATES, statistics to VERUS_STATS
 	$(verus_proofs_recipe)
 
-verus-count: ## the vendored counter over the port, from VERUS_STATS (VERUS_BASE=<rev> or none)
+verus-count: ## the kit counter over the port, from VERUS_STATS (VERUS_BASE=<rev> or none)
 	$(verus_count_recipe)
 
-verus-count-test: ## the vendored counter's tests
-	cargo test --locked --manifest-path $(VERUS_COUNT_DIR)/Cargo.toml --target-dir $(VERUS_COUNT_TARGET)
+verus-count-test: ## the vendored counter's tests (installed: covered by the package's)
+	$(proved_port_version_check)
+	$(if $(PROVED_PORT_INSTALLED),@echo 'verus-count-test: $(verus_count_bin) is not built here; its package tests it',cargo test --locked --manifest-path $(VERUS_COUNT_DIR)/Cargo.toml --target-dir $(VERUS_COUNT_TARGET))
 
 verus-headers: ## the kit's Verus files against the kit's templates (verus/make/headers.sh)
+	$(proved_port_version_check)
 	VERUS_FLOOR=$(VERUS_FLOOR) sh $(PROVED_PORT_MAKE)headers.sh .
 
 kani: ## the Kani harnesses, all or a shard (verus/make/kani.sh; KANI_SHARD/KANI_SHARDS; KANI_NONE=yes for none yet)
+	$(proved_port_version_check)
 	sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
 
 kani-list: ## the Kani harnesses, one CRATE NAME FILE a line
+	$(proved_port_version_check)
 	sh $(PROVED_PORT_MAKE)kani.sh --list $(KANI_ARGS)
