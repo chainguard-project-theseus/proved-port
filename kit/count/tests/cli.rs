@@ -1911,6 +1911,9 @@ fn a_path_qualified_verus_is_verus() {
         ("use other::*;\nmod s { use super::*; verus! { pub fn f() {} } }\n", SHADOWED),
         ("mod q { pub use other::*; }\nuse crate::q::*;\nverus! { pub fn f() {} }\n", SHADOWED),
         ("mod q { pub use self::r::*; mod r { pub use other::*; } }\nuse q::*;\nverus! { pub fn f() {} }\n", SHADOWED),
+        // Only `use super::*;` is followed: any other `*` of a module of the
+        // crate settles nothing, even one whose module imports Verus's.
+        ("mod q { pub use vstd::prelude::*; }\nuse q::*;\nverus! { pub fn f() {} }\n", SHADOWED),
         // A `::` glob names an extern crate, whatever module of the crate
         // shares its name.
         ("mod other {}\nuse ::other::*;\nverus! { pub fn f() {} }\n", SHADOWED),
@@ -1995,7 +1998,6 @@ fn a_path_qualified_verus_is_verus() {
         "mod s { use other::*; }\nverus! { pub fn f() {} }\n",
         "use vstd::prelude::*;\nmod s { use super::*; verus! { pub fn f() {} } }\n",
         "use other::*;\nuse vstd::prelude::*;\nmod s { use super::*; verus! { pub fn f() {} } }\n",
-        "mod q { pub use vstd::prelude::*; }\nuse q::*;\nverus! { pub fn f() {} }\n",
         "use other::*;\n#[cfg(verus_keep_ghost)]\nuse vstd::prelude::*;\nverus! { pub fn f() {} }\n",
         "#[cfg(test)]\nuse other::*;\nverus! { pub fn f() {} }\n",
         "#[cfg(test)]\n#[macro_use]\nextern crate other;\nverus! { pub fn f() {} }\n",
@@ -2097,6 +2099,15 @@ fn a_confirming_import_holds_under_its_combined_guards() {
         "mod q { pub use other::*; #[cfg(target_arch = \"x86_64\")] pub use vstd::prelude::*; }\nuse q::*;\nverus! { pub fn f() {} }\n",
         // A module guard that every run meets forces no architecture.
         "#[cfg(any(target_arch = \"x86_64\", not(target_arch = \"x86_64\")))]\nmod m {\n    use other::*;\n    #[cfg(target_arch = \"x86_64\")]\n    use vstd::prelude::verus;\n    verus! { pub fn f() {} }\n}\n",
+        // Two inline modules of one name, one per architecture, share a
+        // path but not an instance: one's import of Verus's does not settle
+        // the other's `*`, which the other run compiles.
+        "#[cfg(target_arch = \"x86_64\")]\nmod q { pub use vstd::prelude::*; }\n#[cfg(target_arch = \"aarch64\")]\nmod q { pub use other::*; }\nuse q::*;\nverus! { pub fn f() {} }\n",
+        "#[cfg(target_arch = \"aarch64\")]\nmod q { pub use other::*; }\n#[cfg(target_arch = \"x86_64\")]\nmod q { pub use vstd::prelude::*; }\nuse q::*;\nverus! { pub fn f() {} }\n",
+        "#[cfg(target_arch = \"x86_64\")]\nmod arch { use other::*; use vstd::prelude::*; }\n#[cfg(target_arch = \"aarch64\")]\nmod arch { use other::*; verus! { pub fn f() {} } }\n",
+        // A `*` of a module of the crate is not followed, even where each
+        // instance of that module imports Verus's: only `use super::*;` is.
+        "#[cfg(target_arch = \"x86_64\")]\nmod q { pub use vstd::prelude::*; }\n#[cfg(target_arch = \"aarch64\")]\nmod q { pub use other::*; pub use vstd::prelude::*; }\nuse q::*;\nverus! { pub fn f() {} }\n",
     ];
     for src in never {
         fs::write(&lib, src).expect("write");
@@ -2114,6 +2125,13 @@ fn a_confirming_import_holds_under_its_combined_guards() {
         "#[cfg(target_arch = \"x86_64\")]\nmod m { use other::*; #[cfg(target_arch = \"x86_64\")] use vstd::prelude::*; verus! { pub fn f() {} } }\n",
         "#[cfg(target_arch = \"x86_64\")]\nmod m { use other::*; verus! { use vstd::prelude::*; pub fn f() {} } }\n",
         "#[cfg(any(target_arch = \"x86_64\", test))]\nmod m { use other::*; #[cfg(target_arch = \"x86_64\")] use vstd::prelude::verus; verus! { pub fn f() {} } }\n",
+        // Each instance of a same-named module settles its own `*`s.
+        "#[cfg(target_arch = \"x86_64\")]\nmod arch { use other::*; use vstd::prelude::*; }\n#[cfg(target_arch = \"aarch64\")]\nmod arch { use other::*; use vstd::prelude::*; verus! { pub fn f() {} } }\n",
+        // A `*` a macro writes is in the instance it is invoked in, which
+        // that instance's import of Verus's settles: an inline `mod`, or
+        // the file itself.
+        "macro_rules! mk { () => { use other::*; }; }\n#[cfg(target_arch = \"x86_64\")]\nmod m { use vstd::prelude::*; mk!(); verus! { pub fn f() {} } }\n",
+        "macro_rules! mk { () => { use other::*; }; }\nuse vstd::prelude::*;\nmk!();\nverus! { pub fn f() {} }\n",
     ];
     for src in settled {
         fs::write(&lib, src).expect("write");
@@ -2128,6 +2146,325 @@ fn a_confirming_import_holds_under_its_combined_guards() {
             "{src}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
         );
     }
+    // The review's case through an expansion: the `*` a macro writes is
+    // in the instance it is invoked in, the aarch64 `q` that holds the
+    // invocation, not the x86_64 one beside it. The bindings an expansion
+    // writes are held by their own check, which names the `*` as the
+    // expansion's.
+    const EMITTED: &str = "which a macro expansion writes) may bring another crate's `verus`";
+    fs::write(
+        &lib,
+        "macro_rules! mk { () => { pub use other::*; }; }\n#[cfg(target_arch = \"x86_64\")]\nmod q { pub use vstd::prelude::*; }\n#[cfg(target_arch = \"aarch64\")]\nmod q { mk!(); verus! { pub fn f() {} } }\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains(EMITTED),
+        "an expansion's `*`: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {EMITTED:?}"
+    );
+    // A `mod` an expansion writes carries the spans of the macro's
+    // definition: here `q` in m.rs, at line 4, column 12, where lib.rs's
+    // own `mod q` also is. It is still an instance of its own, so the
+    // source `q`'s import of Verus's does not settle the `*` beside the
+    // invocation the expansion's `q` holds.
+    const ANOTHER: &str = "may bring another crate's `verus`";
+    let m = dir.join("crates/a/src/m.rs");
+    fs::write(
+        &m,
+        "macro_rules! mk {\n    () => {\n        #[cfg(target_arch = \"aarch64\")]\n        mod q { pub use other::*; verus! { pub fn f() {} } }\n    };\n}\n",
+    )
+    .expect("write");
+    fs::write(
+        &lib,
+        "#[macro_use]\nmod m;\n#[cfg(target_arch = \"x86_64\")]\n        mod q { pub use vstd::prelude::*; }\nmk!();\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains(ANOTHER),
+        "a mod an expansion writes: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {ANOTHER:?}"
+    );
+    fs::remove_file(&m).expect("remove");
+    // A `*` of a module of the crate other than `use super::*;` (bare, in
+    // edition 2015 or 2018 on, or through `crate::` or `self::`) is never
+    // followed, so none settles: in some target or run it may name another
+    // crate's module, or an alias of one, whose `verus` may be its own.
+    // These are the inputs of the module-existence findings (a test-only,
+    // one-architecture, undeclared or other-target module; a `#[path]`
+    // file; a `crate::` alias) and the local globs that settled before.
+    let src_dir = dir.join("crates/a/src");
+    #[rustfmt::skip]
+    let absent: [(&str, &[(&str, &str)]); 28] = [
+        ("mod a { mod other; }\nuse a::other::*;\nverus! { pub fn f() {} }\n", &[("a/other.rs", "")]),
+        ("#[cfg(target_arch = \"x86_64\")]\nmod m {\n    mod other {}\n    use other::*;\n    verus! { pub fn f() {} }\n}\n", &[]),
+        ("#[cfg(target_arch = \"x86_64\")]\nmod m;\n", &[("m.rs", "mod other;\nuse other::*;\nverus! { pub fn f() {} }\n"), ("m/other.rs", "")]),
+        ("mod other {}\nuse other::*;\nverus! { pub fn f() {} }\n", &[]),
+        ("mod other;\nuse other::*;\nverus! { pub fn f() {} }\n", &[("other.rs", "")]),
+        ("#[cfg(target_arch = \"x86_64\")]\nmod other {}\n#[cfg(target_arch = \"aarch64\")]\nmod other {}\nuse other::*;\nverus! { pub fn f() {} }\n", &[]),
+        ("mod other;\nuse other::*;\nverus! { pub fn f() {} }\n", &[("other.rs", ""), ("main.rs", "mod other;\n")]),
+        ("mod p;\nuse p::other::*;\nverus! { pub fn f() {} }\n", &[("p.rs", "pub mod other {}\n")]),
+        // A main.rs that is a module (`a::main`, from src/main.rs) has its
+        // `mod y;` at src/a/main/y.rs, which the library reaches as an
+        // inline `a::main::y`; and a `#[path]`-named p.rs that src/main.rs
+        // declares by its place has its `mod z;` at src/p/z.rs. In both,
+        // main's `crate::q` is `otherdep`.
+        ("mod a;\nmod q {}\n", &[("a.rs", "mod main { mod y; }\n"), ("main.rs", "mod a { mod main; }\nuse otherdep as q;\nfn main() {}\n"), ("a/main.rs", "mod y;\n"), ("a/main/y.rs", "use crate::q::*;\nverus! { pub fn f() {} }\n")]),
+        ("#[path = \"p.rs\"]\nmod imp;\nmod p { mod z; }\nmod q {}\n", &[("main.rs", "mod p;\nuse otherdep as q;\nfn main() {}\n"), ("p.rs", "mod z;\n"), ("p/z.rs", "use crate::q::*;\nverus! { pub fn f() {} }\n")]),
+        // A file another target also compiles is checked there too: here
+        // src/main.rs compiles lib.rs as `crate::lib`, where `crate::q`
+        // is `otherdep`; and the library compiles src/bin/foo.rs as
+        // `bin::foo`, which the bin target compiles as its root.
+        ("mod q {}\nuse crate::q::*;\nverus! { pub fn f() {} }\n", &[("main.rs", "mod lib;\nuse otherdep as q;\n")]),
+        ("mod bin { mod foo; }\n", &[("bin/foo.rs", "mod foo { mod other; }\nuse other::*;\nverus! { pub fn f() {} }\n"), ("bin/foo/other.rs", ""), ("bin/foo/foo/other.rs", "")]),
+        // A module file named main.rs or lib.rs is `a::main` or `a::lib`,
+        // where no `other` is, though its place under src/ reads as `a`.
+        ("mod a;\n", &[("a.rs", "mod main;\nmod other {}\n"), ("a/main.rs", "use other::*;\nverus! { pub fn f() {} }\n")]),
+        ("mod a;\n", &[("a.rs", "mod lib;\nmod other {}\n"), ("a/lib.rs", "use other::*;\nverus! { pub fn f() {} }\n")]),
+        // A src/bin root names its modules from its own `crate::`: here
+        // `crate::foo::other`, while src/bin/foo/other.rs reads as
+        // `bin::foo::other`.
+        ("", &[("bin/foo.rs", "mod foo { mod other; }\nuse other::*;\nverus! { pub fn f() {} }\n"), ("bin/foo/other.rs", "")]),
+        // A file declared in an inline module whose directory a path
+        // attribute chose holds `a::other`, not the `foo::other` its
+        // location would.
+        ("#[path = \"foo\"]\nmod a { mod other; }\nuse foo::other::*;\nverus! { pub fn f() {} }\n", &[("foo/other.rs", "")]),
+        ("#[cfg_attr(not(test), path = \"foo\")]\nmod a { mod other; }\nuse foo::other::*;\nverus! { pub fn f() {} }\n", &[("foo/other.rs", "")]),
+        // A `#[path]` file holds the module its declaration names (`imp`),
+        // not the one its location would.
+        ("#[path = \"other.rs\"]\nmod imp;\nuse other::*;\nverus! { pub fn f() {} }\n", &[("other.rs", "")]),
+        // Through `crate::`, a test-only `mod q` leaves `q` the extern
+        // crate's alias in the proof build.
+        ("#[cfg(not(test))]\npub use other as q;\n#[cfg(test)]\nmod q {}\nuse crate::q::*;\nverus! { pub fn f() {} }\n", &[]),
+        ("#[cfg(test)]\nmod other {}\nuse other::*;\nverus! { pub fn f() {} }\n", &[]),
+        ("#[cfg(target_arch = \"x86_64\")]\nmod other {}\nuse other::*;\nverus! { pub fn f() {} }\n", &[]),
+        ("#[cfg(test)]\nmod other;\nuse other::*;\nverus! { pub fn f() {} }\n", &[("other.rs", "")]),
+        ("use other::*;\nverus! { pub fn f() {} }\n", &[("other.rs", "")]),
+        ("mod other;\nuse other::*;\nverus! { pub fn f() {} }\n", &[("other.rs", "#![cfg(test)]\n")]),
+        ("mod other;\nuse other::*;\nverus! { pub fn f() {} }\n", &[("other.rs", "#![cfg(target_arch = \"x86_64\")]\n")]),
+        ("use other::*;\nverus! { pub fn f() {} }\n", &[("other.rs", ""), ("main.rs", "mod other;\n")]),
+        ("use p::other::*;\nverus! { pub fn f() {} }\n", &[("p.rs", "pub mod other {}\n")]),
+        ("mod p;\nuse p::other::*;\nverus! { pub fn f() {} }\n", &[("p.rs", "#[cfg(test)]\npub mod other {}\n")]),
+    ];
+    for (src, files) in absent {
+        for (name, text) in files {
+            let path = src_dir.join(name);
+            fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            fs::write(path, text).expect("write");
+        }
+        fs::write(&lib, src).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 1 && err.contains(SHADOWED),
+            "{src} ({files:?}): got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {SHADOWED:?}"
+        );
+        for (name, _) in files {
+            fs::remove_file(src_dir.join(name)).expect("remove");
+        }
+    }
+    // `use super::*;` is followed only where its file surely is the module
+    // its place under src/ names, so that place gives its parent. Each of
+    // these places the `*` in a file whose module, in some target, is not
+    // the one its place names, with that target's real parent holding
+    // another crate's `*` and the parent its place names holding none:
+    // - a `#[path]`-named file (inner.rs is `imp`, its parent the root);
+    // - a file declared in an inline module whose directory a `#[path]`
+    //   chose (inner.rs is `a::inner`, its parent `a`);
+    // - a file another target reads under the other reading of where a
+    //   main.rs's modules live (y.rs is main's `a::main::y`), with each
+    //   declaration under one architecture;
+    // - a file another target reaches inside an inline module whose
+    //   directory a `#[path]` chose (x.rs is main's `m::x`);
+    // - a `#[path]`-named file only the other reading reaches, whose own
+    //   `mod y;` is beside it (y.rs is main's `a::main::m::x::y`);
+    // - a file one root declares twice, by its place and inside an inline
+    //   module whose directory a `#[path]` chose (inner.rs is both
+    //   `foo::inner` and `a::inner`), or by its place and under the other
+    //   reading (y.rs is both an inline `a::main`'s and a/main.rs's), each
+    //   compiled once per declaration;
+    // - a file a macro in a mod.rs (which has no other reading) declares
+    //   inside an inline module whose directory a `#[path]` chose
+    //   (inner.rs is `p::a::inner`), or a mod.rs's `#[path]`-named file
+    //   (inner.rs is `p::imp`);
+    // - a file declared both by its place and from a file whose own
+    //   module its place does not name (leaf.rs is both `foo::leaf` and
+    //   the `#[path]`-named `a`'s `a::leaf`), or two levels down (mid.rs
+    //   is both `foo::mid` and `a::mid`, so leaf.rs is `a::mid::leaf` too).
+    #[rustfmt::skip]
+    let uncertain: [(&str, &[(&str, &str)]); 11] = [
+        ("use other::*;\n#[path = \"x/inner.rs\"]\nmod imp;\nmod x;\n", &[("x.rs", "use vstd::prelude::*;\n"), ("x/inner.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+        ("#[path = \"foo\"]\nmod a { use other::*; mod inner; }\nmod foo;\n", &[("foo.rs", "use vstd::prelude::*;\n"), ("foo/inner.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+        ("mod a;\n", &[("a.rs", "#[cfg(target_arch = \"x86_64\")]\nmod main { mod y; }\n"), ("main.rs", "#[cfg(target_arch = \"aarch64\")]\nmod a { mod main; }\n"), ("a/main.rs", "use other::*;\nmod y;\n"), ("a/main/y.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+        ("mod x;\n", &[("main.rs", "#[path = \".\"]\nmod m { use other::*; mod x; }\n"), ("x.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+        ("mod a;\n", &[("a.rs", "mod main { mod m { mod y; } }\n"), ("main.rs", "mod a { mod main; }\n"), ("a/main.rs", "mod m { #[path = \"foo.rs\"] mod x; }\n"), ("a/main/m/foo.rs", "use other::*;\nmod y;\n"), ("a/main/m/y.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+        ("#[path = \"foo\"]\nmod a { use other::*; mod inner; }\nmod foo;\n", &[("foo.rs", "use vstd::prelude::*;\nmod inner;\n"), ("foo/inner.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+        ("mod a;\n", &[("a.rs", "#[cfg(target_arch = \"x86_64\")]\nmod main;\n#[cfg(target_arch = \"aarch64\")]\nmod main { use vstd::prelude::*; mod y; }\n"), ("a/main.rs", "use other::*;\nmod y;\n"), ("a/main/y.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+        ("mod p;\n", &[("p/mod.rs", "macro_rules! mk { () => { #[path = \"foo\"] mod a { use other::*; mod inner; } }; }\nmk!();\nmod foo;\n"), ("p/foo.rs", "use vstd::prelude::*;\n"), ("p/foo/inner.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+        ("mod p;\n", &[("p/mod.rs", "use other::*;\n#[path = \"x/inner.rs\"]\nmod imp;\nmod x;\n"), ("p/x.rs", "use vstd::prelude::*;\n"), ("p/x/inner.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+        ("#[path = \"foo/strange.rs\"]\nmod a;\nmod foo;\n", &[("foo.rs", "use vstd::prelude::*;\nmod leaf;\n"), ("foo/strange.rs", "use other::*;\nmod leaf;\n"), ("foo/leaf.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+        ("#[path = \"foo/strange.rs\"]\nmod a;\nmod foo;\n", &[("foo.rs", "use vstd::prelude::*;\nmod mid;\n"), ("foo/strange.rs", "use other::*;\nmod mid;\n"), ("foo/mid.rs", "use super::*;\nmod leaf;\n"), ("foo/mid/leaf.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+    ];
+    for (src, files) in uncertain {
+        for (name, text) in files {
+            let path = src_dir.join(name);
+            fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            fs::write(path, text).expect("write");
+        }
+        fs::write(&lib, src).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 1 && err.contains(SHADOWED),
+            "{src} ({files:?}): got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {SHADOWED:?}"
+        );
+        for (name, _) in files {
+            fs::remove_file(src_dir.join(name)).expect("remove");
+        }
+    }
+    // Where every target names the file by its place, `use super::*;`
+    // settles through the parent's import of Verus's: a file the library
+    // alone declares, or one the library and src/main.rs both declare. A
+    // local module's `*` still settles beside an import of Verus's in the
+    // same instance, as any `*` does.
+    #[rustfmt::skip]
+    let certain: [(&str, &[(&str, &str)]); 3] = [
+        ("mod other {}\nuse other::*;\nuse vstd::prelude::verus;\nverus! { pub fn f() {} }\n", &[]),
+        ("use vstd::prelude::*;\nmod x;\n", &[("x.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+        ("use vstd::prelude::*;\nmod x;\n", &[("main.rs", "use vstd::prelude::*;\nmod x;\n"), ("x.rs", "use super::*;\nverus! { pub fn f() {} }\n")]),
+    ];
+    for (src, files) in certain {
+        for (name, text) in files {
+            let path = src_dir.join(name);
+            fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            fs::write(path, text).expect("write");
+        }
+        fs::write(&lib, src).expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<(String, String)> = list_rows(&out)
+            .into_iter()
+            .map(|(class, _, name, _)| (class, name))
+            .collect();
+        let want = vec![("Verified".to_owned(), "f".to_owned())];
+        assert!(
+            got == 0 && rows == want,
+            "{src} ({files:?}): got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        for (name, _) in files {
+            fs::remove_file(src_dir.join(name)).expect("remove");
+        }
+    }
+    // In edition 2015 a bare path is from the crate root, and names the
+    // crate's own module only where every proof run has it: a stray
+    // src/other.rs no `mod` declares leaves `use other::*;` the extern
+    // crate's.
+    let manifest = dir.join("crates/a/Cargo.toml");
+    let edition = fs::read_to_string(&manifest).expect("read");
+    fs::write(
+        &manifest,
+        edition.replace("edition = \"2024\"", "edition = \"2015\""),
+    )
+    .expect("write");
+    fs::write(src_dir.join("other.rs"), "").expect("write");
+    fs::write(
+        &lib,
+        "extern crate other;\nuse other::*;\nverus! { pub fn f() {} }\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains(SHADOWED),
+        "edition 2015, a stray src/other.rs: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {SHADOWED:?}"
+    );
+    fs::remove_file(src_dir.join("other.rs")).expect("remove");
+    // A `[[bin]]` root at src/tool.rs gets no sure tree, so a file it and
+    // the library both declare is checked against it: there `crate::q` is
+    // `otherdep`, whatever the library's `mod q` is.
+    fs::write(
+        &manifest,
+        format!("{edition}[[bin]]\nname = \"tool\"\npath = \"src/tool.rs\"\n"),
+    )
+    .expect("write");
+    fs::write(src_dir.join("tool.rs"), "mod x;\nuse otherdep as q;\n").expect("write");
+    fs::write(
+        src_dir.join("x.rs"),
+        "use crate::q::*;\nverus! { pub fn f() {} }\n",
+    )
+    .expect("write");
+    fs::write(&lib, "mod x;\nmod q {}\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains(SHADOWED),
+        "a [[bin]] at src/tool.rs sharing src/x.rs: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {SHADOWED:?}"
+    );
+    // The same file's `use super::*;` is the tool root's `*` in that
+    // target, so it settles nothing, though in the library it is the
+    // root's and the root holds no `*`: the tool root names its modules
+    // from its own `crate::`, and so names no file by its place.
+    fs::write(src_dir.join("tool.rs"), "use other::*;\nmod x;\n").expect("write");
+    fs::write(
+        src_dir.join("x.rs"),
+        "use super::*;\nverus! { pub fn f() {} }\n",
+    )
+    .expect("write");
+    fs::write(&lib, "mod x;\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains(SHADOWED),
+        "`use super::*;` in src/x.rs, shared with a [[bin]] root: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {SHADOWED:?}"
+    );
+    // The library reads the root src/tool.rs as `mod tool;`, whose `mod x;`
+    // is src/tool/x.rs there; src/x.rs is the tool target's alone, where
+    // its `super` is the tool root and its `*`.
+    fs::write(&lib, "mod tool;\n").expect("write");
+    fs::create_dir_all(src_dir.join("tool")).expect("mkdir");
+    fs::write(src_dir.join("tool/x.rs"), "").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains(SHADOWED),
+        "`use super::*;` in src/x.rs, the [[bin]] root's: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {SHADOWED:?}"
+    );
+    fs::remove_file(src_dir.join("tool/x.rs")).expect("remove");
+    fs::write(src_dir.join("tool.rs"), "mod x;\nuse otherdep as q;\n").expect("write");
+    // Read as an ordinary module (src/main.rs's `mod tool;`), the root
+    // src/tool.rs has its `mod x;` at src/tool/x.rs, where main's
+    // `crate::q` is `otherdep`; as the bin's root, at src/x.rs.
+    fs::write(&lib, "mod tool { mod x; }\nmod q {}\n").expect("write");
+    fs::write(
+        src_dir.join("main.rs"),
+        "mod tool;\nuse otherdep as q;\nfn main() {}\n",
+    )
+    .expect("write");
+    fs::write(src_dir.join("tool.rs"), "mod x;\nfn main() {}\n").expect("write");
+    fs::write(src_dir.join("x.rs"), "").expect("write");
+    fs::create_dir_all(src_dir.join("tool")).expect("mkdir");
+    fs::write(
+        src_dir.join("tool/x.rs"),
+        "use crate::q::*;\nverus! { pub fn f() {} }\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains(SHADOWED),
+        "src/tool.rs read as a module by src/main.rs: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {SHADOWED:?}"
+    );
+    for name in ["main.rs", "tool.rs", "x.rs", "tool/x.rs"] {
+        fs::remove_file(src_dir.join(name)).expect("remove");
+    }
+    // The library's `mod tool;` reads the root src/tool.rs as a module,
+    // whose `mod x;` is `tool::x` at src/tool/x.rs; read as the bin's root
+    // it is src/x.rs, which the library's sure walk must not take as
+    // `crate::x`, so `use x::*;` in the library is another crate's.
+    fs::write(&lib, "mod tool;\nuse x::*;\nverus! { pub fn f() {} }\n").expect("write");
+    fs::write(src_dir.join("tool.rs"), "mod x;\n").expect("write");
+    fs::write(src_dir.join("x.rs"), "").expect("write");
+    fs::write(src_dir.join("tool/x.rs"), "").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains(SHADOWED),
+        "the library reaching the root src/tool.rs: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {SHADOWED:?}"
+    );
+    for name in ["tool.rs", "x.rs", "tool/x.rs"] {
+        fs::remove_file(src_dir.join(name)).expect("remove");
+    }
+    fs::write(&manifest, edition).expect("write");
     // With both oses declared too, an import under one os and one arch
     // needs two runs' atoms at once: it may be built only on a host no
     // run is, so it settles nothing, as a function there is not sure,
