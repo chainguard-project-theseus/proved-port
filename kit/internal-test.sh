@@ -3,7 +3,8 @@
 # internal to the kit's maintainers (the internal check). The kit is
 # public, and it ships into ports, some of them public: the
 # theseus-proved-port package installs the counter built from kit/count,
-# kit/make and kit/templates, and a new port copies kit/templates. So
+# kit/make, kit/templates and kit/CHANGELOG.md, and a new port copies
+# kit/templates. So
 # none of those files may name an internal repository or organization,
 # an internal tool or URL, or a person. kit/templates/README.md, the
 # kit's own notes on the templates, is not copied and is not held; nor
@@ -16,7 +17,7 @@
 #
 # Then the mutants: each sample below is planted in a scratch copy of a
 # shipped file under kit/count, under kit/make and under kit/templates,
-# and the scan must name it; planted in kit/templates/README.md or under
+# and in kit/CHANGELOG.md, and the scan must name it; planted in kit/templates/README.md or under
 # kit/count/target, it must not. With any one marker left out, some
 # sample must name no marker. The check runs it with BusyBox's tools. Run
 # it from anywhere.
@@ -124,7 +125,8 @@ shipped() {
   for _shipped_d in "$1/kit/count" "$1/kit/make" "$1/kit/templates"; do
     [ -d "$_shipped_d" ] || fail "no directory $_shipped_d"
   done
-  find "$1/kit/count" "$1/kit/make" "$1/kit/templates" \
+  [ -f "$1/kit/CHANGELOG.md" ] || fail "no file $1/kit/CHANGELOG.md"
+  find "$1/kit/count" "$1/kit/make" "$1/kit/templates" "$1/kit/CHANGELOG.md" \
     -path "$1/kit/count/target" -prune -o \
     -type f ! -path "$1/kit/templates/README.md" -print ||
     fail "find failed under $1"
@@ -152,13 +154,14 @@ fi
 echo "ok no internal references in $(wc -l < "$tmp/files" | tr -d ' ') shipped files"
 
 # The mutants run on a scratch root holding one shipped file from each
-# of kit/count, kit/make and kit/templates, the templates' README and a
-# build output.
+# of kit/count, kit/make and kit/templates, kit/CHANGELOG.md, the
+# templates' README and a build output.
 copy=$tmp/copy
 in_count=kit/count/README.md
 in_make=kit/make/headers.sh
 in_templates=kit/templates/.chainguard/reviewers.yaml
-for f in $in_count $in_make $in_templates kit/templates/README.md; do
+in_changelog=kit/CHANGELOG.md
+for f in $in_count $in_make $in_templates $in_changelog kit/templates/README.md; do
   mkdir -p "$copy/$(dirname "$f")"
   cp "$repo/$f" "$copy/$f"
 done
@@ -178,7 +181,7 @@ unplant() {
 
 n=0
 while IFS= read -r s; do
-  for f in $in_count $in_make $in_templates; do
+  for f in $in_count $in_make $in_templates $in_changelog; do
     plant "$f" "$s"
     scan "$copy" && fail "the scan misses \"$s\" in $f"
     grep -q "^$copy/$f:" "$tmp/hits" || fail "the scan names another file than $f for \"$s\""
@@ -233,7 +236,7 @@ done
 echo "ok leaving out any one of the $m markers leaves a sample unnamed"
 
 while IFS= read -r s; do
-  for f in $in_count $in_make $in_templates; do
+  for f in $in_count $in_make $in_templates $in_changelog; do
     plant "$f" "$s"
     scan "$copy" || { cat "$tmp/hits" >&2; fail "the scan names \"$s\" in $f, which names nothing internal"; }
     unplant "$f"

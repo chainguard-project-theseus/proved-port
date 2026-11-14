@@ -807,6 +807,8 @@ takes the kit. It installs:
   `headers.sh` and `VERUS-FILES` (`kit/make`);
 - `/usr/share/proved-port/templates/`: all of `kit/templates`, under
   their own names;
+- `/usr/share/proved-port/CHANGELOG.md`: `kit/CHANGELOG.md`, each
+  release's changes and porting notes;
 - `/usr/share/proved-port/KIT`: `commit <sha>` and `tag vX.Y.Z`.
 
 A port takes it this way:
@@ -865,8 +867,9 @@ Where the package is not installed (a Mac, a development host), install
 the kit from a clone of this repository checked out at the pinned tag,
 with one command, `kit/install.sh PREFIX`. It lays the kit out under
 PREFIX as the package does under `/usr`: the counter as
-`PREFIX/bin/verus-count`, and `make/`, `templates/` and a `KIT` that
-records the commit and release in `PREFIX/share/proved-port`. Then run
+`PREFIX/bin/verus-count`, and `make/`, `templates/`, `CHANGELOG.md` and
+a `KIT` that records the commit and release in
+`PREFIX/share/proved-port`. Then run
 the port's kit targets with that root and counter:
 
 ```sh
@@ -926,3 +929,11 @@ release. So a tag that kept the previous release's version fails `make
 verus` in every port that moves its pin to it. Nothing in this
 directory checks the bump by itself: the cli tests only refuse the
 0.0.0 placeholder.
+
+Each pull request for a release adds its change to that release's
+section of kit/CHANGELOG.md, and what a port must do on the bump to its
+"Porting notes". The package installs the file as
+`/usr/share/proved-port/CHANGELOG.md` (kit/install.sh as
+`PREFIX/share/proved-port/CHANGELOG.md`), and kit/installed-test.sh
+fails unless the installed copy has porting notes for the release the
+counter names.

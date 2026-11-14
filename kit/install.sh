@@ -3,7 +3,9 @@
 # theseus-proved-port package installs it under /usr: the counter built
 # from kit/count as PREFIX/bin/verus-count, kit/make/* (mode 0644) in
 # PREFIX/share/proved-port/make/, all of kit/templates in
-# PREFIX/share/proved-port/templates/, and PREFIX/share/proved-port/KIT
+# PREFIX/share/proved-port/templates/, kit/CHANGELOG.md (the releases'
+# porting notes) as PREFIX/share/proved-port/CHANGELOG.md, and
+# PREFIX/share/proved-port/KIT
 # with the checkout's commit and the release the counter's --version
 # names. It is how a host without the package (a Mac) runs a port's kit
 # targets from a proved-port clone:
@@ -68,6 +70,7 @@ mkdir -p "$prefix/bin" "$home/make" "$home/templates"
 install -m755 "$target/release/verus-count" "$prefix/bin/verus-count"
 install -m644 "$kit"/make/* "$home/make/"
 cp -a "$kit/templates/." "$home/templates/"
+install -m644 "$kit/CHANGELOG.md" "$home/CHANGELOG.md"
 {
   echo "# kit: the proved-port kit installed by the theseus-proved-port package."
   echo "commit $commit"
