@@ -31,7 +31,7 @@ adds the port's first FLOOR. It is never a CI run's flag once FLOOR is
 on the base, and giving it with `--base-rev` fails the run (exit 2);
 `--rlimit` reads the statistics `cargo verus ... -- --time-expanded
 --output-json` printed. `--version` prints the counter's version, which
-is the kit release (`verus-count 0.2.5`): `kit/count/Cargo.toml`'s
+is the kit release (`verus-count 0.3.0`): `kit/count/Cargo.toml`'s
 version, which the release sets before it tags (Release, below).
 `--help` (or `-h`) prints the usage and exits 0. Either takes no other
 argument, since it checks nothing. `--badge` prints the coverage badge line (The badge, below) for the
@@ -709,7 +709,7 @@ Where the counters still differ, on inputs neither port has today:
 A port with no counter and FLOOR 0.0 adopts the counter in its first
 proof PR (the skill's lifecycle.md, phase 4):
 
-1. Vendor the counter ("Adopting: vendoring", below), add
+1. Pin the kit's package ("Adopting: the package", below), add
    `verus/count.toml` (the two-line form above is enough to start)
    and run the counter in the verus check:
    `verus-count --floor verus/FLOOR --base-rev "$BASE" .`. A base with
@@ -749,48 +749,74 @@ expat-rs's U1 worktree, with `verus_features = ["verus"]`, it counts
 `utf8::invalid_char` (57 lines) as verified, the only one, as the
 pilot's hand count did.
 
-## Adopting: vendoring
+## Adopting: the package
 
-From v0.2.5 the kit is also a Wolfi package (Release, below), and a
-port that pins it carries no copy. Vendoring, described here, stays for
-the ports that have not moved yet.
+Each kit release from v0.3.0 is the Wolfi package `theseus-proved-port`,
+built from the release's tag, and the package is the one way a port
+takes the kit. It installs:
 
-A port's check guests cannot reach this repository, so a port carries
-a copy of this crate at `verus/count/`, made by `kit/sync.sh` from a
-clone of this repository:
+- `/usr/bin/verus-count`, this crate, whose `--version` prints
+  `verus-count X.Y.Z` for release vX.Y.Z;
+- `/usr/share/proved-port/make/`: `proved-port.mk`, `kani.sh`,
+  `headers.sh` and `VERUS-FILES` (`kit/make`);
+- `/usr/share/proved-port/templates/`: all of `kit/templates`, under
+  their own names;
+- `/usr/share/proved-port/KIT`: `commit <sha>` and `tag vX.Y.Z`.
 
-```sh
-kit/sync.sh PORT_ROOT          # copy kit/count at HEAD to PORT_ROOT/verus/count
-kit/sync.sh --check PORT_ROOT  # fail unless the copy matches its recorded commit
-```
+A port takes it this way:
 
-- The copy is `git archive` of `kit/count` at the clone's HEAD, so it
-  holds exactly what that commit holds: no `target/`, no uncommitted
-  edit (the sync refuses while `kit/count` has any), and none of the
-  files a later kit deletes. It replaces the whole directory.
-- `verus/count/KIT` records the commit, and the tag when HEAD has one.
-  The sync refuses a `verus/count/` with no `KIT` file: that is the
-  port's own counter, for the port's PR to delete.
-- `--check` fails when a file is added, deleted or edited or changes
-  its executable bit, or when the recorded commit or tag does not
-  resolve in the clone; it ignores `verus/count/target/`. The port's CI
-  cannot reach this repository to run it, so whoever changes the copy
-  runs it and names the commit in the PR.
-- The crate builds where it lands: it is its own workspace (the empty
-  `[workspace]` table) with its own `Cargo.lock`, and nothing in it
-  names a path outside it. The port's verus check builds it with
-  `cargo build --locked --release --manifest-path verus/count/Cargo.toml`
-  (a `--target-dir` outside the copy keeps `git status` clean) and runs
-  it as Bootstrapping, step 1, says.
-- Moving to a newer kit is a port PR that re-runs the sync. Never edit
-  the copy: a fix the port needs lands in `kit/count` first.
-- The same sync copies `kit/make` to `verus/make/`, which `KIT` and
-  `--check` cover too: `proved-port.mk`, which the port's Makefile
-  includes for `make verus` (the build and run above) and `make kani`;
-  their scripts; and the templates of the kit's Verus files
-  (`kit/make/VERUS-FILES`), which `make verus-headers` holds the port's
-  copies to. `kit/make/proved-port.mk`'s header names each target and
-  variable.
+- It pins the package, `theseus-proved-port~X.Y.Z`, in the packages of
+  every check that runs a kit target (`.chainguard/ci/verus.yaml`) and
+  in `.chainguard/ci/env/dev.yaml`, which development sessions and the
+  deps agent use.
+- Its Makefile sets its variables, then names the same release and
+  includes the installed make targets:
+
+  ```make
+  VERUS_CRATES = ...
+  PROVED_PORT_VERSION = X.Y.Z
+  PROVED_PORT_HOME ?= /usr/share/proved-port
+  include $(PROVED_PORT_HOME)/make/proved-port.mk
+  ```
+
+  With `PROVED_PORT_VERSION` set, every kit target fails unless
+  `PROVED_PORT_HOME/KIT` records `tag vX.Y.Z`, and `make verus` and
+  `make verus-count` fail unless `verus-count --version` prints
+  `verus-count X.Y.Z`, so neither a stale install nor another counter
+  earlier on PATH passes for the pinned one. `make verus-count-test`
+  runs no tests (the package's build runs them) but makes the same
+  release check.
+- Its held files carry no `# kit:` line: the release is the package
+  pin, and `make verus-headers` reads none.
+- The package pins and `PROVED_PORT_VERSION` (and the proved-port
+  marketplace `ref` in a `.claude/settings.json` that names one) move
+  together, with any new header text, in a pull request of their own
+  (the kit entry of `kit/templates/.chainguard/deps.yaml`).
+
+Where the package is not installed (a Mac, a development host), build
+the counter from this repository at the pinned tag, with `cargo install
+--locked --git <this repository's URL> --tag vX.Y.Z verus-count` or,
+from a clone checked out at the tag, `cargo install --locked --path
+kit/count`. Put it on PATH, or pass `VERUS_COUNT=/path/to/verus-count`
+to make. Point `PROVED_PORT_HOME` at an install root laid out as the
+package's `/usr/share/proved-port` (`make/`, `templates/` and `KIT`)
+for the make targets and the header lint. A fix the port needs in the
+counter or the make targets lands here and reaches the port with the
+next release.
+
+## Moving from a vendored copy
+
+A port that carries vendored `verus/count/` and `verus/make/` copies is
+on kit 0.2.4, and moves to the package in one pull request. That pull
+request deletes `verus/count/` (with its `KIT` and `Cargo.lock`) and
+`verus/make/`, with every reviewer or code-owner row that names them;
+drops the `# kit:` line from each held file, replacing it with a blank
+line where the port's own comments follow it, so that they stay out of
+the header `make verus-headers` holds to the template (the header is the
+file's leading comment, up to its first non-comment line); pins
+`theseus-proved-port~0.3.0` as "Adopting: the package" says; and
+includes the installed `proved-port.mk` in place of
+`verus/make/proved-port.mk`.
 
 ## Release
 
@@ -799,16 +825,14 @@ The counter's version is the release's: the pull request that opens a
 release sets `version` in `Cargo.toml` and `Cargo.lock` to X.Y.Z before
 the tag, and `--version` prints `verus-count X.Y.Z` from that commit
 on. A counter built from main between that pull request and the tag
-already names the coming release. A copy vendored from there records
-`tag none` in its KIT, as any copy taken between releases does.
+already names the coming release.
 
-From v0.2.5 on, each tag is packaged as theseus-proved-port X.Y.Z,
+From v0.3.0 on, each tag is packaged as theseus-proved-port X.Y.Z,
 which installs `verus-count` and kit/make, the templates and a KIT
-file. That release also brings kit/make/proved-port.mk's installed
-mode, which this check depends on: a port that pins the package with
-`~` sets PROVED_PORT_VERSION in its Makefile, and the installed mode
-refuses a counter whose `--version` is another release. So a tag that
-kept the previous release's version fails `make verus` in every port
-that moves its pin to it. Nothing in this directory checks the bump by
-itself: the cli tests only refuse the 0.0.0 placeholder. Ports that
-vendor take a tag with `kit/sync.sh` instead.
+file, and that package is the one way a port takes the kit. A port
+pins it with `~` and sets PROVED_PORT_VERSION in its Makefile, and
+kit/make/proved-port.mk refuses a counter whose `--version` is another
+release. So a tag that kept the previous release's version fails `make
+verus` in every port that moves its pin to it. Nothing in this
+directory checks the bump by itself: the cli tests only refuse the
+0.0.0 placeholder.

@@ -166,30 +166,29 @@ kit/
 
 ## 4. How a port pins the kit
 
-TODO: once proved-port (and the ports) are public, publish verus-count as a package (crates.io or a Wolfi apk installed as a pinned environment package) and replace vendoring.
-
-Now: **vendoring** (decided 2026-11-09). While this repository is
-internal, a port's check guests cannot reach it, so step 2's install
-mechanism is a copy: `kit/sync.sh PORT_ROOT` copies `kit/count` at a
-commit of this repository into the port's `verus/count/` and records
-the commit in `verus/count/KIT`, and `kit/sync.sh --check PORT_ROOT`,
-run by whoever changes the copy, fails on any drift from that commit
-(`kit/count/README.md`, "Adopting: vendoring"). The port's checks build
-the copy; they need no egress beyond crates.io. A port moves to a newer
-kit in a PR that re-runs the sync.
-
-Later, once the TODO above is done: **a released, versioned package**. Each kit tag
-(`vX.Y.Z`) builds one package holding the counter binary, the Go
-tools, the scripts and the templates. A port installs it in each
-check's `environment: packages:` pinned with `~`, the way pcre3 already
+**A released, versioned package**, done in v0.3.0. Each kit tag
+(`vX.Y.Z`) builds the Wolfi package `theseus-proved-port`, which
+installs the counter as `verus-count`, `kit/make` under
+`/usr/share/proved-port/make/`, every template under
+`/usr/share/proved-port/templates/`, and a KIT record of the tag and
+commit. A port installs it in each check's `environment: packages:`
+pinned with `~` (`theseus-proved-port~X.Y.Z`), the way pcre3 already
 pins `verus~0.2026.10.18` and `kani~0.68.0`, and puts the same pin in
-`.chainguard/ci/env/dev.yaml` for development sessions. A port moves to
-a new kit in its own PR that changes those pins and nothing else, so
-every check runs against the new kit before it lands. The Makefile
-names the pin once (`PROVED_PORT_VERSION`), and kit/make/proved-port.mk's
-installed mode refuses an installed kit whose KIT records another
-release, and, for `make verus` (on a Mac too), a counter on PATH whose
-`--version` differs.
+`.chainguard/ci/env/dev.yaml` for development sessions. Its Makefile
+names the release once (`PROVED_PORT_VERSION`, which installed mode
+requires) and includes `$(PROVED_PORT_HOME)/make/proved-port.mk`; the
+kit targets refuse an installed KIT for another release, and `make
+verus` a counter on PATH whose `--version` differs, so a stale counter
+fails on a Mac rather than counting. A port's files carry no `# kit:`
+line: the release is the pin. A port moves to a new kit in its own PR
+that changes those pins and the held headers' text and nothing else
+(the deps template's kit entry), so every check runs against the new
+kit before it lands (`kit/count/README.md`, "Adopting: the package").
+
+v0.3.0 removes vendoring. The ports that vendored kit 0.2.4
+(`kit/sync.sh` copies at `verus/count/` and `verus/make/`) move to the
+package in one PR each (`kit/count/README.md`, "Moving from a vendored
+copy").
 
 Rejected:
 
@@ -203,12 +202,10 @@ Rejected:
   this repository is internal, GitHub credentials in every check; and it
   covers only the Go tools, not the Rust counter or the shell scripts.
 
-Prerequisite, to settle before the package replaces vendoring: a package built here must be
-installable in pcre3's and challoc's check guests. This repository is
-internal, so that needs a package repository those guests can read. If
-there is none, the fallback is a release tarball fetched and checked by
-SHA-256 in a script like pcre3's `ci/shellcheck.sh`, which needs the
-releases readable without credentials. Steps 0 and 1 need neither.
+The prerequisite, settled: the package must be installable in the
+ports' check guests. This repository is public, and the package is
+published to public Wolfi, which already serves those guests their
+`verus~` and `kani~` pins.
 
 ## 5. Move order
 

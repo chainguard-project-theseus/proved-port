@@ -5,7 +5,10 @@
 # toolchain every check but msrv uses (bump them together); verus is
 # pinned to the release Cargo.toml's vstd pin names and kani to the
 # release the Kani records name, both as verus.yaml pins them and both
-# built against {RUST_STREAM}, so the stream moves with them; shellcheck
+# built against {RUST_STREAM}, so the stream moves with them;
+# theseus-proved-port is the kit (the counter, the make targets and the
+# templates `make verus-headers` reads), pinned as verus.yaml pins it and
+# to the Makefile's PROVED_PORT_VERSION; shellcheck
 # is lint.yaml's pin; clang and compiler-rt are fuzz.yaml's; bash, curl,
 # ca-certificates-bundle, apk-tools and wolfi-keys are consumers.yaml's,
 # whose harness installs each consumer's packages with apk; libgcc is
@@ -18,4 +21,4 @@
 # kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 environment:
-  packages: [{RUST_STREAM}, build-base, binutils, busybox, make, git, bash, curl, ca-certificates-bundle, apk-tools, wolfi-keys, libgcc, clang-{CLANG_STREAM}, compiler-rt-{CLANG_STREAM}, {REFERENCE_PACKAGES}, verus~{VERUS_RELEASE}, kani~{KANI_RELEASE}, shellcheck~{SHELLCHECK_RELEASE}]
+  packages: [{RUST_STREAM}, build-base, binutils, busybox, make, git, bash, curl, ca-certificates-bundle, apk-tools, wolfi-keys, libgcc, clang-{CLANG_STREAM}, compiler-rt-{CLANG_STREAM}, {REFERENCE_PACKAGES}, verus~{VERUS_RELEASE}, kani~{KANI_RELEASE}, theseus-proved-port~{KIT_VERSION}, shellcheck~{SHELLCHECK_RELEASE}]

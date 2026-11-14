@@ -5,7 +5,8 @@ by Kani {KANI_RELEASE}. The harnesses below check the contract as Verus
 states it.
 
 {Name this file `kani-<seam id in lower case>.md`, as `kani-s1.md` or
-`kani-s-cr9.md`. verus/count fails a run in which a function carries the
+`kani-s-cr9.md`. The kit counter (verus-count) fails a run in which a
+function carries the
 `#[cfg_attr(any(), discharged_by = "kani")]` marker and no record names
 its file in backquotes and quotes `fn NAME`; section 1 is where it looks.}
 

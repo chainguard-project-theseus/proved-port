@@ -15,15 +15,16 @@
 # nothing.
 #
 # Pins no entry moves:
-# - verus/count and verus/make: the port's copies of the proved-port kit
-#   counter and make targets. They change only by re-running the kit's
-#   kit/sync.sh, which the agent's guest cannot reach.
-# - {Any other pin that moves only with a person's run or decision (a
+# - {Any pin that moves only with a person's run or decision (a
 #   bench baseline, a workload), and why; or delete this item.}
 #
 # rust-version (Cargo.toml) and the msrv check's toolchain move only
 # through the msrv entry, together, and every other entry leaves them
-# alone.
+# alone. Likewise the kit's pin (every `theseus-proved-port~` package
+# version, the Makefile's PROVED_PORT_VERSION, and the proved-port
+# marketplace ref in a .claude/settings.json that names one) moves only
+# through the kit
+# entry.
 #
 # Within a scheduled run each entry's pull request is one commit, and the
 # run folds its later fixes into it. A turn (review comments, failing
@@ -50,10 +51,8 @@ updates:
     Update the crate dependencies of the root workspace and the fuzz/
     workspace, and their lockfiles, to their latest compatible releases,
     preferring releases at least 7 days old. Leave vstd alone: the
-    toolchain entry moves it with the Verus release. Leave verus/count,
-    its Cargo.lock and verus/make alone: they change only by re-syncing
-    proved-port's kit.
-    Add no new dependency. Keep rust-version in Cargo.toml as it is (the
+    toolchain entry moves it with the Verus release. Add no new
+    dependency. Keep rust-version in Cargo.toml as it is (the
     msrv entry moves it): every update must still build with `cargo build --locked --release` on
     the msrv check's toolchain (its rust-1.NN package in
     .chainguard/ci/test.yaml); leave out an update that needs a newer
@@ -109,10 +108,10 @@ updates:
     from this entry, and verus/RLIMIT gains no `rlimit-raised` line: if
     the new Verus needs either, or fails a proof, fix the proof if the fix
     is small and say what changed, else leave Verus where it is and say
-    why. Leave verus/count, its Cargo.lock and verus/make alone: they
-    change only by re-syncing proved-port's kit, which the guest cannot
-    reach; say so in
-    the body if the new Verus needs a newer verus_syn there. Do not edit
+    why. Leave the `theseus-proved-port~` pin and the Makefile's
+    PROVED_PORT_VERSION alone: the kit entry moves them. A new Verus
+    whose syntax the kit counter's verus_syn does not read waits for a
+    kit release that does; say so in the body. Do not edit
     .chainguard/deps.yaml unless a person asks in a comment.
 
 - name: msrv
@@ -149,6 +148,53 @@ updates:
     current rustc), and what the raise buys. Leave the build stream to the
     toolchain entry. verus/FLOOR never goes down and never gains a
     `lowered` line from this entry. Do not edit .chainguard/deps.yaml
+    unless a person asks in a comment.
+
+- name: kit
+  schedule: "30 {DEPS_HOUR} * * 1" # Mondays
+  paths:
+    - ".chainguard/ci/**"
+    - "Makefile"
+    - "verus/FLOOR"
+    - "verus/RLIMIT"
+    - "verus/REACH"
+    - "verus/MINTS"
+    - "verus/count.toml"
+    - ".chainguard/reviewers.yaml"
+    - ".chainguard/review-prompt.md"
+    - ".claude/settings.json"
+  environment: dev
+  merge: manual
+  prompt: >-
+    Move the proved-port kit. Its pin is every `theseus-proved-port~`
+    package version in .chainguard/ci/** and .chainguard/ci/env/dev.yaml,
+    PROVED_PORT_VERSION in the Makefile, and the `ref` (vX.Y.Z) of the
+    proved-port marketplace in .claude/settings.json if that file names
+    one; move them together,
+    in this one pull request, to the newest theseus-proved-port release in
+    Wolfi that is at least 7 days old. If the pin is already that release,
+    change nothing. Install
+    the new package with apk in the guest and commit the pin moves before
+    you run anything; fold later fixes in this run into that commit, and
+    on a turn add a commit on top of the pull request's head. Then run
+    `make verus-headers`: for each file it lists as drifted, take the
+    kit's header text from the installed template of the same path under
+    /usr/share/proved-port/templates/, with the placeholders filled as the
+    port filled them before and the port's own comments below the header
+    kept. These files carry no `# kit:` line: replace one the port still
+    has with a blank line where the port's own comments follow it (the
+    header is the leading comment, up to its first non-comment line), and
+    delete it where nothing of the port's follows. Change nothing else in
+    those files. Then run `make lint`, `make verus-headers`, `make
+    verus VERUS_BASE=none` (a local run; the verus check passes the base)
+    and `make kani`. The body names the suites the guest ran and any suite
+    it did not finish. verus/FLOOR never goes down and never gains a
+    `lowered` line from this entry, and verus/RLIMIT gains no
+    `rlimit-raised` line. When the new counter fails a gate the old one
+    passed (a lower share, a new REACH or MINTS row, rlimit headroom, a
+    configuration it refuses), fix nothing in the port's code or ledgers:
+    leave the bump for a person, as a draft, and say in the body which
+    gate fails and what it reports. Do not edit .chainguard/deps.yaml
     unless a person asks in a comment.
 
 - name: tools
@@ -209,8 +255,8 @@ updates:
     conformance`, `make test`, `make lint` and `make verus
     VERUS_BASE=none` (a local run; the verus check passes the base); verus/FLOOR
     never goes down and never gains a `lowered` line from this entry.
-    Leave verus/count and verus/make alone. Do not edit .chainguard/deps.yaml unless a
-    person asks in a comment.
+    Leave the kit's pin alone (the kit entry). Do not edit
+    .chainguard/deps.yaml unless a person asks in a comment.
 
 - name: consumers
   schedule: "0 {DEPS_HOUR} * * 5" # Fridays

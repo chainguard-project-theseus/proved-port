@@ -33,7 +33,7 @@ Only the kit's Verus files stay held to the kit afterwards
 (`make verus-headers`; `kit/make/VERUS-FILES` names them): the headers
 of `verus/FLOOR`, `RLIMIT`, `REACH`, `MINTS`, `verus/count.toml`,
 `.chainguard/ci/verus.yaml`, `miri.yaml` and `reviewers.yaml`, and the
-vendored-kit rule of `review-prompt.md`. The other check files
+kit rule of `review-prompt.md`. The other check files
 (conformance, consumers, fuzz, test, lint, the environments,
 `develop.yaml`, `deps.yaml`) are starting points; reshape them to the
 port's checks.
@@ -135,7 +135,7 @@ or an open bug.
    landed its first theorem before the CI gate existed and paid for it
    in post-merge rlimit breaks).
 2. Bootstrap the counter with the first proof, unless the port already
-   has it from its setup (a port set up with `kit/sync.sh` and the
+   has it from its setup (a port set up with the kit's package and the
    templates has the counter and FLOOR 0.0 in its first commit, and
    `make verus` passes there). A
    port at FLOOR 0.0 with no counter cannot land a proof through a gate that refuses
@@ -164,20 +164,21 @@ or an open bug.
    read) and `[floor] path` in `verus/count.toml` (the `--base-rev`
    read): on a case-insensitive file system `verus/FLOOR` and
    `verus/floor/` are the same path (`verus/SHARES` in both, say).
-   **Vendor the counter:** the ports' check guests cannot reach this
-   repository, so the port carries a copy. From a clone of this
-   repository, `kit/sync.sh PORT_ROOT` copies `kit/count` at the clone's
-   HEAD to `verus/count/`, and `kit/make` (the make targets, Kani
-   runner and header lint) to `verus/make/`, and records the commit in
-   `verus/count/KIT`; the verus check builds the counter from there
-   (`cargo build --locked --release --manifest-path verus/count/Cargo.toml`)
-   and runs it. Never edit either copy: a fix lands in `kit/count` or
-   `kit/make` first, and the port re-syncs in its own PR. Before pushing
-   a change to `verus/count/` or `verus/make/`, run
-   `kit/sync.sh --check PORT_ROOT`, which fails on any drift in either
-   from the recorded commit (the port's CI cannot run it), and name the
-   commit in the PR body (`kit/count/README.md`, "Adopting:
-   vendoring").
+   **Pin the kit:** pin the Wolfi package `theseus-proved-port~X.Y.Z`
+   (v0.3.0 or later) in `.chainguard/ci/verus.yaml` and
+   `.chainguard/ci/env/dev.yaml`, set `PROVED_PORT_VERSION = X.Y.Z` in
+   the Makefile and include
+   `$(PROVED_PORT_HOME)/make/proved-port.mk` (`PROVED_PORT_HOME ?=
+   /usr/share/proved-port`); the package puts `verus-count` on PATH.
+   The pins move together (with the marketplace ref, where the port's
+   `.claude/settings.json` names one), through the deps template's kit entry
+   (`kit/count/README.md`, "Adopting: the package"). On a Mac, install
+   the counter with `cargo install --locked --git <proved-port's URL>
+   --tag vX.Y.Z verus-count` (or `--path kit/count` from a clone at the
+   tag), point `PROVED_PORT_HOME` at an install root laid out as
+   `/usr/share/proved-port`, and pass `VERUS_COUNT` when the counter is
+   not on PATH. A port on a vendored 0.2.4 copy moves to the package in
+   one PR (`kit/count/README.md`, "Moving from a vendored copy").
 3. Prove leaf modules first (UTF decoding, tables, parsers), where vstd
    already has a specification to prove against.
 4. Move outward one theorem per PR: each lands `verus/theorems/<ID>.md`
