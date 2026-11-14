@@ -171,8 +171,8 @@ updates:
     PROVED_PORT_VERSION in the Makefile, and the `ref` (vX.Y.Z) of the
     proved-port marketplace in .claude/settings.json; move them together,
     in this one pull request, to the newest theseus-proved-port release in
-    Wolfi that is at least 7 days old. If the pin is already that release,
-    change nothing. Install
+    Wolfi, with no waiting period: the kit is first-party. If the pin is
+    already that release, change nothing. Install
     the new package with apk in the guest and commit the pin moves before
     you run anything; fold later fixes in this run into that commit, and
     on a turn add a commit on top of the pull request's head. Then run
@@ -184,16 +184,35 @@ updates:
     has with a blank line where the port's own comments follow it (the
     header is the leading comment, up to its first non-comment line), and
     delete it where nothing of the port's follows. Change nothing else in
-    those files. Then run `make lint`, `make verus-headers`, `make
-    verus VERUS_BASE=none` (a local run; the verus check passes the base)
-    and `make kani`. The body names the suites the guest ran and any suite
-    it did not finish. verus/FLOOR never goes down and never gains a
+    those files. Then apply what the new release asks of ports that is
+    new since the release the pin moved from, as its notes say:
+    /usr/share/proved-port/CHANGELOG.md where the package has one. A
+    package with no CHANGELOG leaves only the new release's files in the
+    guest, so nothing says what is new: then apply only the example below,
+    and list in the body, for a person, anything the installed templates'
+    PORT-README.md and README.md or the targets list atop proved-port.mk
+    ask that the port does not yet follow. Make only the changes that fall in this entry's
+    paths, and list anything else the release asks for in the body, for a
+    person. For example, when a release adds `make verify`, which runs
+    VERIFY_TARGETS, set VERIFY_TARGETS in the Makefile to every target the
+    port's checks verify with Verus and Kani, their controls and extra
+    quanta included, but not its other verifying checks (miri, fuzz,
+    isla, GenMC, loom), naming only make targets that exist: a check that verifies through
+    make variables or a script, with no target of its own, is listed in
+    the body for a person, never given a new target; and add `verify` to
+    the Makefile's fallback list
+    of kit targets where it has one. Then run `make lint`,
+    `make verus-headers`, `make verus VERUS_BASE=none` (a local run; the
+    verus check passes the base) and `make kani`. The body names the
+    suites the guest ran, any suite it did not finish, and what the
+    release asked of the port. verus/FLOOR never goes down and never gains a
     `lowered` line from this entry, and verus/RLIMIT gains no
     `rlimit-raised` line. When the new counter fails a gate the old one
     passed (a lower share, a new REACH or MINTS row, rlimit headroom, a
-    configuration it refuses), fix nothing in the port's code or ledgers:
-    leave the bump for a person, as a draft, and say in the body which
-    gate fails and what it reports. Do not edit .chainguard/deps.yaml
+    configuration it refuses), fix nothing in the port's code or ledgers,
+    even where the release's notes ask for a change there (this rule
+    wins): leave the bump for a person, as a draft, and say in the body
+    which gate fails and what it reports. Do not edit .chainguard/deps.yaml
     unless a person asks in a comment.
 
 - name: tools
@@ -250,7 +269,7 @@ updates:
     entry), and fuzz/diff's known rows. deviations.txt only loses lines: a
     block of the new tests that {PORT} fails is a regression to fix, or,
     if too large for this pull request, to list in the body for a person,
-    never a line to add unless a person asks in a comment. Run `make
+    never a line to add: the ratchet only shrinks. Run `make
     conformance`, `make test`, `make lint` and `make verus
     VERUS_BASE=none` (a local run; the verus check passes the base); verus/FLOOR
     never goes down and never gains a `lowered` line from this entry.
