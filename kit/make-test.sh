@@ -886,6 +886,10 @@ check_block() {
   awk -v name="  $1:" '$0 == name { on = 1; next } on && /^  [a-z#]/ { exit } on { print }' "$yaml"
 }
 check_block verus | grep -q '^    steps: &verus-steps$' || fail "verus.yaml: verus does not define &verus-steps"
+# The steps hold the Verus files' headers first, so verus-main does too.
+check_block verus | awk '/^      - name:/ { n++ } /^        cmd: \[make, verus-headers\]$/ { print n; exit }' > "$tmp/headers-step"
+[ "$(cat "$tmp/headers-step")" = 1 ] \
+  || { check_block verus >&2; fail "verus.yaml: the verus steps do not run make verus-headers first"; }
 [ "$(check_block verus-main | grep -c '^    steps:')" -eq 1 ] || fail "verus.yaml: verus-main has no steps line"
 check_block verus-main | grep -q '^    steps: \*verus-steps$' \
   || { check_block verus-main >&2; fail "verus.yaml: verus-main does not run verus's steps (steps: *verus-steps)"; }
@@ -912,6 +916,6 @@ fi
 [ ! -s "$tmp/stubmake.log" ] || { cat "$tmp/stubmake.log" >&2; fail "the verus proofs step, no base: got = make ran, want = it fails first"; }
 grep -q 'no base revision to compare verus/FLOOR with' "$tmp/nobase.err" \
   || { cat "$tmp/nobase.err" >&2; fail "the verus proofs step, no base: the message does not say so"; }
-echo "ok verus and verus-main pass CHAINGUARD_BASE_REVISION as VERUS_BASE, and fail without it"
+echo "ok verus and verus-main run make verus-headers first, then pass CHAINGUARD_BASE_REVISION as VERUS_BASE, and fail without it"
 
 echo "PASS"

@@ -18,7 +18,9 @@ marketplace ref in `.claude/settings.json`), so no file names it in a
 line of its own. `make verus-headers`
 (`/usr/share/proved-port/make/headers.sh`) holds each file's header,
 its whole leading `#` comment, to the installed template's, so the
-port's own comments go after a blank line below it.
+port's own comments go after a blank line below it. The verus checks
+(`.chainguard/ci/verus.yaml`) run it as their first step, so a header
+that drifts fails the pull request that drifts it.
 
 `AGENTS.md` and `CONTRIBUTING.md` point at those headers rather than
 restating them.
