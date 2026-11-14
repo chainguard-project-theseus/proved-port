@@ -256,5 +256,185 @@ done
 PATH=$tmp/stale:$PATH make -s -n -C "$installed" kani-list PROVED_PORT_VERSION="$version" > /dev/null \
   || fail "make -n kani-list, a stale counter: got = failure, want = success (it runs no counter)"
 
+# --- make verus-headers, installed and vendored --------------------------
+# held PORT KITLINE: PORT's copy of each Verus file VERUS-FILES names,
+# taken from the installed templates: with the kit line naming this kit
+# (KITLINE yes, as a vendored port has it), or with no kit line (no, as
+# an installed port has it).
+held() {
+  grep -v -e '^#' -e '^[[:space:]]*$' "$home/make/VERUS-FILES" | while IFS= read -r f; do
+    mkdir -p "$1/$(dirname "$f")"
+    if [ "$2" = yes ]; then
+      sed "s|^# kit: proved-port v{KIT_VERSION} ({KIT_SHA})\$|# kit: proved-port v$version ($sha)|" \
+        "$home/templates/$f" > "$1/$f"
+    else
+      sed '/^# kit: proved-port /d' "$home/templates/$f" > "$1/$f"
+    fi
+  done
+}
+hdr_installed=$tmp/hdr-installed
+mkdir "$hdr_installed"
+cp "$installed/Makefile" "$hdr_installed/Makefile"
+held "$hdr_installed" no
+! grep -rq '^# kit:' "$hdr_installed/verus" "$hdr_installed/.chainguard" \
+  || fail "the installed fixture still has a # kit: line"
+hdr_vendored=$tmp/hdr-vendored
+mkdir "$hdr_vendored"
+sh "$kitrepo/kit/sync.sh" "$hdr_vendored" > /dev/null
+cp "$vendored/Makefile" "$hdr_vendored/Makefile"
+held "$hdr_vendored" yes
+
+# headers PORT [VAR=VALUE...]: make verus-headers in PORT, output in
+# $tmp/out (both streams), status in $hdr_rc.
+headers() {
+  _port=$1
+  shift
+  hdr_rc=0
+  make -s -C "$_port" verus-headers "$@" > "$tmp/out" 2>&1 || hdr_rc=$?
+}
+headers "$hdr_vendored"
+[ "$hdr_rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "make verus-headers, vendored: got = failure, want = success"; }
+cp "$tmp/out" "$tmp/hdr-vendored.out"
+headers "$hdr_installed" PROVED_PORT_VERSION="$version"
+[ "$hdr_rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "make verus-headers, installed: got = failure, want = success"; }
+expect "make verus-headers, installed, says what vendored does" \
+  "$(cat "$tmp/out")" "$(cat "$tmp/hdr-vendored.out")"
+[ "$(grep -c '^ok ' "$tmp/out")" -eq "$(grep -cv -e '^#' -e '^[[:space:]]*$' "$home/make/VERUS-FILES")" ] \
+  || { cat "$tmp/out" >&2; fail "make verus-headers, installed: got = not every listed file ok, want = all"; }
+
+# The port's own old verus/make/templates and verus/count/KIT are not read.
+mkdir -p "$hdr_installed/verus/make/templates/verus" "$hdr_installed/verus/count"
+echo '# something the kit never said' > "$hdr_installed/verus/make/templates/verus/FLOOR.tmpl"
+printf 'commit 0000000000000000000000000000000000000000\ntag v0.0.0\n' > "$hdr_installed/verus/count/KIT"
+headers "$hdr_installed"
+[ "$hdr_rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "make verus-headers, installed, a stale vendored copy in the port: got = failure, want = success (it reads the installed kit)"; }
+rm -r "$hdr_installed/verus/make" "$hdr_installed/verus/count"
+echo "ok make verus-headers, installed, reads the installed templates and KIT"
+
+# A file the installed directory holds but VERUS-FILES does not name is
+# not held, however the port has reshaped it.
+[ -f "$home/templates/.chainguard/deps.yaml" ] || fail "the install has no .chainguard/deps.yaml template"
+mkdir -p "$hdr_installed/.chainguard"
+echo '# the port reshaped this' > "$hdr_installed/.chainguard/deps.yaml"
+headers "$hdr_installed"
+[ "$hdr_rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "make verus-headers, installed, a reshaped deps.yaml: got = failure, want = success"; }
+! grep -q 'deps.yaml' "$tmp/out" || { cat "$tmp/out" >&2; fail "make verus-headers, installed: it held deps.yaml"; }
+echo "ok make verus-headers, installed, holds only what VERUS-FILES names"
+
+# Drift in the port's file fails, naming the installed template.
+cp "$hdr_installed/verus/FLOOR" "$tmp/floor.saved"
+awk 'NR == 2 { print "# something the kit never said"; next } { print }' "$tmp/floor.saved" > "$hdr_installed/verus/FLOOR"
+headers "$hdr_installed"
+[ "$hdr_rc" -ne 0 ] || fail "make verus-headers, installed, a drifted verus/FLOOR: got = success, want = failure"
+grep -q "headers: verus/FLOOR: the header drifted from the kit's ($home/templates/verus/FLOOR)" "$tmp/out" \
+  || { cat "$tmp/out" >&2; fail "make verus-headers, installed, drift: the message does not name the installed template"; }
+cp "$tmp/floor.saved" "$hdr_installed/verus/FLOOR"
+echo "ok make verus-headers, installed, fails a drifted header"
+
+# Installed, a `# kit:` line a port still carries ends its header and is
+# not read, whatever commit it names.
+awk -v line="# kit: proved-port v0.0.0 (1234567890abcdef)" '!done && !/^#/ { print line; done = 1 } { print }' \
+  "$tmp/floor.saved" > "$hdr_installed/verus/FLOOR"
+grep -q '^# kit: proved-port v0.0.0 (1234567890abcdef)$' "$hdr_installed/verus/FLOOR" || fail "the stale kit line was not planted"
+headers "$hdr_installed"
+[ "$hdr_rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "make verus-headers, installed, a stale kit line: got = failure, want = success (not read)"; }
+cp "$tmp/floor.saved" "$hdr_installed/verus/FLOOR"
+echo "ok make verus-headers, installed, needs no kit line and reads none"
+
+# Vendored still holds each file's kit line: one missing, or naming
+# another commit, fails.
+cp "$hdr_vendored/verus/FLOOR" "$tmp/vfloor.saved"
+sed '/^# kit: proved-port /d' "$tmp/vfloor.saved" > "$hdr_vendored/verus/FLOOR"
+headers "$hdr_vendored"
+[ "$hdr_rc" -ne 0 ] || fail "make verus-headers, vendored, no kit line: got = success, want = failure"
+grep -q "headers: verus/FLOOR: its leading comment has no \`# kit: proved-port VERSION\` line" "$tmp/out" \
+  || { cat "$tmp/out" >&2; fail "make verus-headers, vendored, no kit line: the message does not say so"; }
+sed "s|^# kit: proved-port v$version ($sha)\$|# kit: proved-port v$version (1234567890abcdef)|" "$tmp/vfloor.saved" > "$hdr_vendored/verus/FLOOR"
+headers "$hdr_vendored"
+[ "$hdr_rc" -ne 0 ] || fail "make verus-headers, vendored, another commit's kit line: got = success, want = failure"
+grep -q "does not name the kit commit verus/count/KIT records" "$tmp/out" \
+  || { cat "$tmp/out" >&2; fail "make verus-headers, vendored, kit line: the message does not name verus/count/KIT"; }
+cp "$tmp/vfloor.saved" "$hdr_vendored/verus/FLOOR"
+echo "ok make verus-headers, vendored, still checks each kit line"
+
+# Only proved-port.mk's arguments choose installed mode: a vendored port
+# whose environment names the installed paths, under any of the names an
+# earlier draft read, is still held to its vendored templates and kit
+# lines, and a drifted header still fails.
+awk 'NR == 2 { print "# something the kit never said"; next } { print }' "$tmp/vfloor.saved" > "$hdr_vendored/verus/FLOOR"
+hdr_rc=0
+PROVED_PORT_TEMPLATES=$home/templates PROVED_PORT_KIT=$home/KIT PROVED_PORT_FILES=$home/make/VERUS-FILES \
+  PROVED_PORT_INSTALLED=yes make -s -C "$hdr_vendored" verus-headers > "$tmp/out" 2>&1 || hdr_rc=$?
+[ "$hdr_rc" -ne 0 ] || { cat "$tmp/out" >&2; fail "make verus-headers, vendored, installed paths in the environment: got = success on a drifted header, want = failure"; }
+grep -q "headers: verus/FLOOR: the header drifted from the kit's (verus/make/templates/verus/FLOOR.tmpl)" "$tmp/out" \
+  || { cat "$tmp/out" >&2; fail "make verus-headers, vendored, environment: it did not hold the port to its vendored template"; }
+# Nor `make -e`, which gives the environment precedence over the
+# Makefile, nor the command line: PROVED_PORT_INSTALLED, a
+# PROVED_PORT_HOME of one-line templates whose KIT matches, and the pin.
+oneline=$tmp/oneline
+mkdir -p "$oneline/templates"
+cp "$home/KIT" "$oneline/KIT"
+grep -v -e '^#' -e '^[[:space:]]*$' "$home/make/VERUS-FILES" > "$tmp/oneline-files"
+while IFS= read -r f; do
+  mkdir -p "$oneline/templates/$(dirname "$f")"
+  echo '# one line' > "$oneline/templates/$f"
+done < "$tmp/oneline-files"
+hdr_rc=0
+PROVED_PORT_INSTALLED=yes PROVED_PORT_HOME=$oneline PROVED_PORT_VERSION=$version \
+  make -e -s -C "$hdr_vendored" verus-headers > "$tmp/out" 2>&1 || hdr_rc=$?
+[ "$hdr_rc" -ne 0 ] || { cat "$tmp/out" >&2; fail "make -e verus-headers, vendored, PROVED_PORT_INSTALLED=yes in the environment: got = success on a drifted header, want = failure"; }
+grep -q "the header drifted from the kit's (verus/make/templates/verus/FLOOR.tmpl)" "$tmp/out" \
+  || { cat "$tmp/out" >&2; fail "make -e verus-headers, vendored: it did not hold the port to its vendored template"; }
+hdr_rc=0
+make -s -C "$hdr_vendored" verus-headers PROVED_PORT_INSTALLED=yes PROVED_PORT_HOME="$oneline" \
+  PROVED_PORT_VERSION="$version" > "$tmp/out" 2>&1 || hdr_rc=$?
+[ "$hdr_rc" -ne 0 ] || { cat "$tmp/out" >&2; fail "make verus-headers PROVED_PORT_INSTALLED=yes, vendored: got = success on a drifted header, want = failure"; }
+grep -q "the header drifted from the kit's (verus/make/templates/verus/FLOOR.tmpl)" "$tmp/out" \
+  || { cat "$tmp/out" >&2; fail "make verus-headers PROVED_PORT_INSTALLED=yes, vendored: it did not hold the port to its vendored template"; }
+cp "$tmp/vfloor.saved" "$hdr_vendored/verus/FLOOR"
+hdr_rc=0
+(cd "$hdr_vendored" && sh verus/make/headers.sh --installed "$home/templates" > "$tmp/out" 2>&1) || hdr_rc=$?
+[ "$hdr_rc" -eq 2 ] || { cat "$tmp/out" >&2; fail "headers.sh --installed with too few arguments: got = exit $hdr_rc, want = exit 2"; }
+echo "ok make verus-headers: only proved-port.mk's arguments choose installed mode"
+
+# Templates with no kit line (as the kit's are once the ports have moved):
+# installed passes; vendored holds the port to the text above its own kit
+# line, and still requires that line.
+grep -v -e '^#' -e '^[[:space:]]*$' "$home/make/VERUS-FILES" > "$tmp/held-files"
+while IFS= read -r f; do
+  cp "$home/templates/$f" "$tmp/nokit.saved"
+  sed '/^# kit: proved-port /d' "$tmp/nokit.saved" > "$home/templates/$f"
+  if [ -f "$hdr_vendored/verus/make/templates/$f.tmpl" ]; then
+    sed '/^# kit: proved-port /d' "$tmp/nokit.saved" > "$hdr_vendored/verus/make/templates/$f.tmpl"
+  fi
+done < "$tmp/held-files"
+headers "$hdr_installed"
+[ "$hdr_rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "make verus-headers, installed, templates with no kit line: got = failure, want = success"; }
+headers "$hdr_vendored"
+[ "$hdr_rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "make verus-headers, vendored, templates with no kit line: got = failure, want = success"; }
+sed '/^# kit: proved-port /d' "$tmp/vfloor.saved" > "$hdr_vendored/verus/FLOOR"
+headers "$hdr_vendored"
+[ "$hdr_rc" -ne 0 ] || fail "make verus-headers, vendored, templates and port with no kit line: got = success, want = failure"
+cp "$tmp/vfloor.saved" "$hdr_vendored/verus/FLOOR"
+(
+  cd "$kitrepo"
+  while IFS= read -r f; do
+    cp "kit/templates/$f" "$home/templates/$f"
+    if [ -f "$hdr_vendored/verus/make/templates/$f.tmpl" ]; then
+      cp "kit/templates/$f" "$hdr_vendored/verus/make/templates/$f.tmpl"
+    fi
+  done < "$tmp/held-files"
+)
+echo "ok make verus-headers, templates with no kit line: installed passes, vendored still needs the port's"
+
+# A template VERUS-FILES names that is not installed fails.
+mv "$home/templates/verus/RLIMIT" "$tmp/rlimit.saved"
+headers "$hdr_installed"
+[ "$hdr_rc" -ne 0 ] || fail "make verus-headers, installed, a listed template missing: got = success, want = failure"
+grep -q "names verus/RLIMIT, but $home/templates/verus/RLIMIT is not installed" "$tmp/out" \
+  || { cat "$tmp/out" >&2; fail "make verus-headers, installed, a missing template: the message does not say so"; }
+mv "$tmp/rlimit.saved" "$home/templates/verus/RLIMIT"
+echo "ok make verus-headers, installed, fails a listed template not installed"
+
 echo "ok kit $sha installed as the package installs it"
 echo PASS

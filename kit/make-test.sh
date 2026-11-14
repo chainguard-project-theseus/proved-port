@@ -655,9 +655,12 @@ badtemplate .chainguard/review-prompt.md "a template whose vendored-kit item is 
 badtemplate .chainguard/review-prompt.md "a template whose vendored-kit item is gone" \
   '/^- The vendored kit/ { skip = 1; next } skip && (/^- / || /^$/) { skip = 0 } skip { next } { print }' \
   "verus/make/templates/.chainguard/review-prompt.md.tmpl has no \`- The vendored kit\` item"
-badtemplate verus/count.toml "a template with no kit line" \
-  '/^# kit:/ { next } { print }' \
-  "verus/make/templates/verus/count.toml.tmpl has no \`# kit: proved-port\` line, so it holds nothing"
+# A template with no kit line holds its leading comment (installed
+# ports' templates have none), so only one with no leading comment at
+# all holds nothing.
+badtemplate verus/count.toml "a template with no leading comment" \
+  '!body && /^#/ { next } { body = 1; print }' \
+  "verus/make/templates/verus/count.toml.tmpl has no leading comment, so it holds nothing"
 bad verus/RLIMIT "a kit line naming another commit" '/^# kit:/ { print "# kit: proved-port 0123456789abcdef"; next } { print }'
 bad verus/RLIMIT "a kit line naming a tag the kit has not" '/^# kit:/ { print "# kit: proved-port kit/v0.1.0"; next } { print }'
 bad verus/RLIMIT "a kit line with too short a sha" "/^# kit:/ { print \"# kit: proved-port $(echo "$sha" | cut -c1-6)\"; next } { print }"

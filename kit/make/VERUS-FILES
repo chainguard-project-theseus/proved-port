@@ -2,8 +2,11 @@
 # verus/make/templates/ (each as NAME.tmpl, so that no vendored path ends
 # in a file name the port's code owners protect, such as
 # reviewers.yaml), and so the files `make verus-headers`
-# (headers.sh) holds a port's to, one a line. Each holds its header, the
-# leading `#` lines through its `# kit: proved-port` line, but
+# (headers.sh) holds a port's to, one a line; an installed port's are
+# read from the package's templates/ under these names. Each holds its
+# header, the leading `#` lines up to a `# kit: proved-port` line where
+# it has one (a vendored port's file must; an installed port's need not,
+# and its header is then its whole leading comment), but
 # .chainguard/review-prompt.md, which holds its vendored-kit rule (the
 # `- The vendored kit` item). The kit's other templates (conformance,
 # consumers, fuzz, test, lint, the environments, develop.yaml,
