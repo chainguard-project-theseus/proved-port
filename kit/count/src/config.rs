@@ -887,11 +887,135 @@ pub(crate) fn normal(path: &str) -> PathBuf {
         .collect()
 }
 
-/// `text` with each of `pairs`' first strings replaced by its second.
+/// `text` with each of `pairs`' first strings replaced by its second,
+/// then with each Verus keyword that names a binding outside `verus!`
+/// written as a raw identifier ([`raw_keywords`]).
 pub(crate) fn stand_in(pairs: &[[String; 2]], text: &str) -> String {
-    pairs
-        .iter()
-        .fold(text.to_owned(), |t, [from, to]| t.replace(from, to))
+    raw_keywords(
+        &pairs
+            .iter()
+            .fold(text.to_owned(), |t, [from, to]| t.replace(from, to)),
+    )
+}
+
+/// The words Verus's syntax reserves beyond Rust's (verus_syn's
+/// `define_keywords!`, its Verus section). Ordinary Rust may use any of
+/// them as a name, but the parser reads one where a binding is declared
+/// as a mode or clause (`exec: u8` as a field, `let tracked = ..`).
+const VERUS_KEYWORDS: [&str; 52] = [
+    "spec",
+    "proof",
+    "axiom",
+    "exec",
+    "open",
+    "closed",
+    "uninterp",
+    "ghost",
+    "tracked",
+    "requires",
+    "recommends",
+    "ensures",
+    "default_ensures",
+    "returns",
+    "decreases",
+    "with",
+    "opens_invariants",
+    "invariant_except_break",
+    "no_unwind",
+    "invariant",
+    "invariant_ensures",
+    "assert",
+    "assume",
+    "reveal",
+    "reveal_with_fuel",
+    "hide",
+    "implies",
+    "by",
+    "forall",
+    "exists",
+    "choose",
+    "is",
+    "isnt",
+    "FnSpec",
+    "spec_fn",
+    "proof_fn",
+    "via",
+    "when",
+    "any",
+    "none",
+    "has",
+    "hasnt",
+    "global",
+    "size_of",
+    "layout",
+    "matches",
+    "broadcast",
+    "group",
+    "assume_specification",
+    "atomically",
+    "outer_mask",
+    "inner_mask",
+];
+
+/// `text` with each Verus keyword ([`VERUS_KEYWORDS`]) that names a
+/// binding outside a `verus!` invocation written as a raw identifier
+/// (`r#exec`), which Rust reads as the same name and the parser as an
+/// identifier. A binding is a name followed by a single `:` (a field, a
+/// parameter, a typed `let`) or after `let`, `mut` or `ref`. Text inside
+/// `verus! { .. }` is Verus's syntax and is left alone, as is text that
+/// does not lex, which the parse then reports. Only `r#` is added, on the
+/// name's own line, so every line keeps its number.
+fn raw_keywords(text: &str) -> String {
+    let Ok(tokens) = text.parse::<proc_macro2::TokenStream>() else {
+        return text.to_owned();
+    };
+    let mut at = Vec::new();
+    keyword_bindings(tokens, &mut at);
+    if at.is_empty() {
+        return text.to_owned();
+    }
+    let mut lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
+    // Right to left within a line, so an insertion moves none still to come.
+    at.sort_by(|a, b| b.cmp(a));
+    for (line, column) in at {
+        if let Some(l) = lines.get_mut(line - 1) {
+            let byte = l.char_indices().nth(column).map_or(l.len(), |(i, _)| i);
+            l.insert_str(byte, "r#");
+        }
+    }
+    lines.join("\n")
+}
+
+/// The line and column of each Verus keyword in `tokens` that names a
+/// binding ([`raw_keywords`]), outside any `verus!` invocation's body.
+fn keyword_bindings(tokens: proc_macro2::TokenStream, at: &mut Vec<(usize, usize)>) {
+    use proc_macro2::{Spacing, TokenTree};
+    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+    for (i, t) in tokens.iter().enumerate() {
+        match t {
+            TokenTree::Group(g) => {
+                let verus_body = i >= 2
+                    && matches!(&tokens[i - 1], TokenTree::Punct(p) if p.as_char() == '!')
+                    && matches!(&tokens[i - 2], TokenTree::Ident(m) if m == "verus");
+                if !verus_body {
+                    keyword_bindings(g.stream(), at);
+                }
+            }
+            TokenTree::Ident(id) if VERUS_KEYWORDS.contains(&id.to_string().as_str()) => {
+                let typed = matches!(
+                    tokens.get(i + 1),
+                    Some(TokenTree::Punct(p)) if p.as_char() == ':' && p.spacing() == Spacing::Alone
+                );
+                let bound = i > 0
+                    && matches!(&tokens[i - 1], TokenTree::Ident(b) if b == "let" || b == "mut" || b == "ref");
+                if typed || bound {
+                    let start = id.span().start();
+                    at.push((start.line, start.column));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1518,5 +1642,40 @@ home = "crates/pcre3-capi/src/object.rs"
         let pairs = [["assert::".to_string(), "assrtx::".to_string()]];
         let got = stand_in(&pairs, "use assert::x; assert::y();");
         assert_eq!(got, "use assrtx::x; assrtx::y();");
+    }
+
+    // A Verus keyword naming a binding outside `verus!` (a field, a
+    // parameter, a `let`) becomes a raw identifier, on its own line; a
+    // path, a call, a field read, a function's name and anything inside
+    // `verus!` (bare or by path) stay as written, as does text that does
+    // not lex.
+    #[test]
+    fn verus_keywords_naming_bindings_become_raw_identifiers() {
+        for (text, want) in [
+            (
+                "struct S {\n    pub exec: u8,\n    tracked: u8,\n}\n",
+                "struct S {\n    pub r#exec: u8,\n    r#tracked: u8,\n}\n",
+            ),
+            (
+                "fn f(exec: u8) { let tracked = 1; let mut ghost = 2; let ref spec = 3; }",
+                "fn f(r#exec: u8) { let r#tracked = 1; let mut r#ghost = 2; let ref r#spec = 3; }",
+            ),
+            (
+                "fn exec() { tracked(); s.exec; exec::x(); let é = 0; let proof = 1; }",
+                "fn exec() { tracked(); s.exec; exec::x(); let é = 0; let r#proof = 1; }",
+            ),
+            (
+                "verus! { proof fn p() { let tracked x = 1u8; } }\nstruct S { exec: u8 }",
+                "verus! { proof fn p() { let tracked x = 1u8; } }\nstruct S { r#exec: u8 }",
+            ),
+            (
+                "::vstd::prelude::verus! { struct T { tracked exec: u8 } }",
+                "::vstd::prelude::verus! { struct T { tracked exec: u8 } }",
+            ),
+            ("struct S { exec: u8 } \"", "struct S { exec: u8 } \""),
+        ] {
+            let got = stand_in(&[], text);
+            assert_eq!(got, want, "{text:?}: got = {got:?}, wanted = {want:?}");
+        }
     }
 }
