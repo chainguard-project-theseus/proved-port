@@ -111,7 +111,11 @@
 //! function's `#[verifier::rlimit]` may rise past REV's only with a new
 //! `rlimit-raised` line in verus/RLIMIT. A function that loses its
 //! attribute runs under the default (10), so dropping one below the
-//! default is a rise too.
+//! default is a rise too. A function's limit is matched to the statistics
+//! by the name Verus gives it: a method's is its type's path, from the
+//! module that defines the type, not the module of its `impl`
+//! ([`Counter::name_methods`]). A `#[verifier::rlimit]` on a function the
+//! statistics do not name fails the run, and every such limit is named.
 //!
 //! With `[inputs]`, it checks compile's inputs (verus/theorems/CD1.md,
 //! [`inputs`]): it fails when a function reachable from the configured
@@ -212,6 +216,19 @@ struct Counter {
     /// The type (an `impl`) or trait whose functions [`Counter::items`] is
     /// walking; empty for free functions.
     owner: String,
+    /// Whether [`Counter::owner`] is an `impl`'s type, not a trait.
+    owner_impl: bool,
+    /// The type parameters of the `impl` [`Counter::items`] is walking
+    /// (`impl<S: Spec> Tr for S` declares `S`).
+    owner_params: Vec<String>,
+    /// The path (module, then name) of each struct, enum, union and `type`
+    /// alias the walk read, by which [`Counter::name_methods`] finds the
+    /// type an `impl` names.
+    type_paths: std::collections::BTreeSet<Vec<String>>,
+    /// Each method of an `impl` that [`Counter::record`] named by the
+    /// `impl`'s module, renamed by its type's once the crate is walked
+    /// ([`Counter::name_methods`]).
+    methods: Vec<Method>,
     /// The module [`Counter::items`] is walking, as Verus names it: the
     /// crate (`pcre3_syntax`), then each module of the file's path and of
     /// any inline `mod` around the item.
@@ -413,6 +430,10 @@ impl Counter {
             aliases: BTreeMap::new(),
             traits: std::collections::BTreeSet::new(),
             owner: String::new(),
+            owner_impl: false,
+            owner_params: Vec::new(),
+            type_paths: std::collections::BTreeSet::new(),
+            methods: Vec::new(),
             module: Vec::new(),
             scope: String::new(),
             limits: Vec::new(),
@@ -459,6 +480,19 @@ struct FnPtrs {
     rules: usize,
     /// Each invocation: crate, file, line and the tokens it passes.
     uses: Vec<(String, PathBuf, usize, TokenStream)>,
+}
+
+/// A method of an `impl` Verus checks, as [`Counter::record`] first names
+/// it: that name (the `impl`'s module, type and method), where it starts,
+/// the `impl`'s module, its type as written, its type parameters, and the
+/// method's name.
+struct Method {
+    name: String,
+    at: String,
+    module: Vec<String>,
+    owner: String,
+    params: Vec<String>,
+    ident: String,
 }
 
 /// One executable function, for the recursion check ([`recursive`]): its
@@ -2314,6 +2348,16 @@ impl Counter {
             self.verus_fns
                 .entry(name.clone())
                 .or_insert_with(|| at.clone());
+            if self.owner_impl {
+                self.methods.push(Method {
+                    name: name.clone(),
+                    at: at.clone(),
+                    module: self.module.clone(),
+                    owner: self.owner.clone(),
+                    params: self.owner_params.clone(),
+                    ident: sig.ident.to_string(),
+                });
+            }
             match rlimit_attr(attrs) {
                 Ok(None) => {}
                 Ok(Some(units)) => self.limits.push(rlimit::Limit { name, at, units }),
@@ -2762,6 +2806,21 @@ impl Counter {
                 }
                 self.emitted.extend(found);
             }
+            // A type an expansion writes is kept too: it shadows a glob
+            // import of the same name, as one the file writes does.
+            let defined = match item {
+                Item::Struct(s) => Some((&s.attrs, &s.ident)),
+                Item::Enum(e) => Some((&e.attrs, &e.ident)),
+                Item::Union(u) => Some((&u.attrs, &u.ident)),
+                Item::Type(t) => Some((&t.attrs, &t.ident)),
+                _ => None,
+            };
+            if let Some((attrs, ident)) = defined
+                && guarded_built(&self.guards_with(attrs), &self.atoms).ok() != Some(Built::Test)
+            {
+                self.type_paths
+                    .insert([self.module.clone(), vec![ident.to_string()]].concat());
+            }
             // An expansion is walked for its functions alone
             // ([`Counter::record`]).
             if self.expansion.is_some()
@@ -2796,6 +2855,18 @@ impl Counter {
                     let outer = std::mem::replace(
                         &mut self.owner,
                         verus_syn::__private::ToTokens::to_token_stream(&*i.self_ty).to_string(),
+                    );
+                    let outer_impl = std::mem::replace(&mut self.owner_impl, true);
+                    let outer_params = std::mem::replace(
+                        &mut self.owner_params,
+                        i.generics
+                            .params
+                            .iter()
+                            .filter_map(|p| match p {
+                                verus_syn::GenericParam::Type(t) => Some(t.ident.to_string()),
+                                _ => None,
+                            })
+                            .collect(),
                     );
                     for ii in &i.items {
                         if let ImplItem::Fn(f) = ii {
@@ -2836,6 +2907,8 @@ impl Counter {
                         }
                     }
                     self.owner = outer;
+                    self.owner_impl = outer_impl;
+                    self.owner_params = outer_params;
                     self.leave(was);
                 }
                 Item::Trait(t) => {
@@ -2848,6 +2921,7 @@ impl Counter {
                         self.traits.insert(t.ident.to_string());
                     }
                     let outer = std::mem::replace(&mut self.owner, t.ident.to_string());
+                    let outer_impl = std::mem::replace(&mut self.owner_impl, false);
                     for ti in &t.items {
                         if let TraitItem::Fn(f) = ti
                             && let Some(block) = &f.default
@@ -2874,6 +2948,7 @@ impl Counter {
                         }
                     }
                     self.owner = outer;
+                    self.owner_impl = outer_impl;
                     self.leave(was);
                 }
                 Item::Mod(m) => {
@@ -3302,6 +3377,101 @@ impl Counter {
                 );
                 self.errors += 1;
             }
+        }
+        self.name_methods();
+    }
+
+    /// Renames each method [`Counter::record`] named by its `impl`'s
+    /// module to the name Verus gives it: the path of the item the `impl`'s
+    /// type resolves to, then the method's name (rust_verify's
+    /// `register_friendly_path_as_rust_name`), which may be in another
+    /// module than the `impl`. A method whose type [`Counter::type_path`]
+    /// cannot find keeps its first name; a limit on it then names no
+    /// function of the statistics, which fails the check
+    /// ([`rlimit::shares`]).
+    fn name_methods(&mut self) {
+        for m in std::mem::take(&mut self.methods) {
+            let Some(mut path) = self.type_path(&m.module, &m.owner, &m.params) else {
+                continue;
+            };
+            path.push(m.ident);
+            let name = path.join("::");
+            if name == m.name {
+                continue;
+            }
+            for l in self
+                .limits
+                .iter_mut()
+                .filter(|l| l.name == m.name && l.at == m.at)
+            {
+                l.name = name.clone();
+            }
+            if self.verus_fns.get(&m.name) == Some(&m.at) {
+                self.verus_fns.remove(&m.name);
+            }
+            self.verus_fns.entry(name).or_insert(m.at);
+        }
+    }
+
+    /// The path (module, then name) of the struct, enum, union or `type`
+    /// alias that an `impl` in module `here`, with type parameters
+    /// `params`, names as `owner` (its type's tokens), among those the walk
+    /// read ([`Counter::type_paths`]), found as rustc's scoping finds it:
+    /// a path's last segment in the module the rest names from `here`; a
+    /// bare name `here` defines; else one a `use` in `here` imports by
+    /// name, which settles it even when it names no type the walk read
+    /// (another crate's, a re-export); else one that exactly one of
+    /// `here`'s glob imports of this crate's modules brings in. `None` for
+    /// anything else (one of `params`, a reference, a slice, another
+    /// crate's type, a name no import settles), whose methods keep the
+    /// `impl`'s module, so a limit on one names no function of the
+    /// statistics rather than another function's.
+    fn type_path(&self, here: &[String], owner: &str, params: &[String]) -> Option<Vec<String>> {
+        let segs: Vec<String> = owner
+            .split('<')
+            .next()
+            .unwrap_or("")
+            .split("::")
+            .map(|s| s.trim().to_owned())
+            .collect();
+        if segs.iter().any(String::is_empty) {
+            return None;
+        }
+        let found = |module: Vec<String>, name: &String| {
+            let p = [module, vec![name.clone()]].concat();
+            self.type_paths.contains(&p).then_some(p)
+        };
+        let (name, prefix) = segs.split_last()?;
+        if !prefix.is_empty() {
+            return found(self.module_from(here, prefix)?, name);
+        }
+        if params.contains(name) {
+            return None;
+        }
+        if let Some(p) = found(here.to_vec(), name) {
+            return Some(p);
+        }
+        let uses: Vec<&UsePath> = self
+            .uses
+            .get(here)
+            .into_iter()
+            .flatten()
+            .filter(|(_, _, _, built)| *built != Built::Test)
+            .collect();
+        if let Some((p, ..)) = uses
+            .iter()
+            .find(|(_, glob, named, _)| !glob && named == name)
+        {
+            let (last, from) = p.split_last()?;
+            return found(self.module_from(here, from)?, last);
+        }
+        let mut globbed = uses
+            .iter()
+            .filter(|(_, glob, ..)| *glob)
+            .filter_map(|(p, ..)| found(self.module_from(here, p)?, name));
+        match (globbed.next(), globbed.next()) {
+            (Some(p), None) => Some(p),
+            _ => None,
         }
     }
 
@@ -4053,6 +4223,7 @@ impl Counter {
     fn dry_rows(&mut self, f: &verus_syn::File) -> Option<Vec<(Class, String, usize)>> {
         let tallies = self.tallies.clone();
         let (limits, errors, unresolved) = (self.limits.len(), self.errors, self.unresolved.len());
+        let methods = self.methods.len();
         let verus_fns = self.verus_fns.clone();
         let macros = self.macros.clone();
         let outer = self.dry.replace(Vec::new());
@@ -4065,6 +4236,7 @@ impl Counter {
         let failed = self.errors > errors;
         self.tallies = tallies;
         self.limits.truncate(limits);
+        self.methods.truncate(methods);
         self.unresolved.truncate(unresolved);
         // The bindings each candidate writes, and the blocks it took on
         // their rules, are kept: any of them may be the one rustc
@@ -5765,7 +5937,8 @@ fn check_rlimit(
     }
     let (covered, report) = rlimit::check_covered(crates, &stats, base.is_some());
     print!("{report}");
-    let shares = rlimit::shares(&stats, crates, limits).unwrap_or_else(|e| fail(e));
+    let shares = rlimit::shares(&stats, crates, limits)
+        .unwrap_or_else(|e| fail(e.join("\nFAIL rlimit headroom: ")));
     let (mut ok, report) = rlimit::check(&shares, &head, 15, list);
     ok &= covered;
     print!("{report}");
