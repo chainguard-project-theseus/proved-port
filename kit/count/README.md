@@ -813,17 +813,39 @@ A port takes it this way:
 
 - It pins the package, `theseus-proved-port~X.Y.Z`, in the packages of
   every check that runs a kit target (`.chainguard/ci/verus.yaml`) and
-  in `.chainguard/ci/env/dev.yaml`, which development sessions and the
-  deps agent use.
+  in the environment development sessions and the deps agent install
+  (`.chainguard/develop.yaml`, or the file its `from:` names).
 - Its Makefile sets its variables, then names the same release and
-  includes the installed make targets:
+  includes the installed make targets. The recommended form is this guard, which
+  includes them where the package is installed and, where it is not,
+  gives each kit target a recipe that fails saying so, so every other
+  target still runs:
 
   ```make
-  VERUS_CRATES = ...
+  # The proved-port kit, from the theseus-proved-port package. Set the
+  # port's variables (VERUS_CRATES, KANI_CRATES, KANI_NONE, ...) above this.
+  # PROVED_PORT_VERSION is the kit release, which the theseus-proved-port
+  # pins in the checks and in the development sessions' environment name
+  # too; the kit targets fail on any other install. Where the package is not
+  # installed, the kit targets fail with the message below, and every other
+  # target still runs; point PROVED_PORT_HOME at a root laid out as
+  # /usr/share/proved-port (make/, templates/ and KIT) and VERUS_COUNT at a
+  # counter built from the kit at that tag to run them.
   PROVED_PORT_VERSION = X.Y.Z
   PROVED_PORT_HOME ?= /usr/share/proved-port
+  ifneq ($(wildcard $(PROVED_PORT_HOME)/make/proved-port.mk),)
   include $(PROVED_PORT_HOME)/make/proved-port.mk
+  else
+  PROVED_PORT_TARGETS = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list
+  .PHONY: $(PROVED_PORT_TARGETS)
+  $(PROVED_PORT_TARGETS):
+  	@echo "$@: no proved-port kit at $(PROVED_PORT_HOME): install theseus-proved-port~$(PROVED_PORT_VERSION), or set PROVED_PORT_HOME to a kit install root (make/, templates/ and KIT, as the package lays out /usr/share/proved-port)" >&2; exit 1
+  endif
   ```
+
+  A bare `include $(PROVED_PORT_HOME)/make/proved-port.mk` works too,
+  but where the package is missing make then refuses every target, the
+  port's own `make test` included.
 
   With `PROVED_PORT_VERSION` set, every kit target fails unless
   `PROVED_PORT_HOME/KIT` records `tag vX.Y.Z`, and `make verus` and

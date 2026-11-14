@@ -35,7 +35,7 @@
 # does, so one is the default. A port whose proved code differs by
 # target (`cfg(target_arch)`, pointer width, page size) runs the proofs
 # on both, as challoc does: uncomment verus-amd64 below. A port whose
-# proofs outgrow the timeout moves up a class (pcre3: xlarge-arm64) and
+# proofs outgrow the timeout moves up a class (to xlarge-arm64, say) and
 # says why here.
 #
 # Every check here is in the port from its first commit: Checks refuses
@@ -47,17 +47,19 @@
 # none and fails with any; the first harness deletes that line. A port
 # that will never discharge a seam with Kani leaves Kani out from its
 # first commit: no kani or kani-main, no `kani~{KANI_RELEASE}` in the
-# packages here or in .chainguard/ci/env/dev.yaml, and no Kani in the
-# toolchain entry of .chainguard/deps.yaml.
+# packages here or in the development sessions' environment, and no Kani
+# in the toolchain entry of .chainguard/deps.yaml.
 #
 # verus is pinned to the release the workspace's vstd pin names
-# (Cargo.toml; bump both together, and .chainguard/ci/env/dev.yaml's),
-# and it brings the rust stream and z3 that release runs with. kani is
-# pinned to the release the Kani records under verus/seams/ name, built
-# against the same rust stream. theseus-proved-port is pinned to the kit
-# release the Makefile's PROVED_PORT_VERSION names (bump both together,
-# and .chainguard/ci/env/dev.yaml's). git reads the base revision's
-# verus/FLOOR.
+# (Cargo.toml; bump both together, and the development sessions'
+# environment's), and it brings the rust stream and z3 that release runs
+# with. kani is pinned to the release the Kani records under
+# verus/seams/ name, built against the same rust stream.
+# theseus-proved-port is pinned to the kit release the Makefile's
+# PROVED_PORT_VERSION names (bump both together, and the development
+# sessions' environment's). The development sessions' environment is
+# .chainguard/develop.yaml, or the file its `from:` names. git reads the
+# base revision's verus/FLOOR.
 # VERUS_THREADS gives Verus every vCPU of the guest (CG_CPUS), one z3
 # per module.
 version: 1

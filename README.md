@@ -56,22 +56,29 @@ marketplace's GitHub source. A port's copy of
 
 - **The package.** A port pins the kit as the Wolfi package
   `theseus-proved-port~X.Y.Z` (v0.3.0 or later), in the packages of its
-  verus checks and of `.chainguard/ci/env/dev.yaml`. The package
-  installs the counter as `verus-count`, and the make targets, their
-  scripts, the templates and a KIT record of the release under
+  verus checks and of the development sessions' environment
+  (`.chainguard/develop.yaml`, or the file its `from:` names). The
+  package installs the counter as `verus-count`, and the make targets,
+  their scripts, the templates and a KIT record of the release under
   `/usr/share/proved-port/`. The port's Makefile names the same release
-  and includes the installed targets:
+  and includes the installed targets, behind a guard so that, where the
+  package is not installed, the kit targets fail saying so and the
+  port's other targets still run:
 
   ```make
   PROVED_PORT_VERSION = X.Y.Z
   PROVED_PORT_HOME ?= /usr/share/proved-port
+  ifneq ($(wildcard $(PROVED_PORT_HOME)/make/proved-port.mk),)
   include $(PROVED_PORT_HOME)/make/proved-port.mk
+  else
+  # (each kit target fails with a message; kit/count/README.md has it)
+  endif
   ```
 
   The kit's targets then fail when the installed kit or counter is
   another release. `kit/count/README.md`, "Adopting: the package", has
-  the details, including how to build the counter on a host without the
-  package.
+  the full guard and the details, including how to build the counter on
+  a host without the package.
 - **Templates.** A new port copies `kit/templates/`: the Verus ledgers
   (`verus/FLOOR`, `RLIMIT`, `REACH`, `MINTS`, `count.toml`), the check
   files, the reviewer configuration, the Claude Code settings and the

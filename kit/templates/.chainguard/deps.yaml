@@ -160,12 +160,14 @@ updates:
     - "verus/count.toml"
     - ".chainguard/reviewers.yaml"
     - ".chainguard/review-prompt.md"
+    - ".chainguard/develop.yaml"
     - ".claude/settings.json"
   environment: dev
   merge: manual
   prompt: >-
     Move the proved-port kit. Its pin is every `theseus-proved-port~`
-    package version in .chainguard/ci/** and .chainguard/ci/env/dev.yaml,
+    package version in .chainguard/ci/** and in the development sessions'
+    environment (.chainguard/develop.yaml, or the file its `from:` names),
     PROVED_PORT_VERSION in the Makefile, and the `ref` (vX.Y.Z) of the
     proved-port marketplace in .claude/settings.json; move them together,
     in this one pull request, to the newest theseus-proved-port release in

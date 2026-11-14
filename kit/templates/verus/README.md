@@ -71,8 +71,9 @@ verus/FLOOR cites this section.}
 
 `verus-count` is the proved-port kit's coverage counter. {PORT} takes
 the kit as the theseus-proved-port package, pinned
-(`theseus-proved-port~X.Y.Z`) in `.chainguard/ci/verus.yaml` and
-`.chainguard/ci/env/dev.yaml`, with the same release as the Makefile's
+(`theseus-proved-port~X.Y.Z`) in `.chainguard/ci/verus.yaml` and the
+development sessions' environment (`.chainguard/develop.yaml`, or the
+file its `from:` names), with the same release as the Makefile's
 `PROVED_PORT_VERSION`. The package installs the counter on PATH and the
 kit's make targets under `/usr/share/proved-port/make/` (`proved-port.mk`,
 which the Makefile includes for `make verus` and `make kani`, and its

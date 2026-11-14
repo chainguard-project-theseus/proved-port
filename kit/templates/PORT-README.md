@@ -23,9 +23,12 @@ counter, from the theseus-proved-port package) prints.
 {The make targets, and the toolchain each needs.}
 
 The Verus targets need the proved-port kit at the release the Makefile's
-`PROVED_PORT_VERSION` names. The Checks environments and
-`.chainguard/ci/env/dev.yaml` install it as the Wolfi package
-`theseus-proved-port`. On a host without the package, such as a Mac,
+`PROVED_PORT_VERSION` names. The Checks environments and the
+development sessions' environment install it as the Wolfi package
+`theseus-proved-port`. The Makefile includes the kit behind a guard
+(the proved-port kit's kit/count/README.md, "Adopting: the package"),
+so where the package is not installed the Verus targets fail saying so
+and every other target still runs. On a host without the package, such as a Mac,
 install the counter at that release with `cargo install --locked --git
 <proved-port's URL> --tag vX.Y.Z verus-count` (or `cargo install --locked --path kit/count` from
 a proved-port clone at the tag), point `PROVED_PORT_HOME` at an install
