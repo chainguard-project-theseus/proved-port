@@ -54,7 +54,13 @@
 #                      each harness of that name
 #   KANI_FLAGS         flags for every cargo kani call, before `list` too
 #                      (challoc: -Z unstable-options -Z stubbing
-#                      -Z mem-predicates --ignore-global-asm, its features)
+#                      -Z mem-predicates --ignore-global-asm, its features).
+#                      A crate with `global_asm!` or a naked function
+#                      does not compile under Kani without
+#                      `-Z unstable-options --ignore-global-asm`, which
+#                      its port sets here; `cargo kani list` then fails
+#                      too, and kani.sh prints why
+#                      (KANI_FLAGS = -Z unstable-options --ignore-global-asm)
 #   KANI_LIST_FLAGS    flags after `list` (challoc: -Z stubbing
 #                      -Z mem-predicates)
 #   KANI_JOBS          harnesses at once (-j); Kani takes -j only with
@@ -188,8 +194,16 @@ harnesses() {
   lc=$1
   shift
   json=$out/list-$(fname "$lc").json
+  # cargo kani prints the build's errors on stdout, which a listing that
+  # passes has no use for; a failed one prints them on stderr, with its
+  # own stderr, so a crate that does not compile under Kani says why.
+  said=$out/list-$(fname "$lc").out
   # shellcheck disable=SC2046,SC2086
-  cargo kani $(pflag "$lc") ${KANI_FLAGS:-} "$@" list ${KANI_LIST_FLAGS:-} --format json > /dev/null
+  if ! cargo kani $(pflag "$lc") ${KANI_FLAGS:-} "$@" list ${KANI_LIST_FLAGS:-} --format json > "$said"; then
+    echo "kani: cargo kani list failed for $(fname "$lc"), printing:" >&2
+    cat "$said" >&2
+    exit 1
+  fi
   mv kani-list.json "$json"
   awk '
     /^ *"(standard|contract)-harnesses": *[{] *$/ { m = 1; next }
