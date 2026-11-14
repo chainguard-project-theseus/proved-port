@@ -1288,6 +1288,364 @@ fn a_crate_of_verus_only_proofs_is_held_to_its_headroom() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verus's statistics for crate `a`: each function in `fns` with the
+/// rlimit count it used.
+fn stats_naming(fns: &[(&str, u64)]) -> String {
+    let rows: Vec<String> = fns
+        .iter()
+        .map(|(n, used)| format!(r#"{{"function":"{n}","rlimit":{used}}}"#))
+        .collect();
+    format!(
+        r#"{{"times-ms":{{"smt":{{"smt-run-module-times":[{{"module":"m","rlimit":0,"function-breakdown":[{}]}}]}}}},"verification-results":{{"success":true,"verified":{},"errors":0}}}}"#,
+        rows.join(","),
+        fns.len()
+    )
+}
+
+/// What a method with `#[verifier::rlimit(20)]` uses in
+/// [`a_method_is_named_by_its_type_s_module`]: 60% of that limit, inside
+/// max-share 65, but 120% of the default 10. A limit put on another
+/// function leaves this one at the default, and the run fails.
+const HELD: u64 = 36_000_000;
+
+/// Verus names a method by the path of the item its `impl`'s type
+/// resolves to, not by the `impl`'s module (rust_verify's
+/// `register_friendly_path_as_rust_name`), so a method's
+/// `#[verifier::rlimit]` is named that way, the type found as rustc's
+/// scoping finds it: by its path (`super::Top`, an alias
+/// `crate::state::Alias`, `inner::Kid` through a module the `impl`'s
+/// module declares, `state::Deep` through `use crate::x::state;` though
+/// the crate root has a `state` with a `Deep`); defined in the `impl`'s module (`Local`, and
+/// `Shadow`, which a macro there writes), ahead of a glob import of the
+/// same name; imported by name (`Renamed`); or brought in by the one
+/// glob of this crate's modules that has it (`S`, though a test-only `S`
+/// sits in the `impl`'s module, and `Twice`, though the crate root has
+/// one too). A trait's default method keeps the trait's module, though a
+/// struct the glob brings in shares its name. Each statistics file also
+/// names the function each wrong place would give (using 1), so a limit
+/// put there leaves the right function at the default, over max-share.
+///
+/// A type the counter cannot place keeps the `impl`'s module, so its
+/// limit names nothing the statistics have and the run fails, each such
+/// limit named, though a function of the same name sits in a module the
+/// crate defines a type of that name in: an `impl`'s own type parameter
+/// (`S`); a type another crate's `use` imports by name (`Gone`); one an
+/// external glob brings in (`Seq`, from `vstd::prelude`), beside a glob
+/// of a sibling whose `Seq` is private; one a glob's module re-exports
+/// (`Re`, through `prelude`), beside a glob of a module whose `Re` only it
+/// sees; one two `use`s import under exclusive `cfg`s (`Cond`, `Ghosty`);
+/// one a `use` Verus's build might not compile imports, ahead of a glob
+/// that also brings it in (`Mixed`); and one a glob's module defines
+/// under a `cfg` Verus's build might not meet, beside another crate's
+/// glob (`Flip`); one only a glob of a sibling brings in whose type of
+/// that name is `pub(in crate::b)`, beside another crate's glob (`Set`);
+/// one only a glob under a `cfg` Verus's build might not meet brings in,
+/// beside another crate's glob (`Gseq`); and one a path, a glob or a
+/// `use` reaches through a first segment, `state2`, that only the crate
+/// root declares as a module, which below the root names another crate
+/// (`state2::T`, `U`, `V`); and, in modules of their own, a name a binding
+/// the walk does not see may take from the glob: a type another crate's
+/// macro may write, though its tokens never name it (`Made`, beside
+/// `elsewhere::mk2! {}`), one another crate's `thread_local!` may write
+/// (`Tl`, beside `elsewhere::thread_local! {}`), one a bare
+/// `thread_local!` not shown to be std's may write (`Tl2`, beside the
+/// crate's own `macro_rules! thread_local`; `Tl3`, beside `use
+/// elsewhere::thread_local;`; `Tl4`, std's but beside a `*` that may
+/// bring another; `Tl5`, beside a glob and another crate's
+/// `thread_local` that only Verus's build compiles), and a `use` a local
+/// macro's expansion writes (`Foo`,
+/// from `imp!()`'s `use crate::other::Foo;`). std's `thread_local!` by
+/// `::std::` writes statics alone, and split.rs's globs still place their
+/// types beside it.
+#[test]
+fn a_method_is_named_by_its_type_s_module() {
+    let lib = "use vstd::prelude::*;\nmod state;\nmod split;\nmod other;\nmod prelude;\nmod b;\nmod alt;\nmod alt2;\nmod x;\nmod state2;\nmod opaque;\nmod imp;\nmod tl;\nmod tl2;\nmod tl3;\nmod tl4;\nmod tl5;\npub struct Top;\npub struct Twice;\n";
+    let state = "pub struct S;\npub struct Named;\npub struct Local;\npub struct Walk;\npub struct Twice;\npub struct Shadow;\npub struct Gone;\npub struct Cond;\npub struct Deep;\npub struct Made;\npub struct Foo;\npub struct Tl;\npub struct Tl2;\npub struct Tl3;\npub struct Tl4;\npub struct Tl5;\npub type Alias = S;\npub trait Tr {\n    fn step(&self);\n}\n";
+    let x = "pub mod state {\n    pub struct Deep;\n}\n";
+    let state2 = "pub struct T;\npub struct U;\npub struct V;\n";
+    let other = "pub struct Seq;\npub struct Re;\npub struct Mixed;\npub struct Ghosty;\npub struct Cond;\npub struct Foo;\n";
+    // Modules apart from split.rs, each of which may bind a name the walk
+    // does not see, so that none of split.rs's globs is refused with them:
+    // another crate's macro, whose tokens never name what it writes, and
+    // a `use` a local macro's expansion writes.
+    let opaque = "use vstd::prelude::*;\nuse super::state::*;\nelsewhere::mk2! {}\n\
+verus! {\nimpl Made { #[verifier::rlimit(20)] fn made(&self) {} }\n}\n";
+    let imp = "use vstd::prelude::*;\nuse super::state::*;\n\
+macro_rules! imp { () => { use crate::other::Foo; }; }\nimp!();\n\
+verus! {\nimpl Foo { #[verifier::rlimit(20)] fn foo(&self) {} }\n}\n";
+    // Another crate's macro named `thread_local`, which may write any
+    // item, unlike std's.
+    let tl = "use vstd::prelude::*;\nuse super::state::*;\nelsewhere::thread_local! {}\n\
+verus! {\nimpl Tl { #[verifier::rlimit(20)] fn tl(&self) {} }\n}\n";
+    // A bare `thread_local!` at file level that is not shown to be std's:
+    // the crate's own macro of the name, one a `use` imports, and std's
+    // beside a `*` (here `vstd::prelude::*`'s) that may bring another.
+    let tl2 = "use vstd::prelude::*;\nuse super::state::*;\n\
+macro_rules! thread_local { ($($t:tt)*) => {}; }\nthread_local! {}\n\
+verus! {\nimpl Tl2 { #[verifier::rlimit(20)] fn tl2(&self) {} }\n}\n";
+    let tl3 = "use vstd::prelude::*;\nuse super::state::*;\nuse elsewhere::thread_local;\n\
+thread_local! { static THREE: u8 = 3; }\n\
+verus! {\nimpl Tl3 { #[verifier::rlimit(20)] fn tl3(&self) {} }\n}\n";
+    let tl4 = "use vstd::prelude::*;\nuse super::state::*;\nthread_local! { static FOUR: u8 = 4; }\n\
+verus! {\nimpl Tl4 { #[verifier::rlimit(20)] fn tl4(&self) {} }\n}\n";
+    // The glob and another crate's `thread_local` only Verus's build
+    // compiles: no shipped binding breaks std's bare rule, but Verus's
+    // build, whose names the limits take, has both. It runs in a crate of
+    // its own, with no `macro_rules! thread_local` (tl2's), which makes
+    // every bare `thread_local!` in its crate not std's.
+    let tl5 = "use vstd::prelude::verus;\n#[cfg(verus_keep_ghost)]\nuse super::state::*;\n\
+#[cfg(verus_keep_ghost)]\nuse elsewhere::thread_local;\nthread_local! { static FIVE: u8 = 5; }\n\
+verus! {\nimpl Tl5 { #[verifier::rlimit(20)] fn tl5(&self) {} }\n}\n";
+    let prelude = "pub use crate::other::Re;\n";
+    let b = "struct Seq;\npub(in crate::b) struct Re;\npub(in crate::b) struct Set;\n";
+    let alt2 = "pub struct Gseq;\n";
+    let alt = "pub struct Mixed;\npub struct Ghosty;\n#[cfg(feature = \"alternate\")]\npub struct Flip;\n";
+    let split = |uses: &str, extra: &str| {
+        format!(
+            "use vstd::prelude::*;\nuse super::state::*;\nuse crate::state::Named as Renamed;\nuse crate::x::state;\n{uses}\
+#[cfg(test)]\npub struct S;\n\
+pub mod inner {{ pub struct Kid; }}\n\
+::std::thread_local! {{ static ONE: u8 = 1; }}\n\
+::std::thread_local! {{ static TWO: u8 = 2; }}\n\
+macro_rules! shadow {{ () => {{ pub struct Shadow; }}; }}\nshadow!();\n\
+verus! {{\npub struct Local;\n\
+impl S {{ #[verifier::rlimit(20)] fn bare(&self) {{}} }}\n\
+impl super::Top {{ #[verifier::rlimit(20)] fn pathed(&self) {{}} }}\n\
+impl Renamed {{ #[verifier::rlimit(20)] fn imported(&self) {{}} }}\n\
+impl Local {{ #[verifier::rlimit(20)] fn here(&self) {{}} }}\n\
+impl crate::state::Alias {{ #[verifier::rlimit(20)] fn aliased(&self) {{}} }}\n\
+impl Twice {{ #[verifier::rlimit(20)] fn two(&self) {{}} }}\n\
+impl Shadow {{ #[verifier::rlimit(20)] fn shadowed(&self) {{}} }}\n\
+impl state::Deep {{ #[verifier::rlimit(20)] fn deep(&self) {{}} }}\n\
+impl inner::Kid {{ #[verifier::rlimit(20)] fn kid(&self) {{}} }}\n\
+trait Walk {{ #[verifier::rlimit(20)] fn walk(&self) {{}} }}\n\
+{extra}}}\n"
+        )
+    };
+    let placed: Vec<(&str, u64)> = vec![
+        ("a::state::S::bare", HELD),
+        ("a::Top::pathed", HELD),
+        ("a::state::Named::imported", HELD),
+        ("a::split::Local::here", HELD),
+        ("a::state::Alias::aliased", HELD),
+        ("a::state::Twice::two", HELD),
+        ("a::split::Shadow::shadowed", HELD),
+        ("a::split::Walk::walk", HELD),
+        ("a::x::state::Deep::deep", HELD),
+        ("a::split::inner::Kid::kid", HELD),
+        // The wrong places.
+        ("a::state::Deep::deep", 1),
+        ("a::split::S::bare", 1),
+        ("a::state::Local::here", 1),
+        ("a::Twice::two", 1),
+        ("a::state::Shadow::shadowed", 1),
+        ("a::state::Walk::walk", 1),
+    ];
+    let unplaced = "impl<S: Copy> Tr for S { #[verifier::rlimit(20)] fn step(&self) {} }\n\
+impl Tr for Gone { #[verifier::rlimit(20)] fn step(&self) {} }\n\
+impl<A> Tr for Seq<A> { #[verifier::rlimit(20)] fn step(&self) {} }\n\
+impl Re { #[verifier::rlimit(20)] fn re(&self) {} }\n\
+impl Mixed { #[verifier::rlimit(20)] fn mixed(&self) {} }\n\
+impl Ghosty { #[verifier::rlimit(20)] fn ghosty(&self) {} }\n\
+impl Cond { #[verifier::rlimit(20)] fn cond(&self) {} }\n\
+impl Flip { #[verifier::rlimit(20)] fn flip(&self) {} }\n\
+impl<A> Tr for Set<A> { #[verifier::rlimit(20)] fn step(&self) {} }\n\
+impl Tr for Gseq { #[verifier::rlimit(20)] fn step(&self) {} }\n\
+impl state2::T { #[verifier::rlimit(20)] fn t(&self) {} }\n\
+impl U { #[verifier::rlimit(20)] fn u(&self) {} }\n\
+impl V { #[verifier::rlimit(20)] fn v(&self) {} }\n";
+    let unplaced_uses = "use elsewhere::Gone;\nuse elsewhere::*;\nuse state2::*;\nuse state2::V;\nuse crate::prelude::*;\nuse crate::b::*;\nuse crate::alt::*;\n\
+#[cfg(feature = \"alternate\")]\nuse crate::alt2::*;\n\
+#[cfg(feature = \"alternate\")]\nuse crate::state::Cond;\n#[cfg(not(feature = \"alternate\"))]\nuse crate::other::Cond;\n\
+#[cfg(feature = \"alternate\")]\nuse crate::other::Mixed;\n\
+#[cfg(not(verus_keep_ghost))]\nuse crate::other::Ghosty;\n#[cfg(verus_keep_ghost)]\nuse crate::alt::Ghosty;\n";
+    let wrong = [
+        ("a::state::S::step", 1),
+        ("a::state::Gone::step", 1),
+        ("a::other::Seq::step", 1),
+        ("a::b::Seq::step", 1),
+        ("a::other::Re::re", 1),
+        ("a::b::Re::re", 1),
+        ("a::other::Mixed::mixed", 1),
+        ("a::alt::Mixed::mixed", 1),
+        ("a::other::Ghosty::ghosty", 1),
+        ("a::alt::Ghosty::ghosty", 1),
+        ("a::state::Cond::cond", 1),
+        ("a::other::Cond::cond", 1),
+        ("a::alt::Flip::flip", 1),
+        ("a::b::Set::step", 1),
+        ("a::alt2::Gseq::step", 1),
+        ("a::state2::T::t", 1),
+        ("a::state2::U::u", 1),
+        ("a::state2::V::v", 1),
+        ("a::state::Made::made", 1),
+        ("a::state::Foo::foo", 1),
+        ("a::state::Tl::tl", 1),
+        ("a::state::Tl3::tl3", 1),
+        ("a::state::Tl4::tl4", 1),
+    ];
+    let miss =
+        |name: &str| format!("#[verifier::rlimit] on {name}, which Verus's statistics do not name");
+    for (uses, extra, apart, fns, want, lines) in [
+        (
+            "",
+            "",
+            ["", "", "", "", "", "", ""],
+            placed.clone(),
+            0,
+            vec!["ok rlimit headroom: 16 functions".to_owned()],
+        ),
+        (
+            unplaced_uses,
+            unplaced,
+            [opaque, imp, tl, "", tl3, tl4, ""],
+            [&placed[..], &wrong[..]].concat(),
+            2,
+            vec![
+                miss("a::split::S::step"),
+                miss("a::split::Gone::step"),
+                miss("a::split::Seq::step"),
+                miss("a::split::Re::re"),
+                miss("a::split::Mixed::mixed"),
+                miss("a::split::Ghosty::ghosty"),
+                miss("a::split::Cond::cond"),
+                miss("a::split::Flip::flip"),
+                miss("a::split::Set::step"),
+                miss("a::split::Gseq::step"),
+                miss("a::split::T::t"),
+                miss("a::split::U::u"),
+                miss("a::split::V::v"),
+                miss("a::opaque::Made::made"),
+                miss("a::imp::Foo::foo"),
+                miss("a::tl::Tl::tl"),
+                miss("a::tl3::Tl3::tl3"),
+                miss("a::tl4::Tl4::tl4"),
+            ],
+        ),
+        (
+            "",
+            "",
+            ["", "", "", "", "", "", tl5],
+            [&placed[..], &[("a::state::Tl5::tl5", 1)][..]].concat(),
+            2,
+            vec![miss("a::tl5::Tl5::tl5")],
+        ),
+        // tl2's `macro_rules! thread_local` makes every bare
+        // `thread_local!` in its crate not std's, so it runs alone too.
+        (
+            "",
+            "",
+            ["", "", "", tl2, "", "", ""],
+            [&placed[..], &[("a::state::Tl2::tl2", 1)][..]].concat(),
+            2,
+            vec![miss("a::tl2::Tl2::tl2")],
+        ),
+    ] {
+        let dir = crate_of(
+            "rlimit-type-module",
+            &[
+                ("lib.rs", lib),
+                ("state.rs", state),
+                ("other.rs", other),
+                ("prelude.rs", prelude),
+                ("b.rs", b),
+                ("alt.rs", alt),
+                ("alt2.rs", alt2),
+                ("x.rs", x),
+                ("state2.rs", state2),
+                ("opaque.rs", apart[0]),
+                ("imp.rs", apart[1]),
+                ("tl.rs", apart[2]),
+                ("tl2.rs", apart[3]),
+                ("tl3.rs", apart[4]),
+                ("tl4.rs", apart[5]),
+                ("tl5.rs", apart[6]),
+                ("split.rs", &split(uses, extra)),
+            ],
+        );
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!("{PLAIN}[rlimit]\npath = \"verus/RLIMIT\"\n"),
+        )
+        .expect("write");
+        fs::write(dir.join("verus/RLIMIT"), "max-share 65\n").expect("write");
+        let stats = dir.join("stats.json");
+        fs::write(&stats, stats_naming(&fns)).expect("write");
+        let s = stats.to_string_lossy().into_owned();
+        let (got, out, err) = count(&dir, &["--rlimit", &s]);
+        for line in &lines {
+            assert!(
+                got == want && (out.contains(line) || err.contains(line)),
+                "{extra:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {want}, {line:?}"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// A method's limit is held to the base revision's under the name Verus
+/// gives it, its type's module, on both sides: dropping a sub-default
+/// `#[verifier::rlimit(5)]` from a method in an `impl` split from its type
+/// raises it to the default, which needs an `rlimit-raised` line.
+#[test]
+fn a_split_impl_s_limit_is_held_to_the_base() {
+    let lib = "mod state;\nmod split;\npub fn o() {}\n";
+    let state = "pub struct S;\n";
+    let split = |attr: &str| {
+        format!(
+            "use vstd::prelude::*;\nuse super::state::S;\nverus! {{\nimpl S {{\n{attr} pub fn f(&self) {{}}\n}}\n}}\n"
+        )
+    };
+    let dir = crate_of(
+        "split-rlimit-base",
+        &[
+            ("lib.rs", lib),
+            ("state.rs", state),
+            ("split.rs", &split("#[verifier::rlimit(5)]")),
+        ],
+    );
+    fs::write(dir.join("verus/count.toml"), RATCHET_CONFIG).expect("write");
+    fs::write(dir.join("verus/FLOOR"), RATCHET_FLOOR).expect("write");
+    fs::write(dir.join("verus/RLIMIT"), RATCHET_RLIMIT).expect("write");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "crates", "verus"]);
+    git(&dir, &["commit", "-q", "-m", "base"]);
+    let stats = dir.join("stats.json");
+    fs::write(&stats, stats_naming(&[("a::state::S::f", 1_000_000)])).expect("write");
+    for (case, attr, code, want) in [
+        (
+            "as committed",
+            "#[verifier::rlimit(5)]",
+            0,
+            "ok rlimit headroom: 1 functions",
+        ),
+        (
+            "dropped",
+            "",
+            1,
+            "raises a::state::S::f's rlimit from 5 to 10 with no new `rlimit-raised a::state::S::f 10 <reason>` line",
+        ),
+    ] {
+        fs::write(dir.join("crates/a/src/split.rs"), split(attr)).expect("write");
+        let (got, out, err) = count(
+            &dir,
+            &[
+                "--floor",
+                &dir.join("verus/FLOOR").to_string_lossy(),
+                "--rlimit",
+                &stats.to_string_lossy(),
+                "--base-rev",
+                "HEAD",
+            ],
+        );
+        assert!(
+            got == code && (out.contains(want) || err.contains(want)),
+            "{case}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// The ratchets a port's verus check runs, through the command line it
 /// runs them with (`--floor verus/FLOOR --rlimit STATS --base-rev REV`):
 /// a coverage figure lowered with and without a `lowered` line
