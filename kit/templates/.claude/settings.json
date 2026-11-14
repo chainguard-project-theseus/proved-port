@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "proved-port": {
+      "source": {
+        "source": "github",
+        "repo": "chainguard-project-theseus/proved-port",
+        "ref": "v{KIT_VERSION}"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "proved-c-port@proved-port": true
+  }
+}

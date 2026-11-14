@@ -8,7 +8,6 @@
 # and keeps its own pins and invocations. Defines functions only. A port
 # that has a ci/lib.sh already adds these three functions to it; one that
 # adds its own helpers adds them below.
-# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 
 # fetch URL SHA256 FILE: download URL to FILE and check its SHA-256.
 fetch() {

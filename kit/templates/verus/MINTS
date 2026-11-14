@@ -31,5 +31,3 @@
 #
 # A port whose C API makes no ghost tokens on trust has no use for this
 # file: leave the gate off in the counter's configuration and delete it.
-#
-# kit: proved-port v{KIT_VERSION} ({KIT_SHA})

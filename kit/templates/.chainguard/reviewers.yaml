@@ -2,7 +2,6 @@
 # Chainguard Checks code reviewer, so a change here takes effect once it
 # merges. The reviewer named here is the `bot:{PORT}` owner of every path
 # in .github/codeowners.yaml (CONTRIBUTING.md, "Code review").
-# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 # Checks submits the approving review once every changed path has its
 # approval (root file only).

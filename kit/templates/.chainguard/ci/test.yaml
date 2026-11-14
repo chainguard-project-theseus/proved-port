@@ -6,7 +6,6 @@
 # library and headers. msrv builds with Cargo.toml's rust-version
 # toolchain, so the declared minimum holds when {RUST_STREAM} moves past
 # it.
-# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 
 environment:

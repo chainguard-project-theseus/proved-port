@@ -18,7 +18,6 @@
 # every comparison check pins.
 # {Name each further package and the target that needs it, or delete
 # this sentence.}
-# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 environment:
   packages: [{RUST_STREAM}, build-base, binutils, busybox, make, git, bash, curl, ca-certificates-bundle, apk-tools, wolfi-keys, libgcc, clang-{CLANG_STREAM}, compiler-rt-{CLANG_STREAM}, {REFERENCE_PACKAGES}, verus~{VERUS_RELEASE}, kani~{KANI_RELEASE}, theseus-proved-port~{KIT_VERSION}, shellcheck~{SHELLCHECK_RELEASE}]

@@ -46,14 +46,13 @@ a change cites. The checks below are what a change must not get wrong.
   anything else is a Question citing that header, unless it is the port's
   first proof pull request, raising FLOOR from 0.0, whether or not it
   brings the counter.
-- The vendored kit, which this port does not carry: it takes the kit as
+- The kit, of which this port carries no copy: it takes the kit as
   the theseus-proved-port package, whose installed `KIT` names the
   release. Its pin is the `theseus-proved-port~X.Y.Z` package version in
   every `.chainguard/ci` file that installs it and in
   `.chainguard/ci/env/dev.yaml`, `PROVED_PORT_VERSION` in the Makefile,
-  and the `vX.Y.Z` ref of the proved-port marketplace in a
-  `.claude/settings.json` that names one; they move together, to the
-  same release, in
+  and the `vX.Y.Z` ref of the proved-port marketplace in
+  `.claude/settings.json`; they move together, to the same release, in
   one pull request. A change that moves some of them but not all is
   Blocking, and so is one that adds a `verus/count/` or `verus/make/`
   copy of the kit.

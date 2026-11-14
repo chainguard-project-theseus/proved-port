@@ -170,8 +170,8 @@ or an open bug.
    the Makefile and include
    `$(PROVED_PORT_HOME)/make/proved-port.mk` (`PROVED_PORT_HOME ?=
    /usr/share/proved-port`); the package puts `verus-count` on PATH.
-   The pins move together (with the marketplace ref, where the port's
-   `.claude/settings.json` names one), through the deps template's kit entry
+   The pins move together with the marketplace ref in the port's
+   `.claude/settings.json`, through the deps template's kit entry
    (`kit/count/README.md`, "Adopting: the package"). On a Mac, install
    the counter with `cargo install --locked --git <proved-port's URL>
    --tag vX.Y.Z verus-count` (or `--path kit/count` from a clone at the

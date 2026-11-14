@@ -18,7 +18,6 @@
 # then the `tree-borrows` rows. Worth requesting on changes to
 # {CAPI_CRATE}'s unsafe code. `make miri` runs every pass in a
 # development session.
-# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 
 environment:

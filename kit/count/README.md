@@ -809,8 +809,8 @@ A port takes it this way:
   release check.
 - Its held files carry no `# kit:` line: the release is the package
   pin, and `make verus-headers` reads none.
-- The package pins and `PROVED_PORT_VERSION` (and the proved-port
-  marketplace `ref` in a `.claude/settings.json` that names one) move
+- The package pins, `PROVED_PORT_VERSION` and the proved-port
+  marketplace `ref` in `.claude/settings.json` move
   together, with any new header text, in a pull request of their own
   (the kit entry of `kit/templates/.chainguard/deps.yaml`).
 
@@ -831,13 +831,16 @@ A port that carries vendored `verus/count/` and `verus/make/` copies is
 on kit 0.2.4, and moves to the package in one pull request. That pull
 request deletes `verus/count/` (with its `KIT` and `Cargo.lock`) and
 `verus/make/`, with every reviewer or code-owner row that names them;
-drops the `# kit:` line from each held file, replacing it with a blank
-line where the port's own comments follow it, so that they stay out of
-the header `make verus-headers` holds to the template (the header is the
-file's leading comment, up to its first non-comment line); pins
-`theseus-proved-port~0.3.0` as "Adopting: the package" says; and
-includes the installed `proved-port.mk` in place of
-`verus/make/proved-port.mk`.
+drops the `# kit:` line from each file that has one, held or a
+starting point, replacing it with a blank line where the port's own
+comments follow it, so that they stay out of the header `make
+verus-headers` holds to the template (the header is the file's leading
+comment, up to its first non-comment line); replaces the review prompt's
+`- The vendored kit` item with the template's `- The kit` item; pins
+`theseus-proved-port~0.3.0` as "Adopting: the package" says, with the
+proved-port marketplace in `.claude/settings.json` at `v0.3.0` (the
+`kit/templates/.claude/settings.json` template); and includes the
+installed `proved-port.mk` in place of `verus/make/proved-port.mk`.
 
 ## Release
 

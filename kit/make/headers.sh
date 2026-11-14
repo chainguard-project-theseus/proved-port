@@ -40,7 +40,7 @@
 #
 # .chainguard/review-prompt.md is Markdown, with no `#` header: the port's
 # prompt must hold, anywhere and ignoring white space, the template's
-# vendored-kit rule, its `- The vendored kit` list item.
+# kit rule, its `- The kit` list item.
 #
 # VERUS_FLOOR (from the environment, as proved-port.mk passes it; a path
 # under PORT_ROOT, default verus/FLOOR) is the port's ratchet file, which
@@ -84,12 +84,13 @@ body() {
   awk '!/^#/ || /^# kit:/ { exit } { print }' "$1"
 }
 
-# kit_rule FILE: FILE's vendored-kit rule, the list item that starts
-# `- The vendored kit`, up to the next item, heading or blank line.
+# kit_rule FILE: FILE's kit rule, the list item whose first words are
+# `- The kit` (then a space, comma, stop or colon, so not `- The kits`
+# or `- The kit's`), up to the next item, heading or blank line.
 kit_rule() {
   awk '
     on && (/^- / || /^#/ || /^[ \t]*$/) { exit }
-    /^- The vendored kit/ { on = 1 }
+    /^- The kit([ ,.:]|$)/ { on = 1 }
     on { print }' "$1"
 }
 
@@ -210,12 +211,12 @@ while IFS= read -r rel; do
     # With no rule between them, the two placeholders match any prompt:
     # fail rather than pass every port's.
     if [ "$(wc -l < "$tmp/t.body")" -le 2 ]; then
-      echo "headers: $t has no \`- The vendored kit\` item; $fix" >&2
+      echo "headers: $t has no \`- The kit\` item; $fix" >&2
       drift=1
       continue
     fi
     if ! missing=$(match "$tmp/t.body" "$f"); then
-      echo "headers: $path: the vendored-kit rule drifted from the kit's (the \`- The vendored kit\` item of $t); it lacks: $missing" >&2
+      echo "headers: $path: the kit rule drifted from the kit's (the \`- The kit\` item of $t); it lacks: $missing" >&2
       drift=1
       continue
     fi

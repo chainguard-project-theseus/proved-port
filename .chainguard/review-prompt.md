@@ -67,7 +67,7 @@ not get wrong.
 - Templates and their consumers. The rule text in the Verus files'
   templates (those `kit/make/VERUS-FILES` names: FLOOR, RLIMIT, REACH,
   MINTS, count.toml, verus.yaml, miri.yaml, reviewers.yaml, and the
-  vendored-kit rule of review-prompt.md) is a contract the counter
+  kit rule of review-prompt.md) is a contract the counter
   enforces and `make verus-headers` holds each port's copy to, against
   the templates of the release the port pins. The other templates are
   starting points the ports reshape, and nothing holds them. A change

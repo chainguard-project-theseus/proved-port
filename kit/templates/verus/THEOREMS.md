@@ -7,7 +7,7 @@ trusted base (below) and on the core-library seams in [SEAMS.md](SEAMS.md).
 This file holds the trusted base. Every theorem has a file of its own,
 `verus/theorems/<ID>.md`, named after the lead id of the change that
 proves it (the proved-port kit's theorem skeleton,
-`kit/templates/verus/theorems/TEMPLATE.md` at `{KIT_SHA}`, is its form).
+`kit/templates/verus/theorems/TEMPLATE.md` at `v{KIT_VERSION}`, is its form).
 It holds the theorem's statement and a `### Seams` table, in SEAMS.md's
 columns, of the seams that change introduces. Seams are numbered once, so
 a theorem that rests on another's seam names its id.

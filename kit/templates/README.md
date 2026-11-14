@@ -11,10 +11,11 @@ read, so keep it as written in the port's own file; fill in the
 placeholders and the rows.
 
 A port takes the kit as the theseus-proved-port package, pinned
-`theseus-proved-port~{KIT_VERSION}` (v0.3.0 or later). Its copies of
-these files carry no `# kit:` line: the release is the package pin (the
-Checks environments, `.chainguard/ci/env/dev.yaml` and the Makefile's
-`PROVED_PORT_VERSION`). `make verus-headers`
+`theseus-proved-port~{KIT_VERSION}` (v0.3.0 or later). The release is
+the package pin (the Checks environments, `.chainguard/ci/env/dev.yaml`
+and the Makefile's `PROVED_PORT_VERSION`, with the proved-port
+marketplace ref in `.claude/settings.json`), so no file names it in a
+line of its own. `make verus-headers`
 (`/usr/share/proved-port/make/headers.sh`) holds each file's header,
 its whole leading `#` comment, to the installed template's, so the
 port's own comments go after a blank line below it.
@@ -29,11 +30,11 @@ restating them.
 the headers of `verus/FLOOR`, `RLIMIT`,
 `REACH`, `MINTS` and `verus/count.toml`, of `.chainguard/ci/verus.yaml`,
 `.chainguard/ci/miri.yaml` and `.chainguard/reviewers.yaml`, and the
-kit rule (the item that starts `- The vendored kit`) of
-`.chainguard/review-prompt.md`, which carries no kit line. A port has
+kit rule (the item whose first words are `- The kit`) of
+`.chainguard/review-prompt.md`. A port has
 no copy of the counter or the make targets. Every other template here is a starting point,
-not held: the port reshapes it to its own checks, and its copy needs no
-kit line ("Repository configuration" below).
+not held: the port reshapes it to its own checks ("Repository
+configuration" below).
 
 The placeholders are `{PORT}` and its kin throughout. A port started
 from rust-port-template, whose files say `__PROJECT__`, writes
@@ -73,12 +74,10 @@ earlier with FLOOR at 0.0 (FLOOR's header; `kit/count/README.md`,
    names; never leave the `TEMPLATE` files in the port, since the
    counter reads every `verus/theorems/*.md` as a seams table and every
    `verus/seams/kani-*.md` as a record.
-2. Delete each `# kit: proved-port v{KIT_VERSION} ({KIT_SHA})` line a
-   template still has, held or a starting point: a port's files carry none.
-   Then replace every `{PLACEHOLDER}`. A placeholder in capitals is a value
+2. Replace every `{PLACEHOLDER}`. A placeholder in capitals is a value
    (`{PORT}`, `{LIBRARY}`, `{UPSTREAM_VERSION}`, `{CAPI_CRATE}`,
    `{VERUS_RELEASE}`, `{KANI_RELEASE}`, `{RUST_STREAM}`, `{MSRV}`,
-   `{KIT_VERSION}`);
+   `{KIT_VERSION}`, the release the package pin names, such as `0.3.0`);
    one with a colon (`{SIGNING_POLICY: ...}`) is a value its text
    describes, and where it lists choices split by `|`, keep one; one in
    a sentence (`{How to run the gate ...}`) is prose to write, or to
@@ -112,8 +111,10 @@ tables and the Kani records is kit step 2 (`kit/PLAN.md`).
 
 The Chainguard Checks files a port's repository needs: its checks, its
 development and deps-agent environments, its reviewer and its code
-owners. Each copies to the same path in the port (Checks reads them only
-at the repository root, so the copies here run nothing). They come from
+owners, and the Claude Code settings that give its sessions the
+proved-c-port skill. Each copies to the same path in the port (Checks
+and Claude Code read them only at the repository root, so the copies
+here run nothing). They come from
 wolfi-dev/pcre3 main at `99a29cd9` (#1078 and #1079 merged),
 wolfi-dev/challoc main at `6268155e` (#688 merged) with #689
 (`2e452c18`), wolfi-dev/chainz at `1e79acd2` with #63 (`6cb6fb26`) and
@@ -136,18 +137,18 @@ merged) with #202 (`98588c1f`).
 | `.chainguard/review-prompt.md` | the sections the four prompts share, plus the runtime-costs-of-proof check that cites AGENTS.md; the port writes its own checks. Evidence reads the presubmit results, as chainz's does; the kit rule holds the kit's pins to one release, moved as one | all four; Evidence from chainz, the kit rule from pcre3's counter rule, the check from proved-c-port's "Prove the producer, not its output" (#13) |
 | `.github/codeowners.yaml` | the codeowners-gate sidecar: one gated `*` entry, the maintainers and `bot:{PORT}` | pcre3, challoc, chainz |
 | `.github/CODEOWNERS` | the sidecar's rendering, without the `bot:` owner | pcre3, challoc, chainz |
+| `.claude/settings.json` | the proved-port plugin marketplace (chainguard-project-theseus/proved-port) at `v{KIT_VERSION}`, the release the package pin names, and the `proved-c-port` plugin enabled | pcre3, with the public repository and the release's ref |
 
 Of these, the Verus files (`.chainguard/ci/verus.yaml`,
 `.chainguard/ci/miri.yaml`, `.chainguard/reviewers.yaml` and the
 kit rule of `.chainguard/review-prompt.md`) are held to the kit
 by `make verus-headers`. The rest (conformance, consumers, fuzz, test,
 lint, the environments, `develop.yaml`, `deps.yaml`, the codeowners
-files) are starting points: the port copies them, then reshapes them to
-its own checks, and nothing holds them to the kit afterwards (expat-rs
+files, `.claude/settings.json`) are starting points: the port copies
+them, then reshapes them to its own checks, and nothing holds them to
+the kit afterwards (expat-rs
 and rust-port-template each keep a shape of their own for several,
-wolfi-dev/expat-rs#221 and wolfi-dev/rust-port-template#13). Their kit
-lines say which kit release a copy started from; a port may keep or
-drop them.
+wolfi-dev/expat-rs#221 and wolfi-dev/rust-port-template#13).
 
 ### The required Verus check set
 
@@ -205,8 +206,8 @@ the ones the ports use, so the `ci/run:<check>` labels carry over. The
 deps entries each repeat the rules the agent must keep, since it sees
 only its entry's prompt: FLOOR never goes down and gains no `lowered`
 line, the kit's pin (`theseus-proved-port~`, `PROVED_PORT_VERSION`, and
-the proved-port marketplace ref in a `.claude/settings.json` that names
-one) moves only through the kit entry, and a reference bump
+the proved-port marketplace ref in `.claude/settings.json`) moves only
+through the kit entry, and a reference bump
 updates `docs/abi-changes.md`, the deviations lists and the
 known-differences rows in the same pull request. The kit entry moves
 every kit pin together, takes the kit's header text where `make
@@ -264,7 +265,7 @@ YAML files hold flow maps such as `{CONSUMER: selftest}`, so they take
 the stricter pattern):
 
 ```sh
-grep -rnE '\{[A-Z][A-Z_]*\}|\{[A-Z][a-z]' .chainguard/ci .chainguard/*.yaml .github/codeowners.yaml .github/CODEOWNERS
+grep -rnE '\{[A-Z][A-Z_]*\}|\{[A-Z][a-z]' .chainguard/ci .chainguard/*.yaml .github/codeowners.yaml .github/CODEOWNERS .claude/settings.json
 grep -nE '\{[A-Z][A-Z_]*[}:]|\{[A-Z][a-z]' .chainguard/review-prompt.md
 ```
 

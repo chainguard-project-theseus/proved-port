@@ -26,7 +26,7 @@ fail() {
 pattern=$(sed -n "s/^grep -nE '\(.*\)' ci\/miri\.sh .*/\1/p" "$templates/README.md")
 [ -n "$pattern" ] || fail "no ci/miri.sh placeholder grep in kit/templates/README.md"
 miri_files="ci/miri.sh ci/lib.sh ci/miri-known.txt .chainguard/ci/miri.yaml"
-for p in CAPI_CRATE CAPI_CRATE_DIR KIT_VERSION KIT_SHA MIRI_NIGHTLY MIRI_MANIFEST_SHA256 \
+for p in CAPI_CRATE CAPI_CRATE_DIR MIRI_NIGHTLY MIRI_MANIFEST_SHA256 \
   MIRI_NO_RUN MIRI_THREAD_TESTS MIRI_FLAGS RUSTUP_RELEASE \
   RUSTUP_INIT_SHA256_X86_64 RUSTUP_INIT_SHA256_AARCH64; do
   found=
@@ -63,7 +63,7 @@ echo "ok the templates name the tree-borrows row wherever they give the known li
 fill() {
   sed -e 's/{MIRI_NIGHTLY}/2026-10-27/g' -e 's/{MIRI_MANIFEST_SHA256}/0/' \
     -e 's|{CAPI_CRATE_DIR}|crates/foo-capi|' -e 's/{CAPI_CRATE}/foo-capi/g' \
-    -e 's/{KIT_VERSION}/0.0.0/' -e 's/{KIT_SHA}/0000000/' -e 's/{MIRI_NO_RUN:[^}]*}/clink/' \
+    -e 's/{MIRI_NO_RUN:[^}]*}/clink/' \
     -e "s/{MIRI_THREAD_TESTS:[^}]*}/$1/" -e 's/{MIRI_FLAGS:[^}]*}//' \
     "$templates/ci/miri.sh" >"$port/ci/miri.sh"
   if grep -nE "$pattern" "$port/ci/miri.sh" >&2; then

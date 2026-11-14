@@ -1,6 +1,5 @@
 # The default environment. Every check file names its own packages, so
 # this one is empty.
-# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 
 environment: {}

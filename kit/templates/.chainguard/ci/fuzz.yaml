@@ -15,7 +15,6 @@
 # each row of the differential fuzzer's known-differences table
 # (fuzz/diff/known.c, or known.rs) cites an active docs/abi-changes.md
 # entry or an open issue (`ci/fuzz-diff.sh --check-known`).
-# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 
 environment:

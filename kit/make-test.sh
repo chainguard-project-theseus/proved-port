@@ -19,8 +19,10 @@
 #   - headers.sh holds the kit's Verus files (kit/make/VERUS-FILES) and
 #     no other to the installed templates: it passes them as the port
 #     fills them, with or without a `# kit:` line, fails on drift, reads
-#     no verus/make/templates a port still has, and gives the same
-#     result with --installed as with its defaults.
+#     no verus/make/templates a port still has, takes only the `- The
+#     kit` item as the review prompt's kit rule, and gives the same
+#     result with --installed as with its defaults;
+#   - no template carries a `kit: proved-port` line.
 # No Verus or Kani runs. Run it from the repository root.
 set -eu
 
@@ -635,10 +637,10 @@ tpl() {
   echo "$templates/$1"
 }
 # fill FILE: the port's copy of template FILE, as an installed port has
-# it: the template's text with no `# kit:` line.
+# it: the template's text.
 fill() {
   mkdir -p "$port/$(dirname "$1")"
-  sed '/^# kit: /d' "$(tpl "$1")" > "$port/$1"
+  cp "$(tpl "$1")" "$port/$1"
 }
 # headers: headers.sh in the port with its defaults (no flag, no
 # PROVED_PORT_HOME: the directory above its own), output in $tmp/out.
@@ -690,6 +692,12 @@ while IFS= read -r f; do fill "$f"; done < "$tmp/verus-files"
 if grep -rq '^# kit:' "$port/verus" "$port/.chainguard"; then
   fail "the filled port still has a # kit: line"
 fi
+# The release is the package pin, so no template, held or a starting
+# point, carries a kit line in any comment syntax.
+if grep -rn 'kit: proved-port v' "$templates" >&2; then
+  fail "templates with a kit line: got = the lines above, want = none"
+fi
+echo "ok no template carries a kit line"
 # The port's other check files are its own shape, which headers.sh does
 # not hold, though the install has a template of each name: each here has
 # no kit header at all.
@@ -705,15 +713,16 @@ expect "headers.sh checks each Verus file and nothing else" "$(LC_ALL=C sort "$t
 echo "ok headers.sh passes the templates as they are, with no kit line, beside non-Verus check files of the port's own shape"
 same "on a port that passes"
 
-# The review prompt: the vendored-kit rule, rewrapped among the port's
-# own text, passes; reworded or gone, it fails.
+# The review prompt: the kit rule, rewrapped among the port's own text,
+# passes; reworded or gone, it fails.
 awk '
-  /^- The vendored kit/ { print "- A check of the port'"'"'s own."; print "- The vendored kit"; sub(/^- The vendored kit/, ""); print; next }
+  /^- The kit,/ { print "- A check of the port'"'"'s own."; print "- The kit"; sub(/^- The kit/, ""); print; next }
   { print }
   /^## / { print "A paragraph of the port'"'"'s own." }' "$(tpl .chainguard/review-prompt.md)" > "$port/.chainguard/review-prompt.md"
-headers || { cat "$tmp/out" >&2; fail "headers.sh failed on a rewrapped vendored-kit rule"; }
+grep -qx -- '- The kit' "$port/.chainguard/review-prompt.md" || fail "the kit rule was not rewrapped"
+headers || { cat "$tmp/out" >&2; fail "headers.sh failed on a rewrapped kit rule"; }
 grep -qx 'ok .chainguard/review-prompt.md' "$tmp/out" || fail "headers.sh did not check .chainguard/review-prompt.md"
-echo "ok headers.sh passes the vendored-kit rule rewrapped among the port's own text"
+echo "ok headers.sh passes the kit rule rewrapped among the port's own text"
 cp "$(tpl .chainguard/review-prompt.md)" "$port/.chainguard/review-prompt.md"
 
 # A port fills its placeholders, rewrapping the paragraph, deletes the
@@ -762,8 +771,8 @@ bad .chainguard/ci/verus.yaml "a header line deleted" 'NR == 3 { next } { print 
 bad verus/count.toml "a count.toml header line reworded" 'NR == 2 { print "# something the kit never said"; next } { print }'
 bad .chainguard/ci/miri.yaml "a miri.yaml header line deleted" 'NR == 2 { next } { print }'
 bad .chainguard/reviewers.yaml "a reviewers.yaml header line reworded" 'NR == 2 { print "# something the kit never said"; next } { print }'
-bad .chainguard/review-prompt.md "the vendored-kit rule reworded" '/^- The vendored kit/ { on = 1 } on && /KIT/ { sub(/KIT/, "KITS"); on = 0 } { print }'
-bad .chainguard/review-prompt.md "the vendored-kit rule gone" '/^- The vendored kit/ { skip = 1; next } skip && (/^- / || /^$/) { skip = 0 } skip { next } { print }'
+bad .chainguard/review-prompt.md "the kit rule reworded" '/^- The kit,/ { on = 1 } on && /KIT/ { sub(/KIT/, "KITS"); on = 0 } { print }'
+bad .chainguard/review-prompt.md "the kit rule gone" '/^- The kit,/ { skip = 1; next } skip && (/^- / || /^$/) { skip = 0 } skip { next } { print }'
 bad .chainguard/ci/miri.yaml "a comment of the port's own run on into its header, with no blank line" '!done && !/^#/ { print "# A comment of the port'"'"'s own."; done = 1 } { print }'
 
 # badtemplate FILE WHAT AWK MESSAGE: the installed template of FILE
@@ -779,22 +788,33 @@ badtemplate() {
   cp "$tmp/keep" "$(tpl "$1")"
   echo "ok headers.sh fails $2"
 }
-badtemplate .chainguard/review-prompt.md "a template whose vendored-kit item is reworded" \
-  '{ sub(/^- The vendored kit/, "- The kit copies") } { print }' \
-  "$templates/.chainguard/review-prompt.md has no \`- The vendored kit\` item"
-badtemplate .chainguard/review-prompt.md "a template whose vendored-kit item is gone" \
-  '/^- The vendored kit/ { skip = 1; next } skip && (/^- / || /^$/) { skip = 0 } skip { next } { print }' \
-  "$templates/.chainguard/review-prompt.md has no \`- The vendored kit\` item"
-# A template with no kit line holds its whole leading comment, so only
-# one with no leading comment at all holds nothing.
+badtemplate .chainguard/review-prompt.md "a template whose kit item is reworded" \
+  '{ sub(/^- The kit,/, "- Our kit,") } { print }' \
+  "$templates/.chainguard/review-prompt.md has no \`- The kit\` item"
+badtemplate .chainguard/review-prompt.md "a template whose kit item is gone" \
+  '/^- The kit,/ { skip = 1; next } skip && (/^- / || /^$/) { skip = 0 } skip { next } { print }' \
+  "$templates/.chainguard/review-prompt.md has no \`- The kit\` item"
+# Only an item whose first words are `- The kit` is the rule: one that
+# starts `- The kits` or `- The kit's` is not, so a template with only
+# such an item has none, and one that has such an item before the rule
+# holds the rule, not it.
+for word in kits "kit's"; do
+  badtemplate .chainguard/review-prompt.md "a template whose kit item starts \`- The $word\`" \
+    "{ sub(/^- The kit,/, \"- The $word,\") } { print }" \
+    "$templates/.chainguard/review-prompt.md has no \`- The kit\` item"
+  cp "$(tpl .chainguard/review-prompt.md)" "$tmp/keep"
+  awk -v item="- The $word tests are the package's." '/^- The kit,/ { print item } { print }' "$tmp/keep" \
+    > "$(tpl .chainguard/review-prompt.md)"
+  grep -qxF -- "- The $word tests are the package's." "$(tpl .chainguard/review-prompt.md)" \
+    || fail "the \`- The $word\` item was not planted"
+  headers || { cat "$tmp/out" >&2; fail "headers.sh, a \`- The $word\` item before the kit rule in the template: got = failure, want = success (it holds the rule)"; }
+  cp "$tmp/keep" "$(tpl .chainguard/review-prompt.md)"
+  echo "ok headers.sh takes a template's \`- The $word\` item for no kit rule"
+done
+# A template with no leading comment at all holds nothing.
 badtemplate verus/count.toml "a template with no leading comment" \
   '!body && /^#/ { next } { body = 1; print }' \
   "$templates/verus/count.toml has no leading comment, so it holds nothing"
-cp "$(tpl verus/RLIMIT)" "$tmp/keep"
-sed '/^# kit: /d' "$tmp/keep" > "$(tpl verus/RLIMIT)"
-headers || { cat "$tmp/out" >&2; fail "headers.sh failed on a template with no kit line"; }
-cp "$tmp/keep" "$(tpl verus/RLIMIT)"
-echo "ok headers.sh passes a template with no kit line"
 headers || fail "headers.sh failed after the edits were undone"
 
 # A port that still has the verus/make/templates (NAME.tmpl) and
