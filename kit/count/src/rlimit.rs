@@ -204,16 +204,17 @@ pub struct Share {
 /// no function the statistics have, in a crate they cover (the check would
 /// hold that function to the default), or a name two functions share, in
 /// the source or in the statistics (the count kept may be the other's,
-/// held to the wrong limit).
+/// held to the wrong limit). The errors name every such limit.
 pub fn shares(
     stats: &BTreeMap<String, CrateStats>,
     crates: &[String],
     limits: &[Limit],
-) -> Result<Vec<Share>, String> {
+) -> Result<Vec<Share>, Vec<String>> {
+    let mut errors = Vec::new();
     let mut by_name: BTreeMap<&str, &Limit> = BTreeMap::new();
     for l in limits {
         if let Some(other) = by_name.insert(l.name.as_str(), l) {
-            return Err(format!(
+            errors.push(format!(
                 "{} and {}: #[verifier::rlimit] on two functions Verus names {}",
                 other.at, l.at, l.name
             ));
@@ -223,17 +224,19 @@ pub fn shares(
         let k = l.name.split("::").next().unwrap_or("");
         let Some(s) = stats.get(k) else { continue };
         if !s.used.contains_key(&l.name) {
-            return Err(format!(
+            errors.push(format!(
                 "{}: #[verifier::rlimit] on {}, which Verus's statistics do not name",
                 l.at, l.name
             ));
-        }
-        if s.folded.contains(&l.name) {
-            return Err(format!(
+        } else if s.folded.contains(&l.name) {
+            errors.push(format!(
                 "{}: #[verifier::rlimit] on {}, a name Verus's statistics give two functions, so the count kept may be the other's",
                 l.at, l.name
             ));
         }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
     }
     let mut out = Vec::new();
     for s in crates.iter().filter_map(|k| stats.get(k)) {
@@ -605,6 +608,24 @@ mod tests {
             shares(&stats, &["k".into()], &stray).is_err(),
             "stray limit: got = ok, wanted = an error"
         );
+        // Every stray limit is named, not only the first.
+        let strays: Vec<Limit> = ["k::gone", "k::lost", "k::big"]
+            .iter()
+            .enumerate()
+            .map(|(i, n)| Limit {
+                name: (*n).into(),
+                at: format!("a.rs:{i}"),
+                units: Some(30.0),
+            })
+            .collect();
+        let got = shares(&stats, &["k".into()], &strays).expect_err("strays");
+        let want = vec![
+            "a.rs:0: #[verifier::rlimit] on k::gone, which Verus's statistics do not name"
+                .to_owned(),
+            "a.rs:1: #[verifier::rlimit] on k::lost, which Verus's statistics do not name"
+                .to_owned(),
+        ];
+        assert_eq!(got, want, "strays: got = {got:?}, wanted = {want:?}");
     }
 
     #[test]
@@ -630,7 +651,7 @@ mod tests {
         let got = shares(&stats, &["k".into()], &[limit("a.rs:1")]);
         assert!(
             got.as_ref()
-                .is_err_and(|e| e.contains("give two functions")),
+                .is_err_and(|e| e.iter().any(|m| m.contains("give two functions"))),
             "folded name with a limit: got = {got:?}, wanted = an error"
         );
         // Two limits on one name in the source, whatever the statistics.
@@ -638,7 +659,7 @@ mod tests {
         let got = shares(&stats, &["k".into()], &[limit("a.rs:1"), limit("b.rs:2")]);
         assert!(
             got.as_ref()
-                .is_err_and(|e| e.contains("two functions Verus names")),
+                .is_err_and(|e| e.iter().any(|m| m.contains("two functions Verus names"))),
             "two limits on one name: got = {got:?}, wanted = an error"
         );
         // A folded name with no limit is held to the default by its larger

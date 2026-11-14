@@ -1154,6 +1154,207 @@ fn a_crate_of_verus_only_proofs_is_held_to_its_headroom() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verus's statistics for crate `a`: each function in `fns` with the
+/// rlimit count it used.
+fn stats_naming(fns: &[(&str, u64)]) -> String {
+    let rows: Vec<String> = fns
+        .iter()
+        .map(|(n, used)| format!(r#"{{"function":"{n}","rlimit":{used}}}"#))
+        .collect();
+    format!(
+        r#"{{"times-ms":{{"smt":{{"smt-run-module-times":[{{"module":"m","rlimit":0,"function-breakdown":[{}]}}]}}}},"verification-results":{{"success":true,"verified":{},"errors":0}}}}"#,
+        rows.join(","),
+        fns.len()
+    )
+}
+
+/// What a method with `#[verifier::rlimit(20)]` uses in
+/// [`a_method_is_named_by_its_type_s_module`]: 60% of that limit, inside
+/// max-share 65, but 120% of the default 10. A limit put on another
+/// function leaves this one at the default, and the run fails.
+const HELD: u64 = 36_000_000;
+
+/// Verus names a method by the path of the item its `impl`'s type
+/// resolves to, not by the `impl`'s module (rust_verify's
+/// `register_friendly_path_as_rust_name`), so a method's
+/// `#[verifier::rlimit]` is named that way, the type found as rustc's
+/// scoping finds it: by its path (`super::Top`, an alias
+/// `crate::state::Alias`); defined in the `impl`'s module (`Local`, and
+/// `Shadow`, which a macro there writes), ahead of a glob import of the
+/// same name; imported by name (`Renamed`); or brought in by the one
+/// glob of this crate's modules that has it (`S`, though a test-only `S`
+/// sits in the `impl`'s module, and `Twice`, though the crate root has
+/// one too). A trait's default method keeps the trait's module, though a
+/// struct the glob brings in shares its name. Each statistics file also
+/// names the function each wrong place would give (using 1), so a limit
+/// put there leaves the right function at the default, over max-share.
+///
+/// A type the counter cannot place keeps the `impl`'s module, so its
+/// limit names nothing the statistics have and the run fails, each such
+/// limit named, though a function of the same name sits in a module the
+/// crate defines a type of that name in: an `impl`'s own type parameter
+/// (`S`), a type another crate's `use` imports by name (`Gone`), and one
+/// an external glob brings in (`Seq`, from `vstd::prelude`).
+#[test]
+fn a_method_is_named_by_its_type_s_module() {
+    let lib = "use vstd::prelude::*;\nmod state;\nmod split;\nmod other;\npub struct Top;\npub struct Twice;\n";
+    let state = "pub struct S;\npub struct Named;\npub struct Local;\npub struct Walk;\npub struct Twice;\npub struct Shadow;\npub struct Gone;\npub type Alias = S;\npub trait Tr {\n    fn step(&self);\n}\n";
+    let other = "pub struct Seq;\n";
+    let split = |uses: &str, extra: &str| {
+        format!(
+            "use vstd::prelude::*;\nuse super::state::*;\nuse crate::state::Named as Renamed;\n{uses}\
+#[cfg(test)]\npub struct S;\n\
+macro_rules! shadow {{ () => {{ pub struct Shadow; }}; }}\nshadow!();\n\
+verus! {{\npub struct Local;\n\
+impl S {{ #[verifier::rlimit(20)] fn bare(&self) {{}} }}\n\
+impl super::Top {{ #[verifier::rlimit(20)] fn pathed(&self) {{}} }}\n\
+impl Renamed {{ #[verifier::rlimit(20)] fn imported(&self) {{}} }}\n\
+impl Local {{ #[verifier::rlimit(20)] fn here(&self) {{}} }}\n\
+impl crate::state::Alias {{ #[verifier::rlimit(20)] fn aliased(&self) {{}} }}\n\
+impl Twice {{ #[verifier::rlimit(20)] fn two(&self) {{}} }}\n\
+impl Shadow {{ #[verifier::rlimit(20)] fn shadowed(&self) {{}} }}\n\
+trait Walk {{ #[verifier::rlimit(20)] fn walk(&self) {{}} }}\n\
+{extra}}}\n"
+        )
+    };
+    let placed: Vec<(&str, u64)> = vec![
+        ("a::state::S::bare", HELD),
+        ("a::Top::pathed", HELD),
+        ("a::state::Named::imported", HELD),
+        ("a::split::Local::here", HELD),
+        ("a::state::Alias::aliased", HELD),
+        ("a::state::Twice::two", HELD),
+        ("a::split::Shadow::shadowed", HELD),
+        ("a::split::Walk::walk", HELD),
+        // The wrong places.
+        ("a::split::S::bare", 1),
+        ("a::state::Local::here", 1),
+        ("a::Twice::two", 1),
+        ("a::state::Shadow::shadowed", 1),
+        ("a::state::Walk::walk", 1),
+    ];
+    let unplaced = "impl<S: Copy> Tr for S { #[verifier::rlimit(20)] fn step(&self) {} }\n\
+impl Tr for Gone { #[verifier::rlimit(20)] fn step(&self) {} }\n\
+impl<A> Tr for Seq<A> { #[verifier::rlimit(20)] fn step(&self) {} }\n";
+    let wrong = [
+        ("a::state::S::step", 1),
+        ("a::state::Gone::step", 1),
+        ("a::other::Seq::step", 1),
+    ];
+    let miss =
+        |name: &str| format!("#[verifier::rlimit] on {name}, which Verus's statistics do not name");
+    for (uses, extra, fns, want, lines) in [
+        (
+            "",
+            "",
+            placed.clone(),
+            0,
+            vec!["ok rlimit headroom: 13 functions".to_owned()],
+        ),
+        (
+            "use elsewhere::Gone;\n",
+            unplaced,
+            [&placed[..], &wrong[..]].concat(),
+            2,
+            vec![
+                miss("a::split::S::step"),
+                miss("a::split::Gone::step"),
+                miss("a::split::Seq::step"),
+            ],
+        ),
+    ] {
+        let dir = crate_of(
+            "rlimit-type-module",
+            &[
+                ("lib.rs", lib),
+                ("state.rs", state),
+                ("other.rs", other),
+                ("split.rs", &split(uses, extra)),
+            ],
+        );
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!("{PLAIN}[rlimit]\npath = \"verus/RLIMIT\"\n"),
+        )
+        .expect("write");
+        fs::write(dir.join("verus/RLIMIT"), "max-share 65\n").expect("write");
+        let stats = dir.join("stats.json");
+        fs::write(&stats, stats_naming(&fns)).expect("write");
+        let s = stats.to_string_lossy().into_owned();
+        let (got, out, err) = count(&dir, &["--rlimit", &s]);
+        for line in &lines {
+            assert!(
+                got == want && (out.contains(line) || err.contains(line)),
+                "{extra:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {want}, {line:?}"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// A method's limit is held to the base revision's under the name Verus
+/// gives it, its type's module, on both sides: dropping a sub-default
+/// `#[verifier::rlimit(5)]` from a method in an `impl` split from its type
+/// raises it to the default, which needs an `rlimit-raised` line.
+#[test]
+fn a_split_impl_s_limit_is_held_to_the_base() {
+    let lib = "mod state;\nmod split;\npub fn o() {}\n";
+    let state = "pub struct S;\n";
+    let split = |attr: &str| {
+        format!(
+            "use vstd::prelude::*;\nuse super::state::S;\nverus! {{\nimpl S {{\n{attr} pub fn f(&self) {{}}\n}}\n}}\n"
+        )
+    };
+    let dir = crate_of(
+        "split-rlimit-base",
+        &[
+            ("lib.rs", lib),
+            ("state.rs", state),
+            ("split.rs", &split("#[verifier::rlimit(5)]")),
+        ],
+    );
+    fs::write(dir.join("verus/count.toml"), RATCHET_CONFIG).expect("write");
+    fs::write(dir.join("verus/FLOOR"), RATCHET_FLOOR).expect("write");
+    fs::write(dir.join("verus/RLIMIT"), RATCHET_RLIMIT).expect("write");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "crates", "verus"]);
+    git(&dir, &["commit", "-q", "-m", "base"]);
+    let stats = dir.join("stats.json");
+    fs::write(&stats, stats_naming(&[("a::state::S::f", 1_000_000)])).expect("write");
+    for (case, attr, code, want) in [
+        (
+            "as committed",
+            "#[verifier::rlimit(5)]",
+            0,
+            "ok rlimit headroom: 1 functions",
+        ),
+        (
+            "dropped",
+            "",
+            1,
+            "raises a::state::S::f's rlimit from 5 to 10 with no new `rlimit-raised a::state::S::f 10 <reason>` line",
+        ),
+    ] {
+        fs::write(dir.join("crates/a/src/split.rs"), split(attr)).expect("write");
+        let (got, out, err) = count(
+            &dir,
+            &[
+                "--floor",
+                &dir.join("verus/FLOOR").to_string_lossy(),
+                "--rlimit",
+                &stats.to_string_lossy(),
+                "--base-rev",
+                "HEAD",
+            ],
+        );
+        assert!(
+            got == code && (out.contains(want) || err.contains(want)),
+            "{case}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// The ratchets a port's verus check runs, through the command line it
 /// runs them with (`--floor verus/FLOOR --rlimit STATS --base-rev REV`):
 /// a coverage figure lowered with and without a `lowered` line

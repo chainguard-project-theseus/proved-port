@@ -30,7 +30,11 @@ base to compare with: a local or development run, or the proof PR that
 adds the port's first FLOOR. It is never a CI run's flag once FLOOR is
 on the base, and giving it with `--base-rev` fails the run (exit 2);
 `--rlimit` reads the statistics `cargo verus ... -- --time-expanded
---output-json` printed. `--version` prints the counter's version, which
+--output-json` printed, and names each function as Verus does: a method
+by its type's path, from the module that defines the type, wherever its
+`impl` is. A `#[verifier::rlimit]` on a function the statistics do not
+name fails the run (exit 2), and the failure names every such limit.
+`--version` prints the counter's version, which
 is the kit release (`verus-count 0.3.0`): `kit/count/Cargo.toml`'s
 version, which the release sets before it tags (Release, below).
 `--help` (or `-h`) prints the usage and exits 0. Either takes no other
