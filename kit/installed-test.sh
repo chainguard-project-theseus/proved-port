@@ -205,11 +205,11 @@ PATH=$tmp/stale:$PATH make -s -n -C "$installed" kani-list PROVED_PORT_VERSION="
 
 # --- make verus-headers --------------------------------------------------
 # held PORT: PORT's copy of each Verus file VERUS-FILES names, taken from
-# the installed templates with no kit line, as an installed port has it.
+# the installed templates, as an installed port has it.
 held() {
   grep -v -e '^#' -e '^[[:space:]]*$' "$home/make/VERUS-FILES" | while IFS= read -r f; do
     mkdir -p "$1/$(dirname "$f")"
-    sed '/^# kit: proved-port /d' "$home/templates/$f" > "$1/$f"
+    cp "$home/templates/$f" "$1/$f"
   done
 }
 hdr_installed=$tmp/hdr-installed
@@ -217,7 +217,7 @@ mkdir "$hdr_installed"
 cp "$installed/Makefile" "$hdr_installed/Makefile"
 held "$hdr_installed"
 ! grep -rq '^# kit:' "$hdr_installed/verus" "$hdr_installed/.chainguard" \
-  || fail "the installed fixture still has a # kit: line"
+  || fail "the installed fixture has a # kit: line: got = an installed template with one, want = none"
 
 # headers PORT [VAR=VALUE...]: make verus-headers in PORT, output in
 # $tmp/out (both streams), status in $hdr_rc.
@@ -289,23 +289,6 @@ grep -q "headers: verus/FLOOR: the header drifted from the kit's" "$tmp/out" \
   || { cat "$tmp/out" >&2; fail "make verus-headers, installed, port comment in the header: the message does not say it drifted"; }
 cp "$tmp/floor.saved" "$hdr_installed/verus/FLOOR"
 echo "ok make verus-headers, installed, a kit line becomes a blank line where the port's comments follow it"
-
-# Templates with no kit line (as the kit's are once the ports have
-# moved) pass too.
-grep -v -e '^#' -e '^[[:space:]]*$' "$home/make/VERUS-FILES" > "$tmp/held-files"
-while IFS= read -r f; do
-  cp "$home/templates/$f" "$tmp/nokit.saved"
-  sed '/^# kit: proved-port /d' "$tmp/nokit.saved" > "$home/templates/$f"
-done < "$tmp/held-files"
-headers "$hdr_installed"
-[ "$hdr_rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "make verus-headers, templates with no kit line: got = failure, want = success"; }
-(
-  cd "$kitrepo"
-  while IFS= read -r f; do
-    cp "kit/templates/$f" "$home/templates/$f"
-  done < "$tmp/held-files"
-)
-echo "ok make verus-headers passes templates with no kit line"
 
 # A template VERUS-FILES names that is not installed fails.
 mv "$home/templates/verus/RLIMIT" "$tmp/rlimit.saved"

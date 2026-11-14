@@ -22,8 +22,7 @@
 # through the msrv entry, together, and every other entry leaves them
 # alone. Likewise the kit's pin (every `theseus-proved-port~` package
 # version, the Makefile's PROVED_PORT_VERSION, and the proved-port
-# marketplace ref in a .claude/settings.json that names one) moves only
-# through the kit
+# marketplace ref in .claude/settings.json) moves only through the kit
 # entry.
 #
 # Within a scheduled run each entry's pull request is one commit, and the
@@ -34,7 +33,6 @@
 # the exception to one commit per pull request.
 #
 # Every entry is merge: manual: a person approves every pull request.
-# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 updates:
 - name: crates
@@ -169,8 +167,7 @@ updates:
     Move the proved-port kit. Its pin is every `theseus-proved-port~`
     package version in .chainguard/ci/** and .chainguard/ci/env/dev.yaml,
     PROVED_PORT_VERSION in the Makefile, and the `ref` (vX.Y.Z) of the
-    proved-port marketplace in .claude/settings.json if that file names
-    one; move them together,
+    proved-port marketplace in .claude/settings.json; move them together,
     in this one pull request, to the newest theseus-proved-port release in
     Wolfi that is at least 7 days old. If the pin is already that release,
     change nothing. Install

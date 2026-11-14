@@ -1,12 +1,12 @@
 # The kit's Verus files, one a line: the files `make verus-headers`
 # (headers.sh) holds a port's copies of, each to the template of the same
 # name in the package's templates/ (/usr/share/proved-port/templates/).
-# Each template holds its header, its leading `#` comment, ending before
-# a `# kit:` line where it has one, but .chainguard/review-prompt.md,
-# which holds its vendored-kit rule (the `- The vendored kit` item). The
-# kit's other templates (conformance, consumers, fuzz, test, lint, the
-# environments, develop.yaml, deps.yaml) are starting points the port
-# reshapes, and are not held.
+# Each is held by its header, its leading `#` comment (in a port's copy,
+# ending before a `# kit:` line the copy still has), but
+# .chainguard/review-prompt.md, which is held by its kit rule (the
+# `- The kit` item). The kit's other templates (conformance, consumers,
+# fuzz, test, lint, the environments, develop.yaml, deps.yaml) are
+# starting points the port reshapes, and are not held.
 verus/FLOOR
 verus/RLIMIT
 verus/REACH

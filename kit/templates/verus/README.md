@@ -80,7 +80,7 @@ scripts), with the templates `make verus-headers` holds the headers to
 and a KIT file naming the release's tag and commit. `make` fails a kit
 target when the installed KIT or `verus-count --version` names another
 release than `PROVED_PORT_VERSION`. The pins move together (with the
-proved-port marketplace ref, where `.claude/settings.json` names one), in a pull
+proved-port marketplace ref in `.claude/settings.json`), in a pull
 request of their own (`.chainguard/deps.yaml`, the kit entry). {PORT}
 carries no copy of the counter or the make targets: a change to either
 lands in the kit's `kit/count` or `kit/make`, in a proved-port pull
@@ -92,4 +92,4 @@ lives; the kit's `kit/count/README.md`, "Configuration", which also
 states every rule the counter enforces), and the headers of FLOOR,
 RLIMIT, REACH and MINTS state each file's. Those headers are the kit's
 templates filled in for {PORT}, held to the release the package pin
-names; they carry no kit line.
+names.

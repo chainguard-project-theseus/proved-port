@@ -48,7 +48,9 @@ port against it.
 To make it available to everyone working in a repository, add the
 marketplace and plugin to that repository's `.claude/settings.json`,
 naming this repository, `chainguard-project-theseus/proved-port`, as the
-marketplace's GitHub source.
+marketplace's GitHub source. A port's copy of
+`kit/templates/.claude/settings.json` does this, with the marketplace's
+`ref` at the release the port pins.
 
 ## How a port consumes the kit
 
@@ -72,7 +74,7 @@ marketplace's GitHub source.
   package.
 - **Templates.** A new port copies `kit/templates/`: the Verus ledgers
   (`verus/FLOOR`, `RLIMIT`, `REACH`, `MINTS`, `count.toml`), the check
-  files, the reviewer configuration and the
+  files, the reviewer configuration, the Claude Code settings and the
   document skeletons, with the placeholders filled. Each of the kit's
   Verus files (`kit/make/VERUS-FILES`) but
   `.chainguard/review-prompt.md` keeps the kit's header, with no
@@ -83,8 +85,8 @@ marketplace's GitHub source.
 - **Changes.** A port carries no copy of the kit. A change to the
   counter or the make targets lands here and ships in a release; a new
   release reaches a port as one pull request that moves the package
-  pins and `PROVED_PORT_VERSION` together (and the proved-port marketplace
-  ref in a `.claude/settings.json` that names one), and takes any new text in the held
+  pins, `PROVED_PORT_VERSION` and the proved-port marketplace ref in
+  `.claude/settings.json` together, and takes any new text in the held
   headers (the kit entry of `kit/templates/.chainguard/deps.yaml`).
 
 A port that still carries vendored `verus/count/` and `verus/make/`

@@ -42,8 +42,8 @@
 #                     installed templates (PROVED_PORT_HOME/templates):
 #                     the headers of verus/FLOOR, RLIMIT, REACH, MINTS and
 #                     count.toml, of .chainguard/ci/verus.yaml, miri.yaml
-#                     and .chainguard/reviewers.yaml, and the vendored-kit
-#                     rule of .chainguard/review-prompt.md; VERUS_FLOOR's
+#                     and .chainguard/reviewers.yaml, and the kit rule
+#                     of .chainguard/review-prompt.md; VERUS_FLOOR's
 #                     header is the verus/FLOOR template's.
 #   kani              kani.sh: the Kani harnesses, all of them or a shard,
 #                     failing on any failure and when none run, unless

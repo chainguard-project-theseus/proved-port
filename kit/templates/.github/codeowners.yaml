@@ -11,7 +11,6 @@
 # their own definitions (this file, reviewers.yaml, the prompt file,
 # AGENTS.md, CLAUDE.md) always needs a person's approval, from someone
 # named here other than the author or a pusher of the head.
-# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 entries:
   - pattern: '*'

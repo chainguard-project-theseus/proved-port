@@ -186,20 +186,22 @@ that changes those pins and the held headers' text and nothing else
 kit before it lands (`kit/count/README.md`, "Adopting: the package").
 
 v0.3.0 removes vendoring. The ports that vendored kit 0.2.4
-(`kit/sync.sh` copies at `verus/count/` and `verus/make/`) move to the
-package in one PR each (`kit/count/README.md`, "Moving from a vendored
-copy").
+(`kit/sync.sh` copies at `verus/count/` and `verus/make/`, which no
+longer exist) move to the package in one PR each (`kit/count/README.md`,
+"Moving from a vendored copy").
 
-Rejected:
+Rejected (history: these were weighed while this repository was
+internal, and the reasons below that hinge on that no longer hold. The
+repository is public, and the package replaced vendoring in v0.3.0):
 
 - **git submodule.** Chainguard Checks' host-side checkout does not
   fetch submodules (mono's Checks migrator flags `actions/checkout`
   `with.submodules` for that reason), so each check would have to fetch
-  the kit itself, with github.com egress and credentials for a
-  non-public repository. pcre3's verus checks allow only crates.io
-  egress today.
-- **`go run` of a tagged module.** Needs module-proxy egress and, while
-  this repository is internal, GitHub credentials in every check; and it
+  the kit itself, with github.com egress and, while the repository was
+  not public, credentials. pcre3's verus checks allowed only crates.io
+  egress then.
+- **`go run` of a tagged module.** Needed module-proxy egress and, while
+  this repository was internal, GitHub credentials in every check; and it
   covers only the Go tools, not the Rust counter or the shell scripts.
 
 The prerequisite, settled: the package must be installable in the
@@ -225,18 +227,21 @@ is deleted in that PR.
 1. **Templates** (verus README, THEOREMS, SEAMS, TODO, FLOOR and RLIMIT
    headers, theorem and Kani record skeletons, the `ABI-nnn` entry
    format). A port keeps each header's full text as written in its own
-   file: the checks, the reviewer and agents read the port's copy, and
-   this repository is internal. Each header gains one line naming the
-   kit release and commit it came from
-   (`# kit: proved-port v{KIT_VERSION} ({KIT_SHA})`, such as
-   `proved-port v0.2.0 (<sha>)`; `kit/templates/README.md`), and a
-   later lint diffs the port's header against the template at that
-   commit, so a copy cannot drift unseen; a kit bump that changes a
-   header moves the port's copy and its version line together. What the
+   file: the checks, the reviewer and agents read the port's copy. A
+   lint diffs the port's header against the template, so a copy cannot
+   drift unseen; a kit bump that changes a header moves the port's copy
+   with the pin. (History, through v0.2.4: while this repository was
+   internal, the port's copy was the only one its readers could see, so
+   each header gained one line naming the kit release and commit it came
+   from, `# kit: proved-port vX.Y.Z (<sha>)`, and the lint diffed the
+   header against the vendored template at that commit. From v0.3.0 the
+   repository is public, the release is the package pin, and neither
+   the templates nor a port's files carry that line.) What the
    port drops are restatements elsewhere: `AGENTS.md`, `CONTRIBUTING.md`,
    `verus/README.md` and the check files point at the header instead.
    pcre3: `verus/FLOOR`, `verus/RLIMIT`, `verus/REACH` and `verus/MINTS`
-   take the version line; `docs/abi-changes.md` "Entry format" and the
+   keep the template's header text (through v0.2.4 with the version
+   line); `docs/abi-changes.md` "Entry format" and the
    Kani records keep their text and follow the templates. challoc: the
    same for `verus/README.md` and `verus/RESULTS.md`; `verus/FLOOR`
    waits for step 2, because challoc's counter reads
@@ -246,7 +251,7 @@ is deleted in that PR.
    figures the check names, never in the PR that earns them (challoc's,
    expat-rs's and chainz#59's rule; pcre3 moves to it from same-PR).
    Exit: neither port restates a header's rule
-   outside the header, and each header names its kit version.
+   outside the header, and each header holds the template's text.
    **Status:** the kit side is done: `kit/templates/` (FLOOR, RLIMIT,
    REACH, MINTS, SEAMS.md, THEOREMS.md, a verus README.md with the
    sections the headers cite and Coverage and Counter in prose, the
@@ -254,12 +259,11 @@ is deleted in that PR.
    CONTRIBUTING.md outlines; `kit/templates/README.md` says how to apply
    them). The rest of the verus README's prose and the TODO skeleton are
    not templated yet. pcre3's restatements point at its headers
-   (wolfi-dev/pcre3#1073). The version lines take the
-   `v{KIT_VERSION} ({KIT_SHA})` form, naming the release tag and the
-   commit. The lint that diffs a header against its template is
-   `kit/make/headers.sh` (`make verus-headers`), installed with the
-   counter by the package: it reads the installed templates, and from
-   v0.3.0 a port's held files carry no version line.
+   (wolfi-dev/pcre3#1073). The lint that diffs a header against its
+   template is `kit/make/headers.sh` (`make verus-headers`), installed
+   with the counter by the package: it reads the installed templates,
+   and from v0.3.0 neither the templates nor a port's files carry a
+   version line (one a port still has ends its header and is not read).
 2. **Counter, unsafe/assume lint and Kani runner.**
    - pcre3: delete `verus/count/` and `verus/kani/run.sh`; add
      `verus/count.toml` (the four crates, the `test-util` feature, the
@@ -270,7 +274,8 @@ is deleted in that PR.
      keeping `KANI_ONLY`, `KANI_EXCLUDE` and `KANI_JOBS`. In
      `.chainguard/ci/verus.yaml` the `counter tests` step leaves the
      `verus` and `verus-main` checks (the kit's own CI tests the
-     counter), and the check runs the package's counter (section 4);
+     counter), and the check installs the package's counter (section 4;
+     through v0.2.4 it built a vendored copy);
      `make verus` and `make kani` stay the commands. `lint.yaml`'s
      `forbid(unsafe_code) roots` step runs the kit lint in place of
      `ci/lint-unsafe.sh`, which is deleted.
@@ -278,7 +283,7 @@ is deleted in that PR.
      `cd verus/count && cargo run` line) runs the kit counter with the
      generated-ledger back end, and `verus/FLOOR` renames its
      `combined-*` lines to `checked-*` and keeps the template's header
-     text, with the kit version line, and the own-PR raise rule (its
+     text (through v0.2.4 with the kit version line) and the own-PR raise rule (its
      `verus/count.toml` sets `renamed_from = "combined"`, so the PR's
      base copy still
      compares: kit/count/README.md, "Parity"); `verus.yaml` drops its
@@ -305,7 +310,7 @@ is deleted in that PR.
      instance and challoc's weighted shards with a fail pattern, each
      as variables (`make-template` tests it with a stub cargo). Still
      to come in this step: the unsafe/assume lint, and the pcre3 and
-     challoc PRs that switch to the package's kit counter.
+     challoc PRs that switch to the package's counter.
 3. **Seam ledger generator** (Go rewrite of challoc's `verus/seams.sh`,
    with `verus/seams-mutants.sh` as its tests). challoc: the Makefile's
    `sh verus/seams.sh --check` runs the kit generator; the generated

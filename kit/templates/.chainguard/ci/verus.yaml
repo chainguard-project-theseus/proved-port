@@ -56,7 +56,6 @@
 # verus/FLOOR.
 # VERUS_THREADS gives Verus every vCPU of the guest (CG_CPUS), one z3
 # per module.
-# kit: proved-port v{KIT_VERSION} ({KIT_SHA})
 version: 1
 
 environment:
