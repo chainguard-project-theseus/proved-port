@@ -621,10 +621,12 @@ fn collect_inline(tokens: TokenStream, holder: &TokenStream, out: &mut Vec<Body>
                     let mut bound = BTreeSet::new();
                     bound_names(holder.clone(), &mut bound);
                     let arg = body(g.stream());
-                    let local = arg
-                        .sites
-                        .iter()
-                        .any(|s| matches!(s, Site::Free(n, _) if bound.contains(n)));
+                    // `bound` holds names without `r#` ([`pattern_names`]),
+                    // so a call `r#type()` is compared without it too.
+                    let local = arg.sites.iter().any(|s| {
+                        matches!(s, Site::Free(n, _)
+                            if bound.contains(n.strip_prefix("r#").unwrap_or(n)))
+                    });
                     out.push(if is_closure(g.stream()) && !local {
                         arg
                     } else {
@@ -727,12 +729,16 @@ fn bound_names(tokens: TokenStream, out: &mut BTreeSet<String>) {
     }
 }
 
-/// Every name in pattern `tokens`, at any depth, but `mut` and `ref`.
+/// Every name in pattern `tokens`, at any depth, but `mut` and `ref`,
+/// without a raw identifier's `r#`: `let r#open` binds the `open` a call
+/// names, and the walk writes a binding named by a Verus keyword raw
+/// (`config::stand_in`) though it leaves the call as written.
 fn pattern_names(tokens: TokenStream, out: &mut BTreeSet<String>) {
     for t in tokens {
         match t {
             TokenTree::Ident(n) if n != "mut" && n != "ref" => {
-                out.insert(n.to_string());
+                let n = n.to_string();
+                out.insert(n.strip_prefix("r#").unwrap_or(&n).to_owned());
             }
             TokenTree::Group(g) => pattern_names(g.stream(), out),
             _ => {}
@@ -1771,6 +1777,72 @@ mod tests {
             impl Regex { fn new(p: u8) { helper(p) } }
             fn helper(p: u8) { N.fetch_add(1, Relaxed); }";
         assert_eq!(reads(src), vec![("helper".to_string(), "N".to_string())]);
+    }
+
+    // A static named by a word Verus reserves, read as the walk reads a
+    // file (through `stand_in`), keeps its name, so each of its reads is
+    // still found: module-level statics, one declared in a function's
+    // body, and a `static mut` read through `&raw mut`. (This harness records no `static mut` as forced; the
+    // rewrite's own test, in config.rs, holds a `static mut`'s name.)
+    #[test]
+    fn a_static_named_by_a_verus_keyword_is_still_reported() {
+        let src = crate::config::stand_in(
+            &[],
+            "static closed: AtomicU64 = AtomicU64::new(0);
+            static exec: AtomicU64 = AtomicU64::new(0);
+            static mut ghost: AtomicU64 = AtomicU64::new(0);
+            impl Regex { fn new(p: u8) { a(); b(); c(); d(); } }
+            fn a() { closed.load(Relaxed); }
+            fn b() { exec.fetch_add(1, Relaxed); }
+            fn c() { static open: AtomicU64 = AtomicU64::new(0); open.fetch_add(1, Relaxed); }
+            fn d() { unsafe { (*(&raw mut ghost)).load(Relaxed); } }",
+        );
+        let got = reads(&src);
+        for want in [
+            ("a", "closed"),
+            ("b", "exec"),
+            ("c", "open"),
+            ("d", "ghost"),
+        ] {
+            assert!(
+                got.contains(&(want.0.to_string(), want.1.to_string())),
+                "{want:?}: got = {got:?}"
+            );
+        }
+    }
+
+    // A local closure named by a word Verus reserves, read through
+    // `stand_in`, which writes its `let` (or a typed parameter) raw and
+    // leaves its call as written, is still the closure the initializer
+    // calls, so the whole holder is read: `HIDDEN`, though no root
+    // reaches it. So is one its author wrote raw on both sides (`r#type`
+    // can only be written so), whose call keeps the `r#`.
+    #[test]
+    fn a_local_closure_named_by_a_verus_keyword_is_still_bound() {
+        let src = crate::config::stand_in(
+            &[],
+            "static HIDDEN: AtomicU64 = AtomicU64::new(0);
+            fn init(c: &OnceLock<u64>) { let open = || HIDDEN.load(Relaxed); c.get_or_init(|| open()); }
+            fn param(c: &OnceLock<u64>) { let run = |exec: fn() -> u64| { c.get_or_init(move || exec()); }; run(|| HIDDEN.load(Relaxed)); }
+            fn raw(c: &OnceLock<u64>) { let r#type = || HIDDEN.load(Relaxed); c.get_or_init(|| r#type()); }
+            fn raw_both(c: &OnceLock<u64>) { let r#ghost = || HIDDEN.load(Relaxed); c.get_or_init(|| r#ghost()); }",
+        );
+        assert!(
+            src.contains("let r#open") && src.contains("|r#exec:"),
+            "stand_in: got = {src:?}, wanted = raw `open` and `exec` bindings"
+        );
+        let got = reads(&src);
+        for want in [
+            ("init", "HIDDEN"),
+            ("param", "HIDDEN"),
+            ("raw", "HIDDEN"),
+            ("raw_both", "HIDDEN"),
+        ] {
+            assert!(
+                got.contains(&(want.0.to_string(), want.1.to_string())),
+                "{want:?}: got = {got:?}"
+            );
+        }
     }
 
     #[test]

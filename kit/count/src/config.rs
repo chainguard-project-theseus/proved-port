@@ -887,11 +887,170 @@ pub(crate) fn normal(path: &str) -> PathBuf {
         .collect()
 }
 
-/// `text` with each of `pairs`' first strings replaced by its second.
+/// `text` with each of `pairs`' first strings replaced by its second,
+/// then with each Verus keyword that names a binding outside `verus!`
+/// written as a raw identifier ([`raw_keywords`]).
 pub(crate) fn stand_in(pairs: &[[String; 2]], text: &str) -> String {
-    pairs
-        .iter()
-        .fold(text.to_owned(), |t, [from, to]| t.replace(from, to))
+    raw_keywords(
+        &pairs
+            .iter()
+            .fold(text.to_owned(), |t, [from, to]| t.replace(from, to)),
+    )
+}
+
+/// The words Verus's syntax reserves beyond Rust's (verus_syn's
+/// `define_keywords!`, its Verus section). Ordinary Rust may use any of
+/// them as a name, but the parser reads one where a binding is declared
+/// as a mode or clause (`exec: u8` as a field, `let tracked = ..`).
+/// `assume` is left out: the counter classes a function by its calls of
+/// `assume` ([`crate::config::Config::read_names`]), so it is never
+/// rewritten.
+const VERUS_KEYWORDS: [&str; 51] = [
+    "spec",
+    "proof",
+    "axiom",
+    "exec",
+    "open",
+    "closed",
+    "uninterp",
+    "ghost",
+    "tracked",
+    "requires",
+    "recommends",
+    "ensures",
+    "default_ensures",
+    "returns",
+    "decreases",
+    "with",
+    "opens_invariants",
+    "invariant_except_break",
+    "no_unwind",
+    "invariant",
+    "invariant_ensures",
+    "assert",
+    "reveal",
+    "reveal_with_fuel",
+    "hide",
+    "implies",
+    "by",
+    "forall",
+    "exists",
+    "choose",
+    "is",
+    "isnt",
+    "FnSpec",
+    "spec_fn",
+    "proof_fn",
+    "via",
+    "when",
+    "any",
+    "none",
+    "has",
+    "hasnt",
+    "global",
+    "size_of",
+    "layout",
+    "matches",
+    "broadcast",
+    "group",
+    "assume_specification",
+    "atomically",
+    "outer_mask",
+    "inner_mask",
+];
+
+/// `text` with each Verus keyword ([`VERUS_KEYWORDS`]) that names a
+/// binding outside any macro invocation written as a raw identifier
+/// (`r#exec`), which Rust reads as the same name and the parser as an
+/// identifier. A binding is a name followed by one `:`, not `::` (a
+/// field, a parameter, a typed `let`), or after `let`, `ref`, or a `mut`
+/// that does not follow `&` or `&raw`; never a metavariable (`$exec`), a lifetime
+/// or label (`'exec`), or a name a `(` group follows (a call). The body
+/// of a macro invocation (`verus! { .. }`, or a macro whose expansion
+/// reaches `verus!`) may be Verus's syntax, and a `macro_rules!`
+/// definition's matchers must match its invocations as written, so both
+/// are left alone, as is text that does not lex, which the parse then
+/// reports. Only `r#` is added,
+/// on the name's own line, so every line keeps its number.
+fn raw_keywords(text: &str) -> String {
+    let Ok(tokens) = text.parse::<proc_macro2::TokenStream>() else {
+        return text.to_owned();
+    };
+    let mut at = Vec::new();
+    keyword_bindings(tokens, &mut at);
+    if at.is_empty() {
+        return text.to_owned();
+    }
+    let mut lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
+    // Right to left within a line, so an insertion moves none still to come.
+    at.sort_by(|a, b| b.cmp(a));
+    for (line, column) in at {
+        if let Some(l) = lines.get_mut(line - 1) {
+            let byte = l.char_indices().nth(column).map_or(l.len(), |(i, _)| i);
+            l.insert_str(byte, "r#");
+        }
+    }
+    lines.join("\n")
+}
+
+/// The line and column of each Verus keyword in `tokens` that names a
+/// binding ([`raw_keywords`]), outside any macro invocation's body.
+fn keyword_bindings(tokens: proc_macro2::TokenStream, at: &mut Vec<(usize, usize)>) {
+    use proc_macro2::{Delimiter, Spacing, TokenTree};
+    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+    let punct =
+        |i: usize, c: char| matches!(tokens.get(i), Some(TokenTree::Punct(p)) if p.as_char() == c);
+    for (i, t) in tokens.iter().enumerate() {
+        match t {
+            // A macro invocation's body (`name! { .. }`), an inner
+            // attribute's (`#![..]`), which binds nothing, or a
+            // `macro_rules! name { .. }` definition's: its matchers'
+            // tokens must stay those its invocations, left as written,
+            // match (rustc and the expander tell `r#ghost` from `ghost`).
+            // A `!` after anything else (`-> ! { .. }`, `!(..)`) is no
+            // macro's, and the group is read.
+            TokenTree::Group(_)
+                if i > 1
+                    && punct(i - 1, '!')
+                    && (matches!(&tokens[i - 2], TokenTree::Ident(_)) || punct(i - 2, '#')) => {}
+            TokenTree::Group(_)
+                if i > 2
+                    && matches!(&tokens[i - 1], TokenTree::Ident(_))
+                    && punct(i - 2, '!')
+                    && matches!(&tokens[i - 3], TokenTree::Ident(m) if m == "macro_rules") => {}
+            TokenTree::Group(g) => keyword_bindings(g.stream(), at),
+            TokenTree::Ident(id) if VERUS_KEYWORDS.contains(&id.to_string().as_str()) => {
+                // One `:`, not the first of a path's `::` (a Joint `:`
+                // before another); `exec: ::core::X` is a binding.
+                let path = matches!(
+                    tokens.get(i + 1),
+                    Some(TokenTree::Punct(p)) if p.spacing() == Spacing::Joint
+                ) && punct(i + 2, ':');
+                let typed = punct(i + 1, ':') && !path;
+                let ident_at = |j: usize, w: &str| matches!(tokens.get(j), Some(TokenTree::Ident(b)) if b == w);
+                let after = |w: &str| i > 0 && ident_at(i - 1, w);
+                // A `mut` after `&` or `&raw` borrows a place; it binds
+                // nothing.
+                let borrow = i > 1
+                    && (punct(i - 2, '&')
+                        || (ident_at(i - 2, "raw") && i > 2 && punct(i - 3, '&')));
+                let bound = after("let") || after("ref") || (after("mut") && !borrow);
+                let sigil = i > 0 && (punct(i - 1, '$') || punct(i - 1, '\''));
+                let call = matches!(
+                    tokens.get(i + 1),
+                    Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis
+                );
+                // A static's name, which the compile-inputs check matches
+                // against its reads, which keep the plain name.
+                let item = after("static") || (after("mut") && i > 1 && ident_at(i - 2, "static"));
+                if (typed || bound) && !sigil && !call && !item {
+                    let start = id.span().start();
+                    at.push((start.line, start.column));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1518,5 +1677,91 @@ home = "crates/pcre3-capi/src/object.rs"
         let pairs = [["assert::".to_string(), "assrtx::".to_string()]];
         let got = stand_in(&pairs, "use assert::x; assert::y();");
         assert_eq!(got, "use assrtx::x; assrtx::y();");
+    }
+
+    // A Verus keyword naming a binding outside `verus!` (a field, a
+    // parameter, a `let`) becomes a raw identifier, on its own line; a
+    // path, a call, a field read, a function's name and anything inside
+    // `verus!` (bare or by path) stay as written, as does text that does
+    // not lex.
+    #[test]
+    fn verus_keywords_naming_bindings_become_raw_identifiers() {
+        for (text, want) in [
+            (
+                "struct S {\n    pub exec: u8,\n    tracked: u8,\n}\n",
+                "struct S {\n    pub r#exec: u8,\n    r#tracked: u8,\n}\n",
+            ),
+            (
+                "fn f(exec: u8) { let tracked = 1; let mut ghost = 2; let ref spec = 3; }",
+                "fn f(r#exec: u8) { let r#tracked = 1; let mut r#ghost = 2; let ref r#spec = 3; }",
+            ),
+            (
+                "fn exec() { tracked(); s.exec; exec::x(); let é = 0; let proof = 1; }",
+                "fn exec() { tracked(); s.exec; exec::x(); let é = 0; let r#proof = 1; }",
+            ),
+            (
+                "verus! { proof fn p() { let tracked x = 1u8; } }\nstruct S { exec: u8 }",
+                "verus! { proof fn p() { let tracked x = 1u8; } }\nstruct S { r#exec: u8 }",
+            ),
+            (
+                "::vstd::prelude::verus! { struct T { tracked exec: u8 } }",
+                "::vstd::prelude::verus! { struct T { tracked exec: u8 } }",
+            ),
+            ("struct S { exec: u8 } \"", "struct S { exec: u8 } \""),
+            // A single `:` however spaced, but not `::`.
+            (
+                "struct S { exec:&'static u8, tracked:*const u8 }",
+                "struct S { r#exec:&'static u8, r#tracked:*const u8 }",
+            ),
+            // A metavariable, a lifetime and a label bind nothing here, and
+            // a matcher's must keep the name its transcriber uses.
+            (
+                "macro_rules! m { ($name:ident, $proof:expr) => { fn $name() { proof!($proof); } } }",
+                "macro_rules! m { ($name:ident, $proof:expr) => { fn $name() { proof!($proof); } } }",
+            ),
+            // A matcher's literal tokens must match its invocations as
+            // written, and a transcriber's are left to the expansion.
+            (
+                "macro_rules! m { (ghost: $n:ident) => { struct $n { exec: u8 } }; ($($t:tt)*) => {}; }",
+                "macro_rules! m { (ghost: $n:ident) => { struct $n { exec: u8 } }; ($($t:tt)*) => {}; }",
+            ),
+            (
+                "fn f<'spec: 'a>() { 'exec: loop {} }",
+                "fn f<'spec: 'a>() { 'exec: loop {} }",
+            ),
+            // `&mut` and `&raw mut` borrow, a call is no binding, and
+            // `assume` is never rewritten.
+            (
+                "fn g() { let x = &mut assume(false); let y = &mut tracked; let z = exec(1); let assume = 1; }",
+                "fn g() { let x = &mut assume(false); let y = &mut tracked; let z = exec(1); let assume = 1; }",
+            ),
+            (
+                "fn g() { let p = &raw mut closed; let q = & raw mut ghost; let raw = 0; let mut spec = raw; }",
+                "fn g() { let p = &raw mut closed; let q = & raw mut ghost; let raw = 0; let mut r#spec = raw; }",
+            ),
+            // A type that starts with `::` follows a binding's one `:`.
+            (
+                "struct S { pub exec: ::core::ffi::c_int }\nfn f(ghost: ::std::os::raw::c_int) {}",
+                "struct S { pub r#exec: ::core::ffi::c_int }\nfn f(r#ghost: ::std::os::raw::c_int) {}",
+            ),
+            // A static's name, wherever declared, stays as its reads have it.
+            (
+                "static mut closed: u32 = 0;\nstatic exec: u8 = 0;\nfn g() { static mut open: u8 = 0; }",
+                "static mut closed: u32 = 0;\nstatic exec: u8 = 0;\nfn g() { static mut open: u8 = 0; }",
+            ),
+            // A diverging function's body follows a `!` that is no macro's.
+            (
+                "fn die(code: u8) -> ! { let tracked = code; loop {} }",
+                "fn die(code: u8) -> ! { let r#tracked = code; loop {} }",
+            ),
+            // Any macro invocation's body may reach `verus!`.
+            (
+                "m! { proof fn p() { let tracked x = 1u8; } }\nstruct T { ghost: u8 }",
+                "m! { proof fn p() { let tracked x = 1u8; } }\nstruct T { r#ghost: u8 }",
+            ),
+        ] {
+            let got = stand_in(&[], text);
+            assert_eq!(got, want, "{text:?}: got = {got:?}, wanted = {want:?}");
+        }
     }
 }
