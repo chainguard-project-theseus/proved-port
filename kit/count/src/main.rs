@@ -118,7 +118,11 @@
 //! function's `#[verifier::rlimit]` may rise past REV's only with a new
 //! `rlimit-raised` line in verus/RLIMIT. A function that loses its
 //! attribute runs under the default (10), so dropping one below the
-//! default is a rise too.
+//! default is a rise too. A function's limit is matched to the statistics
+//! by the name Verus gives it: a method's is its type's path, from the
+//! module that defines the type, not the module of its `impl`
+//! ([`Counter::name_methods`]). A `#[verifier::rlimit]` on a function the
+//! statistics do not name fails the run, and every such limit is named.
 //!
 //! With `[inputs]`, it checks compile's inputs (verus/theorems/CD1.md,
 //! [`inputs`]): it fails when a function reachable from the configured
@@ -219,6 +223,29 @@ struct Counter {
     /// The type (an `impl`) or trait whose functions [`Counter::items`] is
     /// walking; empty for free functions.
     owner: String,
+    /// Whether [`Counter::owner`] is an `impl`'s type, not a trait.
+    owner_impl: bool,
+    /// The type parameters of the `impl` [`Counter::items`] is walking
+    /// (`impl<S: Spec> Tr for S` declares `S`).
+    owner_params: Vec<String>,
+    /// The path (module, then name) of each struct, enum, union and `type`
+    /// alias the walk read, with the module it is visible within
+    /// ([`Counter::vis_scope`]; `None` for a `pub(in ..)` path the counter
+    /// cannot place) and whether Verus's build might not compile it
+    /// ([`Built::Unsure`]), by which [`Counter::name_methods`] finds the
+    /// type an `impl` names.
+    type_paths: BTreeMap<Vec<String>, (Option<Vec<String>>, bool)>,
+    /// The modules that may bind a name the walk does not see: those with
+    /// an item macro invocation the counter does not expand (another
+    /// crate's, `include!`), which may write any type, and those with a
+    /// `use` an expansion writes, which [`Counter::uses`] does not hold.
+    /// Either binding shadows a glob's, so [`Counter::type_path`] takes no
+    /// glob's type in such a module.
+    opaque: std::collections::BTreeSet<Vec<String>>,
+    /// Each method of an `impl` that [`Counter::record`] named by the
+    /// `impl`'s module, renamed by its type's once the crate is walked
+    /// ([`Counter::name_methods`]).
+    methods: Vec<Method>,
     /// The module [`Counter::items`] is walking, as Verus names it: the
     /// crate (`pcre3_syntax`), then each module of the file's path and of
     /// any inline `mod` around the item.
@@ -420,6 +447,11 @@ impl Counter {
             aliases: BTreeMap::new(),
             traits: std::collections::BTreeSet::new(),
             owner: String::new(),
+            owner_impl: false,
+            owner_params: Vec::new(),
+            type_paths: BTreeMap::new(),
+            opaque: std::collections::BTreeSet::new(),
+            methods: Vec::new(),
             module: Vec::new(),
             scope: String::new(),
             limits: Vec::new(),
@@ -466,6 +498,19 @@ struct FnPtrs {
     rules: usize,
     /// Each invocation: crate, file, line and the tokens it passes.
     uses: Vec<(String, PathBuf, usize, TokenStream)>,
+}
+
+/// A method of an `impl` Verus checks, as [`Counter::record`] first names
+/// it: that name (the `impl`'s module, type and method), where it starts,
+/// the `impl`'s module, its type as written, its type parameters, and the
+/// method's name.
+struct Method {
+    name: String,
+    at: String,
+    module: Vec<String>,
+    owner: String,
+    params: Vec<String>,
+    ident: String,
 }
 
 /// One executable function, for the recursion check ([`recursive`]): its
@@ -2126,12 +2171,31 @@ fn rlimit_attr(attrs: &[Attribute]) -> Result<Option<Option<f32>>, String> {
 }
 
 /// The name Verus gives an `impl`'s type or a trait, from
-/// [`Counter::owner`]: its last path segment, without generic arguments
-/// (`Machine < 'a , U >` is `Machine`); `None` for free functions.
+/// [`Counter::owner`]: a path's last segment, without generic arguments
+/// (`Machine < 'a , U >` is `Machine`); `None` for free functions. A type
+/// that is no path (`& m :: S`, `* const S`, `dyn m :: Tr`, a tuple) has
+/// no name Verus gives it, so its whole text is kept, which no function
+/// of the statistics has; so is a qualified path's (`< u8 as Tr > ::
+/// Out`), which is no free function's either.
 fn owner_name(owner: &str) -> Option<String> {
-    let base = owner.split('<').next().unwrap_or("");
-    let last = base.rsplit("::").next().unwrap_or("").trim();
-    (!last.is_empty()).then(|| last.to_owned())
+    if owner.trim().is_empty() {
+        return None;
+    }
+    let base = owner.split('<').next().unwrap_or("").trim();
+    if base.is_empty() {
+        // A qualified path, `< u8 as Tr > :: Out`.
+        return Some(owner.trim().to_owned());
+    }
+    let segs: Vec<&str> = base.split("::").map(str::trim).collect();
+    let ident = |s: &str| {
+        let s = s.strip_prefix("r#").unwrap_or(s);
+        !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_')
+    };
+    let plain = segs
+        .iter()
+        .enumerate()
+        .all(|(i, s)| ident(s) || (i == 0 && s.is_empty()));
+    Some(if plain { segs[segs.len() - 1] } else { base }.to_owned())
 }
 
 /// The module path Verus names a file's items under: the crate's name
@@ -2321,6 +2385,16 @@ impl Counter {
             self.verus_fns
                 .entry(name.clone())
                 .or_insert_with(|| at.clone());
+            if self.owner_impl {
+                self.methods.push(Method {
+                    name: name.clone(),
+                    at: at.clone(),
+                    module: self.module.clone(),
+                    owner: self.owner.clone(),
+                    params: self.owner_params.clone(),
+                    ident: sig.ident.to_string(),
+                });
+            }
             match rlimit_attr(attrs) {
                 Ok(None) => {}
                 Ok(Some(units)) => self.limits.push(rlimit::Limit { name, at, units }),
@@ -2769,6 +2843,37 @@ impl Counter {
                 }
                 self.emitted.extend(found);
             }
+            // A type an expansion writes is kept too: it shadows a glob
+            // import of the same name, as one the file writes does.
+            let defined = match item {
+                Item::Struct(s) => Some((&s.attrs, &s.vis, &s.ident)),
+                Item::Enum(e) => Some((&e.attrs, &e.vis, &e.ident)),
+                Item::Union(u) => Some((&u.attrs, &u.vis, &u.ident)),
+                Item::Type(t) => Some((&t.attrs, &t.vis, &t.ident)),
+                _ => None,
+            };
+            if let Some((attrs, vis, ident)) = defined {
+                let built = guarded_built(&self.guards_with(attrs), &self.atoms).ok();
+                if built != Some(Built::Test) {
+                    let scope = self.vis_scope(vis);
+                    self.type_paths.insert(
+                        [self.module.clone(), vec![ident.to_string()]].concat(),
+                        (
+                            scope,
+                            !self.sure || !matches!(built, Some(Built::Shipped | Built::Verus)),
+                        ),
+                    );
+                }
+            }
+            // A `use` an expansion writes binds names [`Counter::uses`]
+            // does not hold (it is read from the files' own items), which
+            // shadow the module's globs ([`Counter::opaque`]).
+            if self.expansion.is_some()
+                && let Item::Use(u) = item
+                && guarded_built(&self.guards_with(&u.attrs), &self.atoms).ok() != Some(Built::Test)
+            {
+                self.opaque.insert(self.module.clone());
+            }
             // An expansion is walked for its functions alone
             // ([`Counter::record`]).
             if self.expansion.is_some()
@@ -2803,6 +2908,18 @@ impl Counter {
                     let outer = std::mem::replace(
                         &mut self.owner,
                         verus_syn::__private::ToTokens::to_token_stream(&*i.self_ty).to_string(),
+                    );
+                    let outer_impl = std::mem::replace(&mut self.owner_impl, true);
+                    let outer_params = std::mem::replace(
+                        &mut self.owner_params,
+                        i.generics
+                            .params
+                            .iter()
+                            .filter_map(|p| match p {
+                                verus_syn::GenericParam::Type(t) => Some(t.ident.to_string()),
+                                _ => None,
+                            })
+                            .collect(),
                     );
                     for ii in &i.items {
                         if let ImplItem::Fn(f) = ii {
@@ -2843,6 +2960,8 @@ impl Counter {
                         }
                     }
                     self.owner = outer;
+                    self.owner_impl = outer_impl;
+                    self.owner_params = outer_params;
                     self.leave(was);
                 }
                 Item::Trait(t) => {
@@ -2855,6 +2974,7 @@ impl Counter {
                         self.traits.insert(t.ident.to_string());
                     }
                     let outer = std::mem::replace(&mut self.owner, t.ident.to_string());
+                    let outer_impl = std::mem::replace(&mut self.owner_impl, false);
                     for ti in &t.items {
                         if let TraitItem::Fn(f) = ti
                             && let Some(block) = &f.default
@@ -2881,6 +3001,7 @@ impl Counter {
                         }
                     }
                     self.owner = outer;
+                    self.owner_impl = outer_impl;
                     self.leave(was);
                 }
                 Item::Mod(m) => {
@@ -2948,6 +3069,9 @@ impl Counter {
                         && self.item_ships(&m.attrs) =>
                 {
                     inputs::statics_in(m.mac.tokens.clone(), true, &mut self.statics);
+                    if !self.std_thread_local(&m.mac.path) {
+                        self.opaque.insert(self.module.clone());
+                    }
                 }
                 Item::Macro(m)
                     if self.fn_ptr_macro.as_ref().is_some_and(|f| {
@@ -3310,6 +3434,207 @@ impl Counter {
                 self.errors += 1;
             }
         }
+        self.name_methods();
+    }
+
+    /// Renames each method [`Counter::record`] named by its `impl`'s
+    /// module to the name Verus gives it: the path of the item the `impl`'s
+    /// type resolves to, then the method's name (rust_verify's
+    /// `register_friendly_path_as_rust_name`), which may be in another
+    /// module than the `impl`. A method whose type [`Counter::type_path`]
+    /// cannot find keeps its first name; a limit on it then names no
+    /// function of the statistics, which fails the check
+    /// ([`rlimit::shares`]).
+    fn name_methods(&mut self) {
+        for m in std::mem::take(&mut self.methods) {
+            let Some(mut path) = self.type_path(&m.module, &m.owner, &m.params) else {
+                continue;
+            };
+            path.push(m.ident);
+            let name = path.join("::");
+            if name == m.name {
+                continue;
+            }
+            for l in self
+                .limits
+                .iter_mut()
+                .filter(|l| l.name == m.name && l.at == m.at)
+            {
+                l.name = name.clone();
+            }
+            if self.verus_fns.get(&m.name) == Some(&m.at) {
+                self.verus_fns.remove(&m.name);
+            }
+            self.verus_fns.entry(name).or_insert(m.at);
+        }
+    }
+
+    /// The path (module, then name) of the struct, enum, union or `type`
+    /// alias that an `impl` in module `here`, with type parameters
+    /// `params`, names as `owner` (its type's tokens), among those the walk
+    /// read ([`Counter::type_paths`]), found as rustc's scoping finds it:
+    /// a path's last segment in the module the rest names from `here`; a
+    /// bare name `here` defines; else the one `use` in `here` that imports
+    /// it by name, which settles it even when it names no type the walk
+    /// read (another crate's, a re-export); else the one type that
+    /// `here`'s glob imports of this crate's modules bring in, defined in
+    /// the glob's module and visible from `here` (`pub` of any kind, or
+    /// the glob's module an ancestor of `here`). `None` for anything else,
+    /// whose methods keep the `impl`'s module, so a limit on one names no
+    /// function of the statistics rather than another function's: one of
+    /// `params`, a reference, a slice, another crate's type; a name that a
+    /// `use` Verus's build might not compile imports (`Built::Unsure`), or
+    /// that two do; and a name a glob's module may pass on without
+    /// defining it (it imports the name, or has a glob of its own, which
+    /// the counter does not follow), or that a glob of this crate the
+    /// counter cannot place may bring in.
+    fn type_path(&self, here: &[String], owner: &str, params: &[String]) -> Option<Vec<String>> {
+        let segs: Vec<String> = owner
+            .split('<')
+            .next()
+            .unwrap_or("")
+            .split("::")
+            .map(|s| s.trim().to_owned())
+            .collect();
+        if segs.iter().any(String::is_empty) {
+            return None;
+        }
+        let found = |module: Vec<String>, name: &String| {
+            let p = [module, vec![name.clone()]].concat();
+            self.type_paths.contains_key(&p).then_some(p)
+        };
+        let (name, prefix) = segs.split_last()?;
+        if !prefix.is_empty() {
+            return found(self.path_module(here, prefix, true)?, name);
+        }
+        if params.contains(name) {
+            return None;
+        }
+        if let Some(p) = found(here.to_vec(), name) {
+            return Some(p);
+        }
+        let uses = self.sure_uses(here);
+        let named: Vec<&&UsePath> = uses
+            .iter()
+            .filter(|(_, glob, n, _)| !glob && n == name)
+            .collect();
+        match named.as_slice() {
+            [] => {}
+            [(p, _, _, built)] if *built != Built::Unsure => {
+                let (last, from) = p.split_last()?;
+                return found(self.path_module(here, from, false)?, last);
+            }
+            _ => return None,
+        }
+        // A type an unread macro writes in `here`, or a `use` an expansion
+        // writes there, shadows every glob's, as one written out does.
+        if self.opaque.contains(here) {
+            return None;
+        }
+        // The candidates are the definitions the placed globs bring in. A
+        // glob the counter cannot place (another crate's), or a module's
+        // re-export it does not follow, may bring the name in only where
+        // no candidate does, or rustc would find the name ambiguous; so
+        // one candidate is the name's type, and none leaves it unplaced.
+        let mut candidates = Vec::new();
+        for (p, _, _, built) in uses.iter().filter(|(_, glob, ..)| *glob) {
+            let Some(m) = self.path_module(here, p, false) else {
+                continue;
+            };
+            let path = [m, vec![name.clone()]].concat();
+            match self.type_paths.get(&path) {
+                None => {}
+                // A glob, or a definition, Verus's build might not compile
+                // may leave the name to one the counter cannot place.
+                Some((_, true)) => return None,
+                Some(_) if *built == Built::Unsure => return None,
+                // A glob brings in only what `here` can see; a scope the
+                // counter cannot place is taken for one it cannot.
+                Some((scope, false)) if scope.as_ref().is_some_and(|s| here.starts_with(s)) => {
+                    candidates.push(path);
+                }
+                Some(_) => {}
+            }
+        }
+        match candidates.as_slice() {
+            [p] => Some(p.clone()),
+            _ => None,
+        }
+    }
+
+    /// The `use`s of `module` but those built only for tests.
+    fn sure_uses(&self, module: &[String]) -> Vec<&UsePath> {
+        self.uses
+            .get(module)
+            .into_iter()
+            .flatten()
+            .filter(|(_, _, _, built)| *built != Built::Test)
+            .collect()
+    }
+
+    /// The module of this crate a path's module segments `segs`, written in
+    /// module `here`, name, as edition 2018 and later resolve them: from
+    /// `crate`, `self` or `super`; else from a module `here` declares, or,
+    /// with `follow`, from the one `use` in `here` Verus's build is sure
+    /// to compile that imports the first segment by name (`use
+    /// crate::x::state;` then `state::S`). A first segment that names
+    /// neither may be another crate (an extern crate beside a root module
+    /// of its name), so it gives `None`: the crate root's modules are not
+    /// in scope below the root.
+    fn path_module(&self, here: &[String], segs: &[String], follow: bool) -> Option<Vec<String>> {
+        let (first, rest) = segs.split_first()?;
+        if matches!(first.as_str(), "crate" | "self" | "super") {
+            return self.module_from(here, segs);
+        }
+        let child = [here, segs].concat();
+        if self.modules.contains(&child) {
+            return Some(child);
+        }
+        if !follow {
+            return None;
+        }
+        let uses = self.sure_uses(here);
+        let named: Vec<&&UsePath> = uses
+            .iter()
+            .filter(|(_, glob, n, _)| !glob && n == first)
+            .collect();
+        let [(p, _, _, built)] = named.as_slice() else {
+            return None;
+        };
+        if *built == Built::Unsure {
+            return None;
+        }
+        let m = [self.path_module(here, p, false)?, rest.to_vec()].concat();
+        self.modules.contains(&m).then_some(m)
+    }
+
+    /// The module an item with `vis`, in [`Counter::module`], is visible
+    /// within, as rustc's privacy reads it: the crate for `pub` and
+    /// `pub(crate)`, the item's module for none and `pub(self)`, its
+    /// parent for `pub(super)`, and the module a `pub(in path)` names;
+    /// `None` when the counter cannot place that module.
+    fn vis_scope(&self, vis: &verus_syn::Visibility) -> Option<Vec<String>> {
+        match vis {
+            verus_syn::Visibility::Public(_) => self.module.get(..1).map(<[String]>::to_vec),
+            verus_syn::Visibility::Inherited => Some(self.module.clone()),
+            verus_syn::Visibility::Restricted(r) => {
+                let segs: Vec<String> = r
+                    .path
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect();
+                match segs.as_slice() {
+                    [c] if c == "crate" => self.module.get(..1).map(<[String]>::to_vec),
+                    [s] if s == "self" => Some(self.module.clone()),
+                    [s] if s == "super" => {
+                        self.module.split_last().map(|(_, parent)| parent.to_vec())
+                    }
+                    _ if r.in_token.is_some() => self.module_of(&segs),
+                    _ => None,
+                }
+            }
+        }
     }
 
     /// Follows the crate's `use` chains to its macros: a module's `use` of
@@ -3414,6 +3739,9 @@ impl Counter {
             return;
         };
         if name == "thread_local" {
+            if !self.std_thread_local(&mac.path) {
+                self.opaque.insert(self.module.clone());
+            }
             return;
         }
         let built = self.built(attrs);
@@ -3466,6 +3794,13 @@ impl Counter {
         };
         match found {
             defs if defs.is_empty() => {
+                // What it writes is unread, and may be a type of any name,
+                // whatever its tokens hold (`include!`, a fixed output, a
+                // pasted name): the module's globs place no type
+                // ([`Counter::type_path`]). `compile_error!` writes none.
+                if self.std_writes_nothing(&name, &mac.path).is_none() {
+                    self.opaque.insert(self.module.clone());
+                }
                 // A name the module imports from this crate (`use
                 // crate::w::ex as build;`, `use w::ex;` with `w` a module of
                 // the crate) is the crate's macro, by a path the counter did
@@ -4020,6 +4355,47 @@ impl Counter {
         None
     }
 
+    /// Whether the `thread_local` invoked by `path` is shown to be std's,
+    /// which writes statics alone and so shadows no type: `::std::` where
+    /// that rule holds ([`Took::StdPath`]), or the bare name where the
+    /// crate defines no macro of that name and the bare rule holds
+    /// ([`Took::StdBare`]: no binding of the name, no `#[macro_use]` of
+    /// another crate, and no `*` in the module). Any other `thread_local`
+    /// (another crate's, this crate's own, one a binding the walk cannot
+    /// see may bring, or `std::` written without the leading `::`) may
+    /// write any item, so the caller makes its module's globs place no
+    /// type ([`Counter::opaque`]). A module with a `*` and a bare
+    /// `thread_local!` therefore places no glob type, which fails closed:
+    /// `::std::thread_local!` places them again. The rules are read over
+    /// the bindings either build may compile: Verus's names are the ones
+    /// the limits take, and a binding only Verus's build has (under
+    /// `verus_keep_ghost`) can bring another `thread_local` there.
+    fn std_thread_local(&self, path: &verus_syn::Path) -> bool {
+        let segs = segments(path);
+        let (kind, read) = if segs.len() == 1 && path.leading_colon.is_none() {
+            if self.macros.contains_key("thread_local") {
+                return false;
+            }
+            (Took::StdBare, "thread_local")
+        } else if path.leading_colon.is_some() && segs == ["std", "thread_local"] {
+            (Took::StdPath, "std")
+        } else {
+            return false;
+        };
+        // `doubt` reads the std rules over shipped bindings; give it every
+        // binding either build may compile, each as shipped.
+        let either: Vec<Binding> = self
+            .bindings
+            .iter()
+            .filter(|b| b.shipped || b.verus)
+            .map(|b| Binding {
+                shipped: true,
+                ..b.clone()
+            })
+            .collect();
+        self.doubt(&either, kind, read, &self.module).is_none()
+    }
+
     /// How item macro `name`, invoked by `path` and defined nowhere in the
     /// crate, is one of the standard library's that write nothing that
     /// ships ([`STD_NO_FN`]), if it is: by `::core::` or `::std::`, or by
@@ -4060,6 +4436,7 @@ impl Counter {
     fn dry_rows(&mut self, f: &verus_syn::File) -> Option<Vec<(Class, String, usize)>> {
         let tallies = self.tallies.clone();
         let (limits, errors, unresolved) = (self.limits.len(), self.errors, self.unresolved.len());
+        let methods = self.methods.len();
         let verus_fns = self.verus_fns.clone();
         let macros = self.macros.clone();
         let outer = self.dry.replace(Vec::new());
@@ -4072,6 +4449,7 @@ impl Counter {
         let failed = self.errors > errors;
         self.tallies = tallies;
         self.limits.truncate(limits);
+        self.methods.truncate(methods);
         self.unresolved.truncate(unresolved);
         // The bindings each candidate writes, and the blocks it took on
         // their rules, are kept: any of them may be the one rustc
@@ -5824,7 +6202,8 @@ fn check_rlimit(
     }
     let (covered, report) = rlimit::check_covered(crates, &stats, base.is_some());
     print!("{report}");
-    let shares = rlimit::shares(&stats, crates, limits).unwrap_or_else(|e| fail(e));
+    let shares = rlimit::shares(&stats, crates, limits)
+        .unwrap_or_else(|e| fail(e.join("\nFAIL rlimit headroom: ")));
     let (mut ok, report) = rlimit::check(&shares, &head, 15, list);
     ok &= covered;
     print!("{report}");
@@ -8030,6 +8409,88 @@ mod tests {
         assert!(recursing("fn p() { p!(1); fn q() {} }", false).is_empty());
     }
 
+    /// The module an item in `k::a::b` is visible within, for each
+    /// visibility: the crate for `pub` and `pub(crate)`, `k::a::b` for none
+    /// and `pub(self)`, `k::a` for `pub(super)`, the module a `pub(in ..)`
+    /// names, and none for a `pub(in ..)` naming no module of the crate.
+    #[test]
+    fn an_item_is_visible_within_its_visibility_s_module() {
+        let m = |s: &str| -> Vec<String> { s.split("::").map(str::to_owned).collect() };
+        let c = Counter {
+            module: m("k::a::b"),
+            modules: ["k", "k::a", "k::a::b", "k::c"]
+                .into_iter()
+                .map(m)
+                .collect(),
+            ..counter()
+        };
+        for (vis, want) in [
+            ("pub", Some("k")),
+            ("pub(crate)", Some("k")),
+            ("", Some("k::a::b")),
+            ("pub(self)", Some("k::a::b")),
+            ("pub(super)", Some("k::a")),
+            ("pub(in crate::c)", Some("k::c")),
+            ("pub(in super::super)", Some("k")),
+            ("pub(in crate::gone)", None),
+        ] {
+            let parsed: verus_syn::Visibility = verus_syn::parse_str(vis).expect("parses");
+            assert_eq!(
+                c.vis_scope(&parsed),
+                want.map(m),
+                "{vis:?}: got = left, wanted = right"
+            );
+        }
+    }
+
+    /// A path's first segment that is not `crate`, `self` or `super`, in
+    /// `k::split`: a module `k::split` declares; with `follow`, through the
+    /// one `use` there that imports it by name, only when Verus's build is
+    /// sure to compile that `use` (not under a `cfg` it might not meet,
+    /// where another crate of that name may stand in); never a module only
+    /// the crate root declares.
+    #[test]
+    fn a_path_s_first_segment_reaches_a_module_only_through_scope() {
+        let m = |s: &str| -> Vec<String> { s.split("::").map(str::to_owned).collect() };
+        let modules: std::collections::BTreeSet<Vec<String>> = [
+            "k",
+            "k::split",
+            "k::split::inner",
+            "k::x",
+            "k::x::state",
+            "k::root",
+        ]
+        .into_iter()
+        .map(m)
+        .collect();
+        for (built, segs, follow, want) in [
+            (Built::Shipped, "state", true, Some("k::x::state")),
+            (Built::Verus, "state", true, Some("k::x::state")),
+            (Built::Unsure, "state", true, None),
+            (Built::Test, "state", true, None),
+            (Built::Shipped, "state", false, None),
+            (Built::Shipped, "inner", false, Some("k::split::inner")),
+            (Built::Shipped, "root", true, None),
+            (Built::Shipped, "crate::root", false, Some("k::root")),
+        ] {
+            let c = Counter {
+                modules: modules.clone(),
+                uses: [(
+                    m("k::split"),
+                    vec![(m("crate::x::state"), false, "state".to_owned(), built)],
+                )]
+                .into_iter()
+                .collect(),
+                ..counter()
+            };
+            assert_eq!(
+                c.path_module(&m("k::split"), &m(segs), follow),
+                want.map(m),
+                "{segs:?}, follow {follow}, the use {built:?}: got = left, wanted = right"
+            );
+        }
+    }
+
     /// The functions `src`, one file of crate `k`, records, by its walk.
     fn walked(src: &str) -> Counter {
         let mut c = Counter {
@@ -9318,6 +9779,15 @@ fn outside() {}
         for (owner, want) in [
             ("Machine < 'a , U >", Some("Machine")),
             ("crate :: vm :: Machine", Some("Machine")),
+            (":: core :: X", Some("X")),
+            ("r#exec", Some("r#exec")),
+            // No path: the whole text, which no function of Verus's has.
+            ("& m :: S", Some("& m :: S")),
+            ("& mut m :: S", Some("& mut m :: S")),
+            ("* const m :: S", Some("* const m :: S")),
+            ("dyn m :: Tr", Some("dyn m :: Tr")),
+            ("& S", Some("& S")),
+            ("< u8 as Tr2 > :: Out", Some("< u8 as Tr2 > :: Out")),
             ("", None),
         ] {
             let got = owner_name(owner);
