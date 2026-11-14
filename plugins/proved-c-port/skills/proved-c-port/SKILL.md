@@ -8,9 +8,9 @@ description: Port a C library to memory-safe Rust behind a drop-in C ABI, then p
 Use this skill when porting a C library to Rust where the Rust library
 must load in place of the C one (same header, sonames, symbols, error
 codes) and must be proved safe, shown correct against the C original,
-and measured at least as fast. The worked examples are wolfi-dev/pcre3
-(a PCRE2 10.49 replacement) and chainguard-project-theseus/challoc (a
-jemalloc-compatible `malloc`).
+and measured at least as fast. The worked examples are pcre3 (a PCRE2
+10.49 replacement, developed in a private repository) and
+chainguard-project-theseus/challoc (a jemalloc-compatible `malloc`).
 
 The C library is the specification you did not have to write. Every rule
 below exists to keep the port tied to it: compare against it, prove what
@@ -109,8 +109,8 @@ identical. A checker over the output exists only as a test oracle.
 Proving something adds no runtime cost wherever a ghost or spec route
 exists: take the harder proof. Until the producer is proved, a shipped
 checker is a temporary seam: a seams table row and a `TODO(#n)` naming
-the issue that proves the producer (pcre3 #818 kept its checker on the
-find tier, tracked by #824). The rule covers passes in the shipped
+the issue that proves the producer (pcre3 kept its checker on the find
+tier this way). The rule covers passes in the shipped
 library over output it produced. An offline generator checked in CI
 costs no run, and checks of state a C caller can corrupt (challoc's
 metadata checks) are input validation; both are outside it.

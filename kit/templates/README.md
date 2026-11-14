@@ -2,9 +2,9 @@
 
 Skeletons a new port copies: the proof ledgers' file headers, the seams
 and theorem documents, the Kani record, the known-differences ledger, and
-outlines of `AGENTS.md` and `CONTRIBUTING.md`. They come from
-wolfi-dev/pcre3 at `5216e03d` and wolfi-dev/challoc at `7ef336c4` with
-the project names taken out.
+outlines of `AGENTS.md` and `CONTRIBUTING.md`. They come from pcre3 (a
+private repository) and chainguard-project-theseus/challoc at
+`7ef336c4` with the project names taken out.
 The rule text in each header (how FLOOR ratchets, how RLIMIT headroom
 and REACH rows work) is the contract the counter enforces and agents
 read, so keep it as written in the port's own file; fill in the
@@ -58,7 +58,7 @@ earlier with FLOOR at 0.0 (FLOOR's header; `kit/count/README.md`,
 | `verus/RLIMIT` | `verus/RLIMIT` | rlimit headroom: `max-share`, `allow`, `rlimit-raised` |
 | `verus/REACH` | `verus/REACH` | functions a C caller reaches that Verus does not check |
 | `verus/MINTS` | `verus/MINTS` | the C caller's token kinds and mints, for a port that mints tokens through one trusted function |
-| `verus/README.md` | `verus/README.md` | the sections the headers cite: Coverage (the run commands, the `shipped` row, FLOOR and the badge, which links to `verus/README.md#coverage`) and Counter in prose, shaped on pcre3, expat-rs and chainz#59; the rest as headings |
+| `verus/README.md` | `verus/README.md` | the sections the headers cite: Coverage (the run commands, the `shipped` row, FLOOR and the badge, which links to `verus/README.md#coverage`) and Counter in prose, shaped on pcre3, expat-rs and chainz; the rest as headings |
 | `verus/SEAMS.md` | `verus/SEAMS.md` | the core-library seams table and its columns, for hand-written seams tables. A port on the counter's generated-ledger back end (`[ledger]`) keeps a SEAMS.md that defines the ledger's kinds, categories, tools and statuses, with a "Status" section, which verus/FLOOR's header cites (challoc's; kit step 3 templates it) |
 | `verus/THEOREMS.md` | `verus/THEOREMS.md` | the trusted base and the theorem index |
 | `verus/theorems/TEMPLATE.md` | `verus/theorems/<ID>.md` | one theorem: statement, mutants, checks, what it does not say, seams |
@@ -115,16 +115,14 @@ owners, and the Claude Code settings that give its sessions the
 proved-c-port skill. Each copies to the same path in the port (Checks
 and Claude Code read them only at the repository root, so the copies
 here run nothing). They come from
-wolfi-dev/pcre3 main at `99a29cd9` (#1078 and #1079 merged),
-wolfi-dev/challoc main at `6268155e` (#688 merged) with #689
-(`2e452c18`), wolfi-dev/chainz at `1e79acd2` with #63 (`6cb6fb26`) and
-#64 (`8a32ff7d`), and wolfi-dev/expat-rs main at `0f99b297` (#201
-merged) with #202 (`98588c1f`).
+chainguard-project-theseus/challoc main at `6268155e` (#688 merged) with
+#689 (`2e452c18`), and from pcre3, chainz and expat-rs, which are
+developed in private repositories.
 
 | template | what it holds | shaped on |
 |---|---|---|
-| `.chainguard/ci/lint.yaml` | rustfmt, clippy, the source rules (`ci/lint-unsafe.sh`, `ci/header-check.sh`), shellcheck from the packaged `shellcheck~` | pcre3, expat-rs; shellcheck as chainz#63 |
-| `.chainguard/ci/test.yaml` | cargo test and `ci/abi.sh` on amd64 and arm64; msrv on the `rust-version` toolchain | pcre3, expat-rs, chainz#63 |
+| `.chainguard/ci/lint.yaml` | rustfmt, clippy, the source rules (`ci/lint-unsafe.sh`, `ci/header-check.sh`), shellcheck from the packaged `shellcheck~` | pcre3, expat-rs; shellcheck as chainz |
+| `.chainguard/ci/test.yaml` | cargo test and `ci/abi.sh` on amd64 and arm64; msrv on the `rust-version` toolchain | pcre3, expat-rs, chainz |
 | `.chainguard/ci/verus.yaml` | `verus` and `kani` against the pull request's base; `verus-main` and `kani-main` on main, `verus-main` against the start of the push; one architecture (large-arm64, 60 and 30 minutes) by default, with a commented `verus-amd64` for proved code that differs by target | pcre3, challoc, expat-rs; `verus-amd64` as challoc's `verus-arm64` |
 | `.chainguard/ci/fuzz.yaml` | `fuzz`, `fuzz-diff` and `fuzz-abi` on request, each fuzzer after its self-test; `known-citations` on every pull request | pcre3, expat-rs |
 | `.chainguard/ci/conformance.yaml` | the deviations ratchet on both architectures; `differential` on request | pcre3, chainz, expat-rs |
@@ -132,7 +130,7 @@ merged) with #202 (`98588c1f`).
 | `.chainguard/ci/env/default.yaml` | the empty default environment | all four |
 | `.chainguard/ci/env/dev.yaml` | the union of the checks' packages (consumers.yaml's apk-tools and wolfi-keys included), for sessions and the deps agent | pcre3, chainz, challoc#688 |
 | `.chainguard/develop.yaml` | sessions `from: .chainguard/ci/env/dev.yaml` | pcre3, chainz, challoc#688 |
-| `.chainguard/deps.yaml` | the Checks deps agent: crates, toolchain (Rust, Verus with vstd, and Kani as one set), msrv (rust-version with the msrv check's toolchain), kit (the theseus-proved-port pin with `PROVED_PORT_VERSION` and the held headers), tools, the reference library, consumers | pcre3 main (#1079), challoc#689, chainz#64, expat-rs main (#201) |
+| `.chainguard/deps.yaml` | the Checks deps agent: crates, toolchain (Rust, Verus with vstd, and Kani as one set), msrv (rust-version with the msrv check's toolchain), kit (the theseus-proved-port pin with `PROVED_PORT_VERSION` and the held headers), tools, the reference library, consumers | pcre3, challoc#689, chainz, expat-rs |
 | `.chainguard/reviewers.yaml` | the Checks reviewer `{PORT}`: `approve: true`, the read limits, no `diff_lines` (deprecated), and `rerun_on_checks` on the presubmit aggregate, since the reviewer reads its results | chainz and challoc |
 | `.chainguard/review-prompt.md` | the sections the four prompts share, plus the runtime-costs-of-proof check that cites AGENTS.md; the port writes its own checks. Evidence reads the presubmit results, as chainz's does; the kit rule holds the kit's pins to one release, moved as one | all four; Evidence from chainz, the kit rule from pcre3's counter rule, the check from proved-c-port's "Prove the producer, not its output" (#13) |
 | `.github/codeowners.yaml` | the codeowners-gate sidecar: one gated `*` entry, the maintainers and `bot:{PORT}` | pcre3, challoc, chainz |
@@ -147,15 +145,14 @@ lint, the environments, `develop.yaml`, `deps.yaml`, the codeowners
 files, `.claude/settings.json`) are starting points: the port copies
 them, then reshapes them to its own checks, and nothing holds them to
 the kit afterwards (expat-rs
-and rust-port-template each keep a shape of their own for several,
-wolfi-dev/expat-rs#221 and wolfi-dev/rust-port-template#13).
+and rust-port-template each keep a shape of their own for several).
 
 ### The required Verus check set
 
 A port has every Verus check name from its first commit, so its check
 selection only grows. Chainguard Checks refuses a run whose change
 deselects one of its own checks (a check key deleted or renamed, the
-way chainz#59 hit it), so a port that starts without a check and drops
+way chainz hit it), so a port that starts without a check and drops
 it later cannot land that change; one that adds a check later is fine,
 but has no gate there until it does. From the first commit:
 
@@ -215,7 +212,7 @@ verus-headers` reports drift, and leaves a bump whose counter fails a
 gate the old one passed for a person. The toolchain entry
 commits the pin moves before it runs any suite, so a run that outlasts
 the deps agent's two-hour budget still pushes a draft, then runs every
-suite in the guest, Kani included, as pcre3's does (#1080). A port whose
+suite in the guest, Kani included, as pcre3's does. A port whose
 suites do not fit the budget together leaves `make kani` to the pull
 request's kani check and fixes what it reports on a turn, as chainz's
 and challoc's do; its body then says Kani was left to the check. A port
@@ -242,7 +239,7 @@ Every verus run compares FLOOR with that base. Where verus/FLOOR exists, a
 run with no base fails, never SKIPs: the port's `make verus` passes
 `--base-rev` and fails when `VERUS_BASE` is empty, as verus.yaml's
 header says. A wrapper that prints SKIP and passes when no base is set
-(chainz#59's `verus/count.sh`) lets main lower FLOOR unseen. A local
+(an early chainz `verus/count.sh`) lets main lower FLOOR unseen. A local
 run passes `VERUS_BASE=none`, which gives the counter `--no-base`; the
 counter refuses a `--floor` run with neither `--base-rev` nor
 `--no-base` (proved-port#20).
@@ -280,19 +277,16 @@ protection must require `Chainguard Checks (presubmit)`, pinned to the
 `chainguard` check app so that no other app can satisfy it, and nothing
 else: the aggregate fails whenever a presubmit check fails, and the
 on-request checks stay out of it. That setting is a repository ruleset
-managed in chainguard-dev/infra's github-iac
-(`github-iac/env/wolfi-dev/main.tf`), not made by hand: a new port adds
-its name to the `required_checks` ruleset's `for_each`, which requires
-that context with the `chainguard` app's `integration_id`.
-chainguard-dev/infra#5389 is the example: it adds chainz, expat-rs, pcre3
-and proved-port, importing pcre3's hand-made ruleset to add the app pin.
+that the organization's administrators manage as code, not one made by
+hand: a new port asks them to add it to the ruleset that requires that
+context with the `chainguard` app's `integration_id`.
 
 ### The optional Miri checks
 
 A port whose C API crate has unsafe code may run its tests under Miri.
 These files are optional: a port without them deletes the deps.yaml
-`miri` entry and env/dev.yaml's `libgcc`. They come from wolfi-dev/pcre3
-main at `0c42c50d` and wolfi-dev/expat-rs#202 (`98588c1f`).
+`miri` entry and env/dev.yaml's `libgcc`. They come from pcre3 and
+expat-rs.
 
 | template | copy to | what it holds |
 |---|---|---|
@@ -335,8 +329,7 @@ Where the two ports differ, ci/miri.sh's settings choose:
 - `flags`: pcre3 passes `-Zmiri-permissive-provenance` for the one
   integer-to-pointer cast it keeps (its recursion guard); expat-rs passes
   nothing.
-- pcre3 has no known list, expat-rs lists three tests (#168, #170,
-  #171). The template keeps the list, empty.
+- pcre3 has no known list, expat-rs lists three tests. The template keeps the list, empty.
 - expat-rs runs one Miri process per test, so the first undefined
   behaviour in a shard does not hide the shard's later tests; pcre3 runs
   each shard's tests of a binary in one process, which is faster. The
