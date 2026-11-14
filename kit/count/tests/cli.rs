@@ -20,7 +20,7 @@ fn repository(name: &str) -> PathBuf {
     fs::create_dir_all(dir.join("verus")).expect("mkdir");
     fs::write(
         dir.join("crates/a/Cargo.toml"),
-        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n",
     )
     .expect("write");
     fs::write(dir.join("crates/a/src/lib.rs"), "pub fn f() {}\n").expect("write");
@@ -243,7 +243,7 @@ fn the_floor_file_is_the_configured_one_and_held_to_the_base() {
     fs::create_dir_all(dir.join("verus")).expect("mkdir");
     fs::write(
         dir.join("crates/a/Cargo.toml"),
-        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n",
     )
     .expect("write");
     // One verified function and one outside `verus!`: every share is 50%.
@@ -325,7 +325,7 @@ fn a_floor_without_a_base_fails_unless_no_base_says_so() {
     fs::create_dir_all(dir.join("verus")).expect("mkdir");
     fs::write(
         dir.join("crates/a/Cargo.toml"),
-        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n",
     )
     .expect("write");
     fs::write(
@@ -1103,6 +1103,140 @@ fn a_symlinked_configuration_fails_the_run() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// cargo verus has Verus check only a package whose Cargo.toml sets
+/// `[package.metadata.verus] verify = true`, so a crate with code Verus
+/// checks (a verified function, or a proof built only for Verus) that
+/// does not opt in fails the run, whatever else the manifest says, and
+/// every such crate is named: a second one, `b-c` (spelled `b_c` in the
+/// names Verus gives), with no table, no Cargo.toml or one that does not
+/// parse. A crate with no Verus code needs no opt-in.
+#[test]
+fn a_crate_with_verus_code_must_opt_into_verification() {
+    let verified = "use vstd::prelude::*;\nverus! {\npub fn v() {}\n}\n";
+    let ghost = "pub fn o() {}\n#[cfg(verus_keep_ghost)]\nverus! {\nproof fn p() {}\n}\n";
+    let plain = "pub fn o() {}\n";
+    let head = "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n";
+    let opt_in = format!("{head}[package.metadata.verus]\nverify = true\n");
+    let fail = "FAIL verification opt-in: ";
+    // The second crate's Cargo.toml: no table, none at all, or not TOML.
+    let second = [
+        Some(head.replace("\"a\"", "\"b-c\"")),
+        None,
+        Some(format!(
+            "{}[package.metadata.verus\nverify = true\n",
+            head.replace("\"a\"", "\"b-c\"")
+        )),
+    ];
+    for (i, (lib, manifest, workspace, want, named)) in [
+        (verified, opt_in.clone(), "", 0, 0),
+        (ghost, opt_in.clone(), "", 0, 0),
+        (plain, head.to_owned(), "", 0, 0),
+        (verified, head.to_owned(), "", 1, 1),
+        (ghost, head.to_owned(), "", 1, 1),
+        (
+            verified,
+            format!("{head}[package.metadata.verus]\nverify = false\n"),
+            "",
+            1,
+            1,
+        ),
+        (
+            verified,
+            format!("{head}[package.metadata.verus]\nverify = \"true\"\n"),
+            "",
+            1,
+            1,
+        ),
+        (
+            verified,
+            format!("{head}[package.metadata]\nverify = true\n"),
+            "",
+            1,
+            1,
+        ),
+        (
+            verified,
+            head.to_owned(),
+            "[workspace.metadata.verus]\nverify = true\n",
+            1,
+            1,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let dir = crate_of("opt-in", &[("lib.rs", lib)]);
+        fs::write(dir.join("crates/a/Cargo.toml"), &manifest).expect("write");
+        fs::write(dir.join("Cargo.toml"), workspace).expect("write");
+        // A second crate with Verus code that does not opt in, named
+        // alongside.
+        let b = &second[i % second.len()];
+        if named > 0 {
+            fs::create_dir_all(dir.join("crates/b-c/src")).expect("mkdir");
+            if let Some(text) = b {
+                fs::write(dir.join("crates/b-c/Cargo.toml"), text).expect("write");
+            }
+            fs::write(dir.join("crates/b-c/src/lib.rs"), verified).expect("write");
+        }
+        let (got, out, err) = count(&dir, &[]);
+        let lines = err.matches(fail).count();
+        let want_lines = if named > 0 { 2 } else { 0 };
+        assert!(
+            got == want
+                && lines == want_lines
+                && (want == 0
+                    || (err.contains("crates/a has code") && err.contains("crates/b-c has code"))),
+            "{lib:?} {manifest:?} {workspace:?} {b:?}: got = exit {got}, {lines} lines, {out:?}, {err:?}; wanted = exit {want}, {want_lines} lines"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// The opt-in rule holds the head alone: a port adds the table in the
+/// pull request that moves to the release with this rule, and its verus
+/// check runs against a base whose crate has Verus code and no table. That
+/// run passes; the same head without the table fails.
+#[test]
+fn the_opt_in_rule_holds_the_head_not_the_base() {
+    let dir = crate_of("opt-in-base", &[("lib.rs", RATCHET_LIB)]);
+    let manifest = dir.join("crates/a/Cargo.toml");
+    let plain = "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n";
+    fs::write(&manifest, plain).expect("write");
+    fs::write(dir.join("verus/count.toml"), RATCHET_CONFIG).expect("write");
+    fs::write(dir.join("verus/FLOOR"), RATCHET_FLOOR).expect("write");
+    fs::write(dir.join("verus/RLIMIT"), RATCHET_RLIMIT).expect("write");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "crates", "verus"]);
+    git(&dir, &["commit", "-q", "-m", "base"]);
+    let stats = dir.join("stats.json");
+    fs::write(&stats, ratchet_stats(3_000_000)).expect("write");
+    for (head, want) in [
+        (
+            format!("{plain}[package.metadata.verus]\nverify = true\n"),
+            0,
+        ),
+        (plain.to_owned(), 1),
+    ] {
+        fs::write(&manifest, &head).expect("write");
+        let (got, out, err) = count(
+            &dir,
+            &[
+                "--floor",
+                &dir.join("verus/FLOOR").to_string_lossy(),
+                "--rlimit",
+                &stats.to_string_lossy(),
+                "--base-rev",
+                "HEAD",
+            ],
+        );
+        assert_eq!(
+            got, want,
+            "{head:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {want}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// One verified function `a::v` and one outside `verus!`, so every share is
 /// 50%: the sources, configuration, FLOOR and RLIMIT a ratchet case starts
 /// from, and the base it is compared with.
@@ -1170,7 +1304,7 @@ fn the_ratchets_hold_through_the_command_line() {
     fs::create_dir_all(dir.join("verus")).expect("mkdir");
     fs::write(
         dir.join("crates/a/Cargo.toml"),
-        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n",
     )
     .expect("write");
     let lib = dir.join("crates/a/src/lib.rs");
@@ -1384,7 +1518,7 @@ fn the_badge_is_held_to_the_floor() {
     fs::create_dir_all(dir.join("docs")).expect("mkdir");
     fs::write(
         dir.join("crates/a/Cargo.toml"),
-        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n",
     )
     .expect("write");
     // One verified function and one outside `verus!`: every share is 50%.
@@ -1623,7 +1757,7 @@ fn functions_a_macro_writes_are_counted() {
     fs::create_dir_all(dir.join("verus")).expect("mkdir");
     fs::write(
         dir.join("crates/a/Cargo.toml"),
-        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n",
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n",
     )
     .expect("write");
     fs::write(dir.join("verus/count.toml"), PLAIN).expect("write");
@@ -1736,7 +1870,7 @@ fn crate_of(name: &str, files: &[(&str, &str)]) -> PathBuf {
     fs::create_dir_all(dir.join("verus")).expect("mkdir");
     fs::write(
         dir.join("crates/a/Cargo.toml"),
-        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[package.metadata.verus]\nverify = true\n",
     )
     .expect("write");
     fs::write(dir.join("verus/count.toml"), PLAIN).expect("write");
@@ -2035,7 +2169,7 @@ fn a_path_qualified_verus_is_verus() {
         ("", format!("{package}edition = \"2024\"\n[target.'cfg(unix)'.dependencies]\nvstd = {{ package = \"other\", path = \"x\" }}\n"), path_form, Some("Cargo.toml's dependency `vstd` is the package `other`")),
         ("[workspace.dependencies]\nvstd = { package = \"fakevstd\", path = \"fake\" }\n", format!("{package}edition = \"2024\"\n[dependencies]\nvstd = {{ workspace = true }}\n"), path_form, Some("Cargo.toml's dependency `vstd` is the package `fakevstd`")),
         ("[workspace.dependencies]\nvstd = { version = \"1\" }\n", format!("{package}edition.workspace = true\n[dependencies]\nvstd.workspace = true\n"), path_form, Some("the crate's edition is 2015")),
-        ("[workspace.package]\nedition = \"2024\"\n[workspace.dependencies]\nvstd = { version = \"1\" }\n", format!("{package}edition.workspace = true\n[dependencies]\nvstd.workspace = true\n"), path_form, None),
+        ("[workspace.package]\nedition = \"2024\"\n[workspace.dependencies]\nvstd = { version = \"1\" }\n", format!("{package}edition.workspace = true\n[dependencies]\nvstd.workspace = true\n[package.metadata.verus]\nverify = true\n"), path_form, None),
         ("", format!("{package}edition = \"2024\"\n[dependencies]\nvstd = {{ package = \"other\", path = \"x\" }}\n"), "use vstd::prelude::*;\nverus! { pub fn f() {} }\n", Some("Cargo.toml's dependency `vstd` is the package `other`")),
     ];
     for (ws, toml, src, want) in cases {
@@ -2508,7 +2642,7 @@ fn the_base_walk_reads_the_workspace_manifest() {
     .expect("write");
     fs::write(
         dir.join("crates/a/Cargo.toml"),
-        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition.workspace = true\n",
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition.workspace = true\n[package.metadata.verus]\nverify = true\n",
     )
     .expect("write");
     fs::write(
@@ -4217,7 +4351,7 @@ fn inline_paths_and_declared_targets_place_files() {
         ),
         (
             "b/Cargo.toml",
-            "[package]\nname = \"b\"\nversion = \"0.0.0\"\nautobins = false\n\n[[bin]]\nname = \"tool\"\npath = \"src/bin/tool.rs\"\n",
+            "[package]\nname = \"b\"\nversion = \"0.0.0\"\nautobins = false\n\n[package.metadata.verus]\nverify = true\n\n[[bin]]\nname = \"tool\"\npath = \"src/bin/tool.rs\"\n",
         ),
         (
             "b/src/bin/tool.rs",
@@ -4227,7 +4361,7 @@ fn inline_paths_and_declared_targets_place_files() {
         ("b/src/bin/stray.rs", "verus! {\npub fn in_stray() {}\n}\n"),
         (
             "c/Cargo.toml",
-            "[package]\nname = \"c\"\nversion = \"0.0.0\"\n",
+            "[package]\nname = \"c\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n",
         ),
         ("c/src/main.rs", "fn main() {}\n"),
         ("c/src/bin/solo.rs", "verus! {\npub fn in_solo() {}\n}\n"),

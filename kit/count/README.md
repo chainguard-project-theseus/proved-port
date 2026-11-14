@@ -171,6 +171,24 @@ dir = "crates"
 
 ### Verus's build
 
+A crate's functions count as verified only when cargo verus checks the
+crate at all, which needs its Cargo.toml to set `[package.metadata.verus]
+verify = true`. A crate with a function inside `verus!` or of the
+attribute form, or a proof built only for Verus, that does not fails the
+run (exit 1), and each such crate is named. The table is necessary, not
+sufficient. A crate that opts in must also be named in `VERUS_CRATES`
+(`make verus`'s default `cargo verus focus` checks only those), or,
+under `VERUS_MODE = verify`, be one of them or a dependency of one; and
+no crate it names may list it in `[package.metadata.verus]
+trusted_crates`, which cargo verus skips unless given `--verify-trusted`.
+The counter does not read `VERUS_CRATES` or `trusted_crates`. The rlimit
+check catches these where it runs: with `--rlimit` against a base, as
+`make verus` runs it unless `VERUS_RLIMIT` is emptied, it fails a crate
+with Verus code that Verus's statistics leave out
+(`rlimit::check_covered`). A run with `--no-base` (`VERUS_BASE=none`,
+as the proof pull request that adds the first FLOOR may use) or without
+`--rlimit` has no such check: `--no-base` only notes the crate.
+
 A function counts as verified only when Verus's build is sure to
 compile it. A `cfg` reaches a function from its own attributes, from an
 enclosing `impl`, trait, inline `mod` or `verus!` block, from an
@@ -736,6 +754,13 @@ proof PR (the skill's lifecycle.md, phase 4):
    `verus-count --floor verus/FLOOR --base-rev "$BASE" .`. A base with
    no FLOOR prints `ok coverage floor: ... has no verus/FLOOR to compare
    with`; this PR may instead pass `--no-base`, which no later PR may.
+   Each crate with Verus code sets `[package.metadata.verus] verify =
+   true` in its Cargo.toml, and is in the Makefile's `VERUS_CRATES`
+   (Verus's build, above, has the cases `verify` mode adds):
+   cargo verus has Verus check no package without the table, whatever
+   `-p` selects, so the counter fails the run (exit 1) for each crate
+   with code Verus checks that lacks it, rather than credit as verified
+   what nothing checked (Verus's build, above).
 2. Copy `kit/templates/verus/FLOOR`, whose figures are all 0.0.
 3. On the PR's base the counter names 0.0 for every figure; on the PR it
    names the figures the proof reaches. Record those in FLOOR in the
