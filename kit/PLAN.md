@@ -182,9 +182,12 @@ kit targets refuse an installed KIT for another release, and `make
 verus` a counter on PATH whose `--version` differs, so a stale counter
 fails on a Mac rather than counting. A port's files carry no `# kit:`
 line: the release is the pin. A port moves to a new kit in its own PR
-that changes those pins and the held headers' text and nothing else
-(the deps template's kit entry), so every check runs against the new
-kit before it lands (`kit/count/README.md`, "Adopting: the package").
+(the deps template's kit entry) that changes those pins, the held
+headers' text, and what the release's CHANGELOG asks of ports within
+the entry's paths, and nothing else: anything else the release asks
+for is listed in the PR for a person. So every check runs against the
+new kit before it lands (`kit/count/README.md`, "Adopting: the
+package").
 
 v0.3.0 removes vendoring. The ports that vendored kit 0.2.4
 (`kit/sync.sh` copies at `verus/count/` and `verus/make/`, which no

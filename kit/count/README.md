@@ -864,8 +864,9 @@ A port takes it this way:
   pin, and `make verus-headers` reads none.
 - The package pins, `PROVED_PORT_VERSION` and the proved-port
   marketplace `ref` in `.claude/settings.json` move
-  together, with any new header text, in a pull request of their own
-  (the kit entry of `kit/templates/.chainguard/deps.yaml`).
+  together, with any new header text and what the release's CHANGELOG
+  asks of ports within that entry's paths, in a pull request of their
+  own (the kit entry of `kit/templates/.chainguard/deps.yaml`).
 
 Where the package is not installed (a Mac, a development host), install
 the kit from a clone of this repository checked out at the pinned tag,
