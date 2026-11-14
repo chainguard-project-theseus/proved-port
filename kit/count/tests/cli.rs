@@ -1103,6 +1103,31 @@ fn a_symlinked_configuration_fails_the_run() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Ordinary Rust may name a field, a parameter or a `let` binding with a
+/// word Verus reserves (`exec`, `tracked`, `ghost`); outside `verus!` the
+/// counter reads such a file with no `stand_ins`, every function counted
+/// at its own line, while `verus!` keeps its own syntax (`let tracked`).
+#[test]
+fn verus_keywords_name_bindings_outside_verus() {
+    let lib = "use vstd::prelude::*;\npub struct S {\n    pub exec: u8,\n    tracked: u8,\n}\npub fn f(ghost: u8) -> u8 {\n    let tracked = ghost;\n    let mut exec = tracked;\n    exec += 1;\n    exec\n}\nverus! {\nproof fn p() {\n    let tracked x = 1u8;\n}\npub fn v() {}\n}\npub fn g(s: &S) -> u8 {\n    s.exec + s.tracked\n}\n";
+    let dir = crate_of("verus-keywords", &[("lib.rs", lib)]);
+    let (got, out, err) = count(&dir, &["--list"]);
+    let rows: Vec<String> = list_rows(&out)
+        .into_iter()
+        .map(|r| format!("{} {} {}", r.0, r.1, r.2))
+        .collect();
+    let want = [
+        "Outside crates/a/src/lib.rs:6 f",
+        "Verified crates/a/src/lib.rs:16 v",
+        "Outside crates/a/src/lib.rs:18 g",
+    ];
+    assert!(
+        got == 0 && rows == want && err.is_empty(),
+        "got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// One verified function `a::v` and one outside `verus!`, so every share is
 /// 50%: the sources, configuration, FLOOR and RLIMIT a ratchet case starts
 /// from, and the base it is compared with.

@@ -148,7 +148,7 @@ crate.
 | | `verus_features` | features only Verus's build enables, as `verus_keep_ghost` |
 | | `verus_sets` | `cfg` atoms Verus's build is sure to set, which shipped builds may set too (`'feature = "jit"'` for a default feature the proof run keeps, `"unix"`): "Verus's build", below |
 | | `verus_never_sets` | `cfg` atoms Verus's build never sets (`"miri"`), so `not(miri)` is sure there |
-| | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords; one that would rewrite a name the counter classes code by (`external_body`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, `unsafe`, a test cfg, a configured macro or mint, ...) is refused |
+| | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords that the counter does not handle itself (a Verus keyword naming a field, a parameter or a `let` binding outside `verus!`, such as `exec: u8` or `let tracked = ..`, needs none: it is read as a raw identifier); one that would rewrite a name the counter classes code by (`external_body`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, `unsafe`, a test cfg, a configured macro or mint, ...) is refused |
 | | `verus_only_ghost` | count the ghost functions of Verus-only code in the ghost column |
 | `[floor]` | `path`, `checked`, `renamed_from` | the FLOOR file (default `verus/FLOOR`); the prefix of the two verified-or-discharged figures (default `checked`); an older prefix the base revision's copy may still give them under, for the change that renames them (challoc's `combined`) |
 | `[rlimit]` | `path` | the RLIMIT file (default `verus/RLIMIT`) |
