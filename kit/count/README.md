@@ -829,7 +829,9 @@ A port takes it this way:
 
   ```make
   # The proved-port kit, from the theseus-proved-port package. Set the
-  # port's variables (VERUS_CRATES, KANI_CRATES, KANI_NONE, ...) above this.
+  # port's variables (VERUS_CRATES, KANI_CRATES, KANI_NONE,
+  # VERIFY_TARGETS, ...) above this. VERIFY_TARGETS lists every target the
+  # checks verify with; `make verify` runs them, as the package build does.
   # PROVED_PORT_VERSION is the kit release, which the theseus-proved-port
   # pins in the checks and in the development sessions' environment name
   # too; the kit targets fail on any other install. Where the package is not
@@ -842,7 +844,7 @@ A port takes it this way:
   ifneq ($(wildcard $(PROVED_PORT_HOME)/make/proved-port.mk),)
   include $(PROVED_PORT_HOME)/make/proved-port.mk
   else
-  PROVED_PORT_TARGETS = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list
+  PROVED_PORT_TARGETS = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular verify
   .PHONY: $(PROVED_PORT_TARGETS)
   $(PROVED_PORT_TARGETS):
   	@echo "$@: no proved-port kit at $(PROVED_PORT_HOME): install theseus-proved-port~$(PROVED_PORT_VERSION), or set PROVED_PORT_HOME to a kit install root (make/, templates/ and KIT, as the package lays out /usr/share/proved-port)" >&2; exit 1

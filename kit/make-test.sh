@@ -9,7 +9,8 @@
 #   - `make -n` shows the commands each target runs, for the defaults
 #     and for the settings pcre3, expat-rs, chainz and challoc need, and
 #     that nothing builds the counter, even for a port that still has a
-#     verus/count or includes a verus/make copy of proved-port.mk;
+#     verus/count or includes a verus/make copy of proved-port.mk, and
+#     that verify runs VERIFY_TARGETS in order and stops at a failure;
 #   - the PROVED_PORT_VERSION and counter-version guards fail a target
 #     before it runs anything;
 #   - kani.sh runs with a stub cargo: crate selection, one harness,
@@ -153,6 +154,97 @@ expect "make -n verus-headers, another name (verus/SHARES)" "$(shows verus-heade
   "VERUS_FLOOR=verus/SHARES sh $home/make/headers.sh ."
 expect "make -n kani" "$(shows kani)" "sh $home/make/kani.sh"
 expect "make -n kani-list" "$(shows kani-list)" "sh $home/make/kani.sh --list"
+expect "make -n kani-regular, challoc's kani-ignoring" "$(shows kani-regular)" \
+  "KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='--verbosity 9' KANI_FAIL_PATTERN='warning: ignoring' sh $home/make/kani.sh"
+expect "make -n kani-regular keeps the port's CBMC arguments and KANI_ARGS" \
+  "$(shows kani-regular KANI_CBMC_ARGS='--unwind 4' KANI_ARGS='--features quantum8' KANI_JOBS=4)" \
+  "KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='--unwind 4 --verbosity 9' KANI_FAIL_PATTERN='warning: ignoring' sh $home/make/kani.sh --features quantum8"
+
+# verify runs every target VERIFY_TARGETS lists, in order, each with the
+# command line's variables. Under -n make prints its loop (a line naming
+# $(MAKE), which -n runs) before the targets' commands; its $t is text.
+# shellcheck disable=SC2016
+expect "make -n verify prints its loop over VERIFY_TARGETS" "$(shows verify VERUS_BASE=none | head -n 1 | sed 's/ [^ ]*make -r --no-print/ make -r --no-print/')" \
+  'for t in verus kani; do echo "verify: make $t"; make -r --no-print-directory $t || exit 1; done'
+expect "make -n verify, the default (verus kani)" "$(shows verify VERUS_BASE=none VERUS_THREADS=8 | sed 1d)" \
+  "verify: make verus
+mkdir -p target/
+cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json --num-threads 8 > target/verus-stats.json
+verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --no-base .
+verify: make kani
+sh $home/make/kani.sh"
+expect "make -n verify, a port's own list" "$(shows verify VERUS_BASE=none VERIFY_TARGETS='verus-proofs kani-regular' | sed 1d)" \
+  "verify: make verus-proofs
+mkdir -p target/
+cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json > target/verus-stats.json
+verify: make kani-regular
+KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='--verbosity 9' KANI_FAIL_PATTERN='warning: ignoring' sh $home/make/kani.sh"
+if make -s -n -C "$port" verify VERIFY_TARGETS= > "$tmp/out" 2> "$tmp/err"; then
+  fail "make -n verify VERIFY_TARGETS=: got = success, want = failure"
+fi
+grep -qF 'VERIFY_TARGETS is empty' "$tmp/err" \
+  || { cat "$tmp/err" >&2; fail "make -n verify VERIFY_TARGETS=: got = another message, want = VERIFY_TARGETS is empty"; }
+[ ! -s "$tmp/out" ] || { cat "$tmp/out" >&2; fail "make -n verify VERIFY_TARGETS=: got = commands, want = none"; }
+echo "ok make -n verify fails an empty VERIFY_TARGETS"
+# refuses_make WHAT MESSAGE ARGS...: `make -n ARGS` in the port fails
+# with MESSAGE and runs no command.
+refuses_make() {
+  what=$1 msg=$2
+  shift 2
+  if make -s -n -C "$port" "$@" > "$tmp/out" 2> "$tmp/err"; then
+    fail "$what: got = success, want = failure"
+  fi
+  grep -qF "$msg" "$tmp/err" || { cat "$tmp/err" >&2; fail "$what: got = another message, want = $msg"; }
+  [ ! -s "$tmp/out" ] || { cat "$tmp/out" >&2; fail "$what: got = commands, want = none"; }
+  echo "ok $what fails"
+}
+refuses_make "make -n verify naming verify" "VERIFY_TARGETS names verify" \
+  verify VERUS_BASE=none VERIFY_TARGETS='verus verify'
+# A listed name with a file or directory of its name in the port's root
+# (a port's fuzz/ beside VERIFY_TARGETS' fuzz, with no rule or one not
+# .PHONY) would be taken as done. The kit's own targets are .PHONY, so
+# the port's verus/ directory leaves verus alone.
+mkdir -p "$port/fuzz" "$port/verus"
+refuses_make "make -n verify naming the port's fuzz/" "VERIFY_TARGETS names fuzz, a file or directory" \
+  verify VERUS_BASE=none VERIFY_TARGETS='kani fuzz'
+make -s -n -C "$port" verify VERUS_BASE=none > /dev/null ||
+  fail "make -n verify, the default beside a verus/ directory: got = failure, want = success"
+echo "ok make -n verify takes the kit's verus beside a verus/ directory"
+rmdir "$port/fuzz"
+refuses_make "make -n kani-regular with an empty KANI_IGNORING_PATTERN" "KANI_IGNORING_PATTERN is empty" \
+  kani-regular KANI_IGNORING_PATTERN=
+# CBMC takes the first --verbosity, so a port's own would override the 9.
+refuses_make "make -n kani-regular with a --verbosity in KANI_CBMC_ARGS" "KANI_CBMC_ARGS sets --verbosity" \
+  kani-regular KANI_CBMC_ARGS='--unwind 4 --verbosity 0'
+refuses_make "make -n kani-regular with --verbosity=1 in KANI_CBMC_ARGS" "KANI_CBMC_ARGS sets --verbosity" \
+  kani-regular KANI_CBMC_ARGS=--verbosity=1
+# Run for real: a port's target that fails fails verify, and the targets
+# after it do not run.
+cp "$port/Makefile" "$tmp/Makefile.verify"
+printf '%s\n' "$pin" 'VERIFY_TARGETS = first broken last' 'first:' '	@echo ran first' 'broken:' '	@false' 'last:' '	@echo ran last' \
+  > "$port/Makefile"
+if make -s -C "$port" verify > "$tmp/out" 2>&1; then
+  cat "$tmp/out" >&2
+  fail "make verify with a failing target: got = success, want = failure"
+fi
+expect "make verify stops at the failing target" "$(grep -v -e '^make' "$tmp/out")" "verify: make first
+ran first
+verify: make broken"
+# A listed name with no rule of the port's, beside a gen.sh make's
+# built-in `%: %.sh` rule would build it from: the sub-make runs with
+# built-in rules off, so it fails rather than write gen and pass.
+printf '%s\n' "$pin" 'VERIFY_TARGETS = gen' > "$port/Makefile"
+printf 'echo built\n' > "$port/gen.sh"
+if make -s -C "$port" verify > "$tmp/out" 2>&1; then
+  cat "$tmp/out" >&2
+  fail "make verify naming gen, beside gen.sh, with no rule: got = success, want = failure"
+fi
+grep -q "No rule to make target" "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "make verify naming gen with no rule: got = another failure, want = No rule to make target"; }
+[ ! -e "$port/gen" ] || fail "make verify naming gen: got = a gen built from gen.sh, want = none"
+rm "$port/gen.sh"
+echo "ok make verify fails a listed name with no rule, beside a NAME.sh"
+cp "$tmp/Makefile.verify" "$port/Makefile"
 
 # A port that still has its vendored counter's source: nothing builds or
 # tests it.
@@ -218,7 +310,7 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;
