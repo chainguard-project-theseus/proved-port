@@ -1,11 +1,14 @@
 #!/bin/sh
 # kit/installed-test.sh: tests of kit/make as the theseus-proved-port
 # package installs it (the count-installed check). It installs the kit
-# into a scratch root the way the package's build does: the counter built
-# from kit/count as usr/bin/verus-count, kit/make/* (mode 0644) in
-# usr/share/proved-port/make/, all of kit/templates in
-# usr/share/proved-port/templates/, and usr/share/proved-port/KIT with
-# the commit and tag. Then a fixture port whose Makefile includes
+# into a scratch root with kit/install.sh, the way the package's build
+# does: the counter built from kit/count as usr/bin/verus-count,
+# kit/make/* (mode 0644) in usr/share/proved-port/make/, all of
+# kit/templates in usr/share/proved-port/templates/, and
+# usr/share/proved-port/KIT with the commit and tag. It holds the script's
+# refusals (an untagged commit, a changed kit/, but with --dev) and a
+# reinstall over an earlier install (a failed one leaves no KIT; one that
+# succeeds replaces make/ and templates/ whole). Then a fixture port whose Makefile includes
 # $(PROVED_PORT_HOME)/make/proved-port.mk runs:
 #   - make verus-count runs the installed counter, builds nothing, and
 #     prints what the counter run by hand prints;
@@ -46,7 +49,7 @@ target=${CARGO_TARGET_DIR:-$tmp/target}
 # --- the scratch kit: this tree's kit/, committed -------------------------
 kitrepo=$tmp/kit
 mkdir -p "$kitrepo/kit"
-cp -R kit/make kit/templates "$kitrepo/kit/"
+cp -R kit/make kit/templates kit/install.sh "$kitrepo/kit/"
 mkdir "$kitrepo/kit/count"
 for f in Cargo.toml Cargo.lock src; do
   cp -R "kit/count/$f" "$kitrepo/kit/count/"
@@ -58,25 +61,70 @@ git -C "$kitrepo" -c user.name=installed-test -c user.email=installed-test@examp
 sha=$(git -C "$kitrepo" rev-parse HEAD)
 
 # --- the install, as the package builds it --------------------------------
-cargo build --locked --release --manifest-path "$kitrepo/kit/count/Cargo.toml" --target-dir "$target"
+# kit/install.sh lays the kit out under PREFIX as the package does under
+# /usr. It refuses a checkout KIT would misdescribe (not the release's
+# tag, or with a change under kit/) unless --dev, which says so.
+# install PREFIX [--dev]: kit/install.sh from the scratch kit, its stderr
+# in $tmp/install.err; its exit status.
+install() {
+  CARGO_TARGET_DIR=$target sh "$kitrepo/kit/install.sh" ${2:+"$2"} "$1" 2> "$tmp/install.err"
+}
+if install "$tmp/untagged"; then
+  fail "kit/install.sh at an untagged commit: got = success, want = refused"
+fi
+grep -q "is not tag v.*pass --dev" "$tmp/install.err" \
+  || { cat "$tmp/install.err" >&2; fail "kit/install.sh at an untagged commit: the refusal does not say why"; }
+[ ! -e "$tmp/untagged/share/proved-port/KIT" ] || fail "kit/install.sh at an untagged commit: got = a KIT, want = none"
+install "$tmp/dev" --dev || { cat "$tmp/install.err" >&2; fail "kit/install.sh --dev at an untagged commit failed"; }
+grep -q -- "--dev: .* is not tag v" "$tmp/install.err" \
+  || { cat "$tmp/install.err" >&2; fail "kit/install.sh --dev: got = no note, want = one"; }
 # The package's version is its tag's, which is the counter's --version.
-version=$("$target/release/verus-count" --version | sed 's/^verus-count //')
+version=$("$tmp/dev/bin/verus-count" --version | sed 's/^verus-count //')
 [ -n "$version" ] || fail "verus-count --version printed no version"
+# At the tag, as a port's pin names it: installed, with nothing to note.
+git -C "$kitrepo" update-ref "refs/tags/v$version" HEAD
 root=$tmp/root
 home=$root/usr/share/proved-port
-mkdir -p "$root/usr/bin" "$home/make" "$home/templates"
-install -m755 "$target/release/verus-count" "$root/usr/bin/verus-count"
-(
-  cd "$kitrepo"
-  install -m644 kit/make/* "$home/make/"
-  cp -a kit/templates/. "$home/templates/"
-  {
-    echo "# kit: the proved-port kit installed by the theseus-proved-port package."
-    printf 'commit '
-    git rev-parse HEAD
-    echo "tag v$version"
-  } > "$home/KIT"
-)
+install "$root/usr" || { cat "$tmp/install.err" >&2; fail "kit/install.sh at the tag failed"; }
+! grep -q "kit/install.sh: .*tag v" "$tmp/install.err" \
+  || { cat "$tmp/install.err" >&2; fail "kit/install.sh at the tag: got = a note, want = none"; }
+expect "kit/install.sh records the commit and the counter's release in KIT" \
+  "$(sed 1d "$home/KIT")" "commit $sha
+tag v$version"
+# At the tag with a change under kit/: refused.
+: > "$kitrepo/kit/stray"
+if install "$tmp/changed"; then
+  fail "kit/install.sh with a change under kit/: got = success, want = refused"
+fi
+grep -q "kit/ has changes not in tag v" "$tmp/install.err" \
+  || { cat "$tmp/install.err" >&2; fail "kit/install.sh with a change under kit/: the refusal does not say why"; }
+rm "$kitrepo/kit/stray"
+echo "ok kit/install.sh installs the release's tag, and refuses another commit or a changed kit/ but with --dev"
+
+# Over the --dev install, at the tag. An install that fails part way (here
+# at its bin/, a file) leaves no KIT, which every kit target refuses, not
+# the --dev install's KIT over a mix of files.
+devhome=$tmp/dev/share/proved-port
+[ -f "$devhome/KIT" ] || fail "the --dev install has no KIT"
+mv "$tmp/dev/bin" "$tmp/dev-bin.saved"
+: > "$tmp/dev/bin"
+if install "$tmp/dev"; then
+  fail "kit/install.sh, a reinstall that cannot write bin/: got = success, want = failure"
+fi
+[ ! -e "$devhome/KIT" ] || fail "kit/install.sh, a failed reinstall: got = the earlier KIT, want = none"
+rm "$tmp/dev/bin"
+mv "$tmp/dev-bin.saved" "$tmp/dev/bin"
+# A reinstall that succeeds replaces make/ and templates/ whole: a file
+# the earlier install had and this tree does not is gone.
+: > "$devhome/make/stale.mk"
+: > "$devhome/templates/stale"
+install "$tmp/dev" || { cat "$tmp/install.err" >&2; fail "kit/install.sh over the --dev install, at the tag, failed"; }
+[ ! -e "$devhome/make/stale.mk" ] && [ ! -e "$devhome/templates/stale" ] \
+  || fail "kit/install.sh over an earlier install: got = its stale make/ and templates/ files, want = none"
+expect "kit/install.sh over the --dev install records the tag in KIT" \
+  "$(sed 1d "$devhome/KIT")" "commit $sha
+tag v$version"
+echo "ok kit/install.sh over an earlier install drops its KIT first and replaces its files whole"
 PATH=$root/usr/bin:$PATH
 export PATH
 
