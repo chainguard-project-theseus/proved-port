@@ -1,10 +1,14 @@
 # Verus and Kani: every proof holds, every Kani harness passes, and the
 # checked shares of the shipped crates stay at or above verus/FLOOR. The
-# verus checks are `make verus` (verus/README.md): `cargo verus focus`
-# over {VERUS_CRATES}, then the kit counter (verus-count, from the
-# theseus-proved-port package) with --floor, which compares verus/FLOOR
-# with the base revision's copy, so that lowering a figure needs a new
-# `lowered` line, and holds each function's rlimit use to verus/RLIMIT.
+# verus checks first run `make verus-headers`, which holds the port's
+# copies of the kit's Verus files (this one among them) to the installed
+# templates' headers, so a header that drifts fails here rather than at
+# the next kit bump. Then they run `make verus` (verus/README.md):
+# `cargo verus focus` over {VERUS_CRATES}, then the kit counter
+# (verus-count, from the theseus-proved-port package) with --floor,
+# which compares verus/FLOOR with the base revision's copy, so that
+# lowering a figure needs a new `lowered` line, and holds each
+# function's rlimit use to verus/RLIMIT.
 # When a figure rises, and what a `lowered` line needs, is verus/FLOOR's
 # header's rule. The kani checks are `make kani`: the kit's kani.sh,
 # from the same package, over every harness of the crates KANI_CRATES
@@ -64,15 +68,17 @@ environment:
 checks:
   verus:
     description: >-
-      make verus: cargo verus focus over {VERUS_CRATES}, then the kit
-      counter's coverage floor (verus/FLOOR) and rlimit headroom
-      (verus/RLIMIT), against the pull request's base.
+      make verus-headers, then make verus: cargo verus focus over
+      {VERUS_CRATES}, then the kit counter's coverage floor (verus/FLOOR)
+      and rlimit headroom (verus/RLIMIT), against the pull request's base.
     trigger: [presubmit]
     resources: large-arm64
     timeout: 60m
     network: &crates
       egress: [index.crates.io, static.crates.io]
     steps: &verus-steps
+      - name: Verus file headers
+        cmd: [make, verus-headers]
       - name: proofs and coverage floor
         cmd:
           - sh
