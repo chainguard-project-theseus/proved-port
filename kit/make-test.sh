@@ -260,7 +260,10 @@ log=$tmp/cargo.log
 # $tmp/lists/<crate>.json for `list` (<crate>-quantum8.json when the call
 # has `--features quantum8` and that file exists, as a feature-gated
 # harness is listed only with its feature), fails a run of crate
-# $STUB_FAIL and prints $STUB_SAY in each run. As Kani 0.68.0's does, a
+# $STUB_FAIL and prints $STUB_SAY in each run. Its `list` prints the
+# build on stdout, as cargo kani does, and for crate $STUB_LIST_FAIL
+# fails it, a compile error on stdout and cargo's summary on stderr. As
+# Kani 0.68.0's does, a
 # separate `-p` takes every bare word after it, so `-p CRATE list` is a
 # usage error (exit 2).
 cat > "$bin/cargo" <<EOF
@@ -279,7 +282,14 @@ case " \$* " in
   *" --features quantum8 "*) [ ! -f "$tmp/lists/\$crate-quantum8.json" ] || json=$tmp/lists/\$crate-quantum8.json ;;
 esac
 case " \$* " in
-  *" list "*) cp "\$json" kani-list.json; exit 0 ;;
+  *" list "*)
+    echo "Compiling \$crate for Kani"
+    if [ "\$crate" = "\${STUB_LIST_FAIL:-}" ]; then
+      echo "error: naked functions are not supported by Kani"
+      echo "error: could not compile \$crate" >&2
+      exit 101
+    fi
+    cp "\$json" kani-list.json; exit 0 ;;
 esac
 echo "Checking harness of \$crate"
 [ -z "\${STUB_SAY:-}" ] || echo "\$STUB_SAY"
@@ -375,6 +385,23 @@ kani -Z stubbing --features quantum16 --output-format regular -Z extra --cbmc-ar
 runs "KANI_VERSION it has" "kani --version
 $la
 kani -p=alpha" KANI_CRATES=alpha KANI_VERSION=0.68.0 sh "$k"
+
+# A listing that fails (a crate Kani cannot compile) fails the run before
+# any harness runs, and prints what cargo kani printed on both streams;
+# one that passes prints none of its build output.
+refuses "a crate whose listing fails" 1 KANI_CRATES="alpha beta" STUB_LIST_FAIL=beta sh "$k"
+expect "kani.sh runs nothing after a failed listing" "$(cat "$tmp/calls")" "$la
+$lb"
+for said in "kani: cargo kani list failed for beta, printing:" \
+  "error: naked functions are not supported by Kani" "error: could not compile beta"; do
+  grep -qxF "$said" "$tmp/out" ||
+    { cat "$tmp/out" >&2; fail "kani.sh, a failed listing: got = no \"$said\", want = it"; }
+done
+echo "ok kani.sh prints a failed listing's output"
+kani KANI_CRATES=alpha sh "$k" || { cat "$tmp/out" >&2; fail "kani.sh, a listing that passes: kani.sh failed"; }
+! grep -q 'Compiling alpha for Kani' "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "kani.sh, a listing that passes: got = its build output, want = none"; }
+echo "ok kani.sh prints nothing of a listing that passes"
 
 # No harnesses: a selection with none fails, since cargo kani would pass
 # it having checked nothing, unless KANI_NONE=yes declares it; under the
