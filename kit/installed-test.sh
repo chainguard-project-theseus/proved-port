@@ -85,7 +85,7 @@ export PATH
 # FLOOR at 0.0 and a count.toml with [floor].
 fixture() {
   mkdir -p "$1/crates/a/src" "$1/verus"
-  printf '[package]\nname = "a"\nversion = "0.0.0"\nedition = "2021"\n' > "$1/crates/a/Cargo.toml"
+  printf '[package]\nname = "a"\nversion = "0.0.0"\nedition = "2021"\n\n[package.metadata.verus]\nverify = true\n' > "$1/crates/a/Cargo.toml"
   printf 'pub fn f() {}\n\nverus! {\npub fn g() {}\n\npub fn h(x: u8) -> u8 {\n    x\n}\n}\n\npub fn i() {}\n' > "$1/crates/a/src/lib.rs"
   printf '[crates]\ndir = "crates"\n\n[floor]\npath = "verus/FLOOR"\n' > "$1/verus/count.toml"
   printf 'functions 0.0\nlines 0.0\nchecked-functions 0.0\nchecked-lines 0.0\n' > "$1/verus/FLOOR"
