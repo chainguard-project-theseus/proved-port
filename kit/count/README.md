@@ -110,7 +110,7 @@ lowering it there takes an earlier change that removes the old line. A new line 
 run (exit 1), and one with no reason does not parse (exit 2).
 
 There is no line for a base copy the counter cannot read: a kit release
-that drops or renames a key makes the port's re-sync exit 2 against
+that drops or renames a key makes the port's move to it exit 2 against
 every base that still has it. Such a change runs with `--no-base` in
 place of `--base-rev`, and then with no base comparison at all, for the configuration, FLOOR,
 RLIMIT or REACH, so it needs a maintainer's review in their place.
@@ -274,12 +274,13 @@ Since each atom is read on its own, a file declared under `feature =
 "std"` and again under `not(feature = "std")`, which every build
 compiles, stays unsure too, unless the configuration settles `std`.
 
-#### Bringing this rule in on a re-sync
+#### Bringing this rule in on a pin move
 
-The re-sync that brings in this counter carries the port's declarations
-in the same PR, each with a `[[narrowed]]` line: with neither list,
-every verified function under an unsettled `cfg` turns trusted at once,
-and FLOOR (and REACH, for one an entry point reaches) fails on that PR.
+The port PR that moves its pin to this counter carries the port's
+declarations in the same PR, each with a `[[narrowed]]` line: with
+neither list, every verified function under an unsettled `cfg` turns
+trusted at once, and FLOOR (and REACH, for one an entry point reaches)
+fails on that PR.
 
 - pcre3: `verus_sets = ['feature = "jit"']` and `verus_never_sets =
   ["miri"]`, as [configs/pcre3.toml](configs/pcre3.toml) has. Without
@@ -289,7 +290,7 @@ and FLOOR (and REACH, for one an entry point reaches) fails on that PR.
   unsettled `cfg`, and `--list` is unchanged.
 - challoc: [configs/challoc.toml](configs/challoc.toml)'s declarations,
   measured on the 11-10 snapshot `0497dc34`; they are re-measured on
-  challoc's own re-sync.
+  challoc's own pin move.
 
 A function that stays trusted under honest declarations is verified
 more: bring its proof under a `cfg` the proof run settles. Where a
@@ -573,12 +574,12 @@ me::w::*;` through an `extern crate self as me;`). The invocation then
 counts as another crate's macro, one `NAME!` row, unless the crate
 defines that name, which fails the run as above.
 
-Adopting a kit commit that expands macros lowers a port's shares with no
+Adopting a kit release that expands macros lowers a port's shares with no
 change to the port, as functions that were in no denominator join it
 (chainz from 31.5% to 27.3% of functions, pcre3 from 91.5% to 85.6%), so
-the first re-sync fails its FLOOR. A port holds its FLOOR by verifying
+the first pin move fails its FLOOR. A port holds its FLOOR by verifying
 more: it brings the macros' bodies inside `verus!` (below), verified or
-trusted at a seam, and the re-sync waits until the port's figures hold
+trusted at a seam, and the pin move waits until the port's figures hold
 its FLOOR. Lowering FLOOR is not the way to adopt a counter change.
 
 To raise the share, put the functions a macro writes inside `verus!`

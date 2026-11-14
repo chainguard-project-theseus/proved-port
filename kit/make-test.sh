@@ -1,21 +1,28 @@
 #!/bin/sh
 # kit/make-test.sh: tests of kit/make (the make-template check). A
-# scratch kit repository holds this tree's kit/make and kit/templates;
-# kit/sync.sh vendors them into a scratch port whose Makefile includes
-# verus/make/proved-port.mk. Then:
+# scratch PROVED_PORT_HOME holds this tree's kit/make and kit/templates
+# laid out as the theseus-proved-port package installs them (make/,
+# templates/ and a KIT with the commit and tag), and a stub verus-count
+# on PATH prints KIT's release as its --version. A scratch port's
+# Makefile pins that release and includes
+# $(PROVED_PORT_HOME)/make/proved-port.mk. Then:
 #   - `make -n` shows the commands each target runs, for the defaults
-#     and for the settings pcre3, expat-rs, chainz and challoc need;
+#     and for the settings pcre3, expat-rs, chainz and challoc need, and
+#     that nothing builds the counter, even for a port that still has a
+#     verus/count or includes a verus/make copy of proved-port.mk;
+#   - the PROVED_PORT_VERSION and counter-version guards fail a target
+#     before it runs anything;
 #   - kani.sh runs with a stub cargo: crate selection, one harness,
 #     shards, jobs, a failure, the fail pattern, the version check, a
 #     selection with no harnesses with and without KANI_NONE, one name
 #     in several files;
 #   - headers.sh holds the kit's Verus files (kit/make/VERUS-FILES) and
-#     no other: it passes them as the port fills them and fails on
-#     drift.
+#     no other to the installed templates: it passes them as the port
+#     fills them, with or without a `# kit:` line, fails on drift, reads
+#     no verus/make/templates a port still has, and gives the same
+#     result with --installed as with its defaults.
 # No Verus or Kani runs. Run it from the repository root.
 set -eu
-
-export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -25,26 +32,35 @@ fail() {
   exit 1
 }
 
-# --- the scratch kit and port -------------------------------------------
-kitrepo=$tmp/kit
-mkdir -p "$kitrepo/kit/count"
-cp kit/sync.sh "$kitrepo/kit/sync.sh"
-cp -R kit/make kit/templates "$kitrepo/kit/"
-echo '[package]' > "$kitrepo/kit/count/Cargo.toml"
-git -C "$kitrepo" init -q
-git -C "$kitrepo" add .
-git -C "$kitrepo" -c user.name=make-test -c user.email=make-test@example.com \
-  -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -qm kit
-sha=$(git -C "$kitrepo" rev-parse HEAD)
+# --- the scratch install and port ------------------------------------------
+version=0.0.$$-make-test
+home=$tmp/home
+mkdir -p "$home/make" "$home/templates"
+install -m644 kit/make/* "$home/make/"
+cp -a kit/templates/. "$home/templates/"
+printf '# kit: the proved-port kit, as make-test.sh installs it.\ncommit 0123456789abcdef0123456789abcdef01234567\ntag v%s\n' \
+  "$version" > "$home/KIT"
+countbin=$tmp/countbin
+mkdir "$countbin"
+# The stub answers --version only: the tests here show commands with
+# `make -n` and never run the counter.
+cat > "$countbin/verus-count" <<EOF
+#!/bin/sh
+[ "\${1-}" = --version ] || exit 1
+echo "verus-count $version"
+EOF
+chmod +x "$countbin/verus-count"
+PATH=$countbin:$PATH
+export PATH
 
 port=$tmp/port
 mkdir "$port"
-sh "$kitrepo/kit/sync.sh" "$port" > /dev/null
-[ -f "$port/verus/make/proved-port.mk" ] || fail "sync made no verus/make/proved-port.mk"
-cat > "$port/Makefile" <<'EOF'
-VERUS_CRATES = alpha beta
-include verus/make/proved-port.mk
-EOF
+# pin: the lines of a port's Makefile that pin the release and include
+# the installed proved-port.mk.
+pin="PROVED_PORT_VERSION = $version
+PROVED_PORT_HOME ?= $home
+include \$(PROVED_PORT_HOME)/make/proved-port.mk"
+printf '%s\n' 'VERUS_CRATES = alpha beta' "$pin" > "$port/Makefile"
 
 # shows TARGET [VAR=VALUE...]: `make -n TARGET` in the port, each run of
 # spaces one space.
@@ -61,15 +77,12 @@ expect() {
   echo "ok $1"
 }
 
-count_build='cargo build --locked --release --manifest-path verus/count/Cargo.toml --target-dir target/verus-count'
-
 # --- make -n ----------------------------------------------------------------
 expect "make -n verus, the template's verus check" \
   "$(shows verus VERUS_THREADS=16 VERUS_BASE=abc123)" \
   "mkdir -p target/
 cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json --num-threads 16 > target/verus-stats.json
-$count_build
-target/verus-count/release/verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --base-rev abc123 ."
+verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --base-rev abc123 ."
 
 # No base fails verus and verus-count before any command, with no SKIP:
 # a check that loses its base must not pass.
@@ -97,53 +110,143 @@ expect "make -n verus VERUS_BASE=none, a local run (--no-base)" \
   "$(shows verus VERUS_BASE=none)" \
   "mkdir -p target/
 cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json > target/verus-stats.json
-$count_build
-target/verus-count/release/verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --no-base ."
+verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --no-base ."
 
 expect "make -n verus, expat-rs (--features verus)" \
   "$(shows verus VERUS_CRATES=expat-rs VERUS_CARGO_FLAGS='--features verus' VERUS_THREADS=4 VERUS_BASE=HEAD^)" \
   "mkdir -p target/
 cargo verus focus --locked -p expat-rs --features verus -- --time-expanded --output-json --num-threads 4 > target/verus-stats.json
-$count_build
-target/verus-count/release/verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --base-rev HEAD^ ."
+verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --base-rev HEAD^ ."
 
 expect "make -n verus, another name (verus/SHARES)" \
   "$(shows verus VERUS_CRATES=zlib-core VERUS_FLOOR=verus/SHARES VERUS_BASE=main)" \
   "mkdir -p target/
 cargo verus focus --locked -p zlib-core -- --time-expanded --output-json > target/verus-stats.json
-$count_build
-target/verus-count/release/verus-count --floor verus/SHARES --rlimit target/verus-stats.json --base-rev main ."
+verus-count --floor verus/SHARES --rlimit target/verus-stats.json --base-rev main ."
 
 expect "make -n verus, challoc (verify, no RLIMIT yet)" \
   "$(shows verus VERUS_MODE=verify VERUS_CRATES= VERUS_RLIMIT= VERUS_BASE=main)" \
   "mkdir -p target/
 cargo verus verify --locked -- --time-expanded --output-json > target/verus-stats.json
-$count_build
-target/verus-count/release/verus-count --floor verus/FLOOR --base-rev main ."
+verus-count --floor verus/FLOOR --base-rev main ."
 
 expect "make -n verus-proofs, challoc's second quantum" \
   "$(shows verus-proofs VERUS_MODE=verify VERUS_CRATES= VERUS_CARGO_FLAGS='--no-default-features --features quantum8' VERUS_STATS=target/q8/stats.json)" \
   "mkdir -p target/q8/
 cargo verus verify --locked --no-default-features --features quantum8 -- --time-expanded --output-json > target/q8/stats.json"
 
-expect "make -n verus-count-test" \
-  "$(shows verus-count-test)" \
-  "cargo test --locked --manifest-path verus/count/Cargo.toml --target-dir target/verus-count"
+expect "make -n verus-count, VERUS_COUNT given" \
+  "$(shows verus-count VERUS_BASE=none VERUS_COUNT="$countbin/verus-count")" \
+  "$countbin/verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --no-base ."
 
-expect "make -n verus-headers" "$(shows verus-headers)" "VERUS_FLOOR=verus/FLOOR sh verus/make/headers.sh ."
+expect "make -n verus-count-test builds and tests nothing" \
+  "$(shows verus-count-test)" \
+  "echo 'verus-count-test: verus-count is not built here; its package tests it'"
+expect "make verus-count-test says the package's tests cover the counter" \
+  "$(make -s -C "$port" verus-count-test)" \
+  "verus-count-test: verus-count is not built here; its package tests it"
+
+expect "make -n verus-headers" "$(shows verus-headers)" "VERUS_FLOOR=verus/FLOOR sh $home/make/headers.sh ."
 expect "make -n verus-headers, another name (verus/SHARES)" "$(shows verus-headers VERUS_FLOOR=verus/SHARES)" \
-  "VERUS_FLOOR=verus/SHARES sh verus/make/headers.sh ."
-expect "make -n kani" "$(shows kani)" "sh verus/make/kani.sh"
-expect "make -n kani-list" "$(shows kani-list)" "sh verus/make/kani.sh --list"
+  "VERUS_FLOOR=verus/SHARES sh $home/make/headers.sh ."
+expect "make -n kani" "$(shows kani)" "sh $home/make/kani.sh"
+expect "make -n kani-list" "$(shows kani-list)" "sh $home/make/kani.sh --list"
+
+# A port that still has its vendored counter's source: nothing builds or
+# tests it.
+mkdir -p "$port/verus/count"
+printf '[package]\nname = "verus-count"\nversion = "0.2.4"\n' > "$port/verus/count/Cargo.toml"
+for t in verus verus-count verus-count-test; do
+  if shows "$t" VERUS_BASE=none | grep -q -e cargo.build -e cargo.test -e verus/count/; then
+    shows "$t" VERUS_BASE=none >&2
+    fail "make -n $t, a port with a verus/count/Cargo.toml: got = a counter build or test, want = none"
+  fi
+done
+echo "ok make -n builds and tests no verus/count/Cargo.toml a port still has"
+
+# A port whose Makefile includes a verus/make/ copy of this proved-port.mk
+# (where a vendored copy lived) still runs as installed: the counter from
+# PATH, nothing built, the pin required.
+mkdir -p "$port/verus/make"
+cp "$home/make/proved-port.mk" "$home/make/headers.sh" "$home/make/kani.sh" "$home/make/VERUS-FILES" "$port/verus/make/"
+cp "$port/Makefile" "$tmp/Makefile.saved"
+printf '%s\n' 'VERUS_CRATES = alpha beta' "PROVED_PORT_VERSION = $version" "PROVED_PORT_HOME = $home" \
+  'include verus/make/proved-port.mk' > "$port/Makefile"
+expect "make -n verus, proved-port.mk included from verus/make/: the counter from PATH, no build" \
+  "$(shows verus VERUS_BASE=main)" \
+  "mkdir -p target/
+cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json > target/verus-stats.json
+verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --base-rev main ."
+expect "make -n verus-count-test, proved-port.mk included from verus/make/: no cargo test" \
+  "$(shows verus-count-test)" \
+  "echo 'verus-count-test: verus-count is not built here; its package tests it'"
+expect "make -n verus-headers, proved-port.mk included from verus/make/: no --installed, the installed home" \
+  "$(shows verus-headers)" "VERUS_FLOOR=verus/FLOOR sh verus/make/headers.sh ."
+# Run for real: headers.sh, here beside a .mk outside PROVED_PORT_HOME,
+# still holds the port to PROVED_PORT_HOME's templates (proved-port.mk
+# exports it), not to a directory beside the script. A FLOOR copied from
+# the installed template passes; drifted, the message names the
+# installed template.
+had_floor=
+[ ! -e "$port/verus/FLOOR" ] || { had_floor=yes; cp "$port/verus/FLOOR" "$tmp/floor.port"; }
+cp "$home/templates/verus/FLOOR" "$port/verus/FLOOR"
+make -s -C "$port" verus-headers > "$tmp/out" 2>&1 \
+  || { cat "$tmp/out" >&2; fail "make verus-headers, proved-port.mk included from verus/make/: got = failure, want = success"; }
+grep -qx 'ok verus/FLOOR' "$tmp/out" || { cat "$tmp/out" >&2; fail "make verus-headers, included from verus/make/: verus/FLOOR was not held"; }
+awk 'NR == 2 { print "# something the kit never said"; next } { print }' "$home/templates/verus/FLOOR" > "$port/verus/FLOOR"
+if make -s -C "$port" verus-headers > "$tmp/out" 2>&1; then
+  fail "make verus-headers, proved-port.mk included from verus/make/, a drifted FLOOR: got = success, want = failure"
+fi
+grep -qF "the header drifted from the kit's ($home/templates/verus/FLOOR)" "$tmp/out" \
+  || { cat "$tmp/out" >&2; fail "make verus-headers, included from verus/make/: the message does not name the installed template"; }
+if [ -n "$had_floor" ]; then cp "$tmp/floor.port" "$port/verus/FLOOR"; else rm "$port/verus/FLOOR"; fi
+echo "ok make verus-headers, proved-port.mk included from verus/make/, holds the port to PROVED_PORT_HOME's templates"
+if make -s -n -C "$port" verus-count VERUS_BASE=none PROVED_PORT_VERSION= > "$tmp/out" 2> "$tmp/err"; then
+  fail "make -n verus-count, proved-port.mk included from verus/make/, no pin: got = success, want = failure"
+fi
+grep -q "PROVED_PORT_VERSION is not set" "$tmp/err" \
+  || { cat "$tmp/err" >&2; fail "make -n verus-count, proved-port.mk included from verus/make/, no pin: the message does not say so"; }
+echo "ok proved-port.mk included from verus/make/ still requires the pin"
+cp "$tmp/Makefile.saved" "$port/Makefile"
+rm "$port/verus/make/proved-port.mk" "$port/verus/make/headers.sh" "$port/verus/make/kani.sh" \
+  "$port/verus/make/VERUS-FILES" "$port/verus/count/Cargo.toml"
+rmdir "$port/verus/make" "$port/verus/count"
+
+# --- the guards --------------------------------------------------------------
+# A pin KIT does not record, or none, fails every kit target before it
+# runs anything; another counter first on PATH fails verus and
+# verus-count, the targets that run it.
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list; do
+  for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
+    case $p in
+      *=) msg="PROVED_PORT_VERSION is not set" ;;
+      *) msg="PROVED_PORT_VERSION is 0.0.0-other, but $home/KIT records tag v$version" ;;
+    esac
+    if make -s -n -C "$port" "$t" VERUS_BASE=none "$p" > "$tmp/out" 2> "$tmp/err"; then
+      fail "make -n $t $p: got = success, want = failure"
+    fi
+    grep -qF "$msg" "$tmp/err" \
+      || { cat "$tmp/err" >&2; fail "make -n $t $p: got = another message, want = $msg"; }
+    [ ! -s "$tmp/out" ] || { cat "$tmp/out" >&2; fail "make -n $t $p: got = commands, want = none"; }
+  done
+  echo "ok make -n $t fails a pin KIT does not record, and no pin"
+done
+mkdir "$tmp/stale"
+printf '#!/bin/sh\necho "verus-count 0.2.4"\n' > "$tmp/stale/verus-count"
+chmod +x "$tmp/stale/verus-count"
+for t in verus verus-count; do
+  if PATH=$tmp/stale:$PATH make -s -n -C "$port" "$t" VERUS_BASE=none > "$tmp/out" 2> "$tmp/err"; then
+    fail "make -n $t, verus-count 0.2.4 first on PATH: got = success, want = failure"
+  fi
+  grep -q "$home/KIT records tag v$version, but \`verus-count --version\` prints verus-count 0.2.4" "$tmp/err" \
+    || { cat "$tmp/err" >&2; fail "make -n $t, a stale counter: the message does not name its version"; }
+  [ ! -s "$tmp/out" ] || { cat "$tmp/out" >&2; fail "make -n $t, a stale counter: got = commands, want = none"; }
+  echo "ok make -n $t fails another release's counter first on PATH"
+done
 
 # A prerequisite the port adds runs before the recipe.
-cat > "$port/Makefile" <<'EOF'
-VERUS_CRATES = alpha
-include verus/make/proved-port.mk
-verus: verus-scan
-verus-scan:
-	sh verus/scan.sh
-EOF
+printf '%s\n' 'VERUS_CRATES = alpha' "$pin" 'verus: verus-scan' 'verus-scan:' > "$port/Makefile"
+printf '\tsh verus/scan.sh\n' >> "$port/Makefile"
 shows verus VERUS_BASE=x | head -n 1 > "$tmp/first"
 expect "a port's prerequisite runs first" "$(cat "$tmp/first")" "sh verus/scan.sh"
 
@@ -221,7 +324,7 @@ kani() {
   return $rc
 }
 
-# runs WHAT WANT VAR=VALUE... [sh verus/make/kani.sh ARGS]: it passes,
+# runs WHAT WANT VAR=VALUE... [sh $k ARGS]: it passes,
 # and its cargo kani calls are WANT.
 runs() {
   what=$1 want=$2
@@ -242,7 +345,7 @@ refuses() {
   echo "ok kani.sh $what exits $code"
 }
 
-k=verus/make/kani.sh
+k=$home/make/kani.sh
 # A run of every harness lists them first (cargo kani passes a crate
 # with none), then runs each crate.
 la='kani -p=alpha list --format json'
@@ -345,11 +448,11 @@ alpha kani::a_two src/lib.rs
 beta kani::b_one src/lib.rs"
 grep -q ' list ' "$tmp/calls" || fail "kani.sh --list did not call cargo kani list"
 if grep -v ' list ' "$tmp/calls" | grep -q .; then fail "kani.sh --list ran a harness"; fi
-# Each place the vendored kani.sh and proved-port.mk (the kani-list
+# Each place the installed kani.sh and proved-port.mk (the kani-list
 # target's header row and its help) say what --list prints names the
 # columns it prints.
 grep -v '^kani:' "$tmp/out" | awk '{ print NF }' | LC_ALL=C sort -u > "$tmp/cols"
-grep -h -o -E 'one `?CRATE NAME[A-Z ]*' "$port/verus/make/kani.sh" "$port/verus/make/proved-port.mk" |
+grep -h -o -E 'one `?CRATE NAME[A-Z ]*' "$home/make/kani.sh" "$home/make/proved-port.mk" |
   awk '{ print NF - 1 }' > "$tmp/doc-cols"
 expect "kani.sh, the kani-list target and its help each document --list" "$(wc -l < "$tmp/doc-cols" | tr -d ' ')" 3
 expect "the docs of --list name the $(cat "$tmp/cols") columns it prints" "$(LC_ALL=C sort -u "$tmp/doc-cols")" "$(cat "$tmp/cols")"
@@ -502,10 +605,7 @@ kani -p=alpha -j 2 --output-format terse"
 # A port with no harnesses yet declares it in its Makefile: make kani
 # passes while it has none and fails once it has one.
 cp "$port/Makefile" "$tmp/Makefile"
-cat > "$port/Makefile" <<'EOF'
-KANI_NONE = yes
-include verus/make/proved-port.mk
-EOF
+printf '%s\n' 'KANI_NONE = yes' "$pin" > "$port/Makefile"
 (cd "$port" && PATH="$bin:$PATH" make -s kani KANI_CRATES=gamma > "$tmp/out" 2>&1) ||
   { cat "$tmp/out" >&2; fail "make kani with the Makefile's KANI_NONE = yes and no harnesses: got = failure, want = success"; }
 grep -qx 'kani: no harnesses, as KANI_NONE=yes declares' "$tmp/out" ||
@@ -529,35 +629,44 @@ grep -qx 'alpha kani::a_q8 src/lib.rs' "$tmp/out" ||
 echo "ok make kani-list passes KANI_ARGS to the listing"
 
 # --- headers.sh ----------------------------------------------------------
-templates=$port/verus/make/templates
-# tpl FILE: the vendored template of the port's FILE, FILE.tmpl.
+templates=$home/templates
+# tpl FILE: the installed template of the port's FILE.
 tpl() {
-  echo "$templates/$1.tmpl"
+  echo "$templates/$1"
 }
-# fill FILE: the port's copy of template FILE, its kit line in the
-# templates' `vX.Y.Z (SHA)` form naming the scratch kit's commit, which
-# has no tag yet, so the version is the release before it.
+# fill FILE: the port's copy of template FILE, as an installed port has
+# it: the template's text with no `# kit:` line.
 fill() {
   mkdir -p "$port/$(dirname "$1")"
-  sed "s|^# kit: proved-port .*|# kit: proved-port v0.1.0 ($sha)|" "$(tpl "$1")" > "$port/$1"
+  sed '/^# kit: /d' "$(tpl "$1")" > "$port/$1"
 }
+# headers: headers.sh in the port with its defaults (no flag, no
+# PROVED_PORT_HOME: the directory above its own), output in $tmp/out.
 headers() {
   rc=0
-  (cd "$port" && sh verus/make/headers.sh) > "$tmp/out" 2>&1 || rc=$?
+  (cd "$port" && env -u PROVED_PORT_HOME sh "$home/make/headers.sh") > "$tmp/out" 2>&1 || rc=$?
   return $rc
 }
-(cd "$templates" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) > "$tmp/vendored"
-# Every vendored template ends in .tmpl, so that none ends in the name
-# of a file a port's code owners protect (reviewers.yaml).
-if grep -v '\.tmpl$' "$tmp/vendored"; then
-  fail "sync vendored the templates above without .tmpl"
-fi
-echo "ok sync vendors each template as NAME.tmpl"
-sed 's|\.tmpl$||' "$tmp/vendored" > "$tmp/templates"
-# The vendored templates are the kit's Verus files, kit/make/VERUS-FILES,
-# and no other.
+# headers_flag: headers.sh in the port with --installed naming the
+# install's paths, output in $tmp/out.flag.
+headers_flag() {
+  rc=0
+  (cd "$port" && env -u PROVED_PORT_HOME sh "$home/make/headers.sh" --installed "$home/templates" "$home/KIT" "$home/make/VERUS-FILES") \
+    > "$tmp/out.flag" 2>&1 || rc=$?
+  return $rc
+}
+# same WHAT: headers.sh with no flag and with --installed exit alike and
+# print the same.
+same() {
+  rc_default=0
+  headers || rc_default=$?
+  cp "$tmp/out" "$tmp/out.default"
+  rc_flag=0
+  headers_flag || rc_flag=$?
+  [ "$rc_default" -eq "$rc_flag" ] || fail "headers.sh $1: got = exit $rc_flag with --installed, want = exit $rc_default as with no flag"
+  expect "headers.sh $1: --installed prints what no flag does" "$(cat "$tmp/out.flag")" "$(cat "$tmp/out.default")"
+}
 grep -v -e '^#' -e '^$' kit/make/VERUS-FILES | LC_ALL=C sort > "$tmp/verus-files"
-expect "sync vendors the kit's Verus files, kit/make/VERUS-FILES" "$(cat "$tmp/templates")" "$(cat "$tmp/verus-files")"
 expect "kit/make/VERUS-FILES names the Verus files" "$(cat "$tmp/verus-files")" ".chainguard/ci/miri.yaml
 .chainguard/ci/verus.yaml
 .chainguard/review-prompt.md
@@ -567,19 +676,34 @@ verus/MINTS
 verus/REACH
 verus/RLIMIT
 verus/count.toml"
-while IFS= read -r f; do fill "$f"; done < "$tmp/templates"
+# A list of Verus files that names none (only comments) fails closed:
+# with nothing to hold, every port's headers would pass.
+printf '# only a comment\n\n' > "$tmp/no-files"
+rc=0
+(cd "$port" && env -u PROVED_PORT_HOME sh "$home/make/headers.sh" --installed "$home/templates" "$home/KIT" "$tmp/no-files") \
+  > "$tmp/out.nofiles" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$tmp/out.nofiles" >&2; fail "headers.sh, a Verus-file list that names none: got = exit $rc, want = exit 1"; }
+grep -qF "$tmp/no-files names no files" "$tmp/out.nofiles" \
+  || { cat "$tmp/out.nofiles" >&2; fail "headers.sh, a Verus-file list that names none: the message does not say so"; }
+echo "ok headers.sh fails a Verus-file list that names no files"
+while IFS= read -r f; do fill "$f"; done < "$tmp/verus-files"
+if grep -rq '^# kit:' "$port/verus" "$port/.chainguard"; then
+  fail "the filled port still has a # kit: line"
+fi
 # The port's other check files are its own shape, which headers.sh does
-# not hold: each here has no kit header at all.
+# not hold, though the install has a template of each name: each here has
+# no kit header at all.
 for f in .chainguard/ci/conformance.yaml .chainguard/ci/consumers.yaml .chainguard/ci/fuzz.yaml \
   .chainguard/ci/test.yaml .chainguard/ci/lint.yaml .chainguard/ci/env/default.yaml \
   .chainguard/ci/env/dev.yaml .chainguard/develop.yaml .chainguard/deps.yaml; do
-  [ -f "kit/templates/$f" ] || fail "kit/templates has no $f to stand in for"
+  [ -f "$templates/$f" ] || fail "the install has no $f to stand in for"
   mkdir -p "$port/$(dirname "$f")"
   printf '# The port'"'"'s own %s, not the kit'"'"'s.\nversion: 1\n' "$f" > "$port/$f"
 done
 headers || { cat "$tmp/out" >&2; fail "headers.sh failed on the templates as they are"; }
 expect "headers.sh checks each Verus file and nothing else" "$(LC_ALL=C sort "$tmp/out")" "$(sed 's/^/ok /' "$tmp/verus-files")"
-echo "ok headers.sh passes the templates as they are, kit lines in the vX.Y.Z (SHA) form, beside non-Verus check files of the port's own shape"
+echo "ok headers.sh passes the templates as they are, with no kit line, beside non-Verus check files of the port's own shape"
+same "on a port that passes"
 
 # The review prompt: the vendored-kit rule, rewrapped among the port's
 # own text, passes; reworded or gone, it fails.
@@ -593,15 +717,18 @@ echo "ok headers.sh passes the vendored-kit rule rewrapped among the port's own 
 cp "$(tpl .chainguard/review-prompt.md)" "$port/.chainguard/review-prompt.md"
 
 # A port fills its placeholders, rewrapping the paragraph, deletes the
-# ones that are whole list items, and adds lines after its kit line.
+# ones that are whole list items, and adds comments of its own after its
+# header, past a blank line. A `# kit:` line a port still has ends its
+# header and is not read, whatever it names.
 awk '
   /[{]RAISE_RULE/ { print "# own PR: the figures rise in their own pull requests, to the figures"; print "# the check names."; skip = 1 }
   skip { if (/}/) skip = 0; next }
   /[{]SHIPPED_CRATES/ { sub(/[{]SHIPPED_CRATES.*/, "every crate of the port") ; print; skip2 = 1; next }
   skip2 { if (/}/) { sub(/.*}/, "#"); skip2 = 0 } else next }
-  { print }
-  /^# kit:/ { print "# A comment of the port'"'"'s own." }' "$port/verus/FLOOR" > "$tmp/FLOOR"
+  !own && !/^#/ { print ""; print "# A comment of the port'"'"'s own."; own = 1 }
+  { print }' "$port/verus/FLOOR" > "$tmp/FLOOR"
 cp "$tmp/FLOOR" "$port/verus/FLOOR"
+grep -qx "# A comment of the port's own." "$port/verus/FLOOR" || fail "the fixture added no comment of the port's own to verus/FLOOR"
 awk '/^# - [{]PORT_SPECIFIC_ROOTS/ { skip = 1 } skip { if (/}/) skip = 0; next } { print }' \
   "$port/verus/REACH" > "$tmp/REACH"
 cp "$tmp/REACH" "$port/verus/REACH"
@@ -609,12 +736,14 @@ for f in verus/FLOOR verus/REACH; do
   [ "$(wc -l < "$port/$f")" -lt "$(wc -l < "$(tpl "$f")")" ] ||
     fail "the fixture deleted no placeholder lines from $f"
 done
-sed "s|^# kit: proved-port .*|# kit: proved-port $(echo "$sha" | cut -c1-12)|" "$port/verus/RLIMIT" > "$tmp/RLIMIT"
+awk '!done && !/^#/ { print "# kit: proved-port v0.0.0 (1234567890abcdef)"; done = 1 } { print }' \
+  "$port/verus/RLIMIT" > "$tmp/RLIMIT"
 cp "$tmp/RLIMIT" "$port/verus/RLIMIT"
+grep -qx '# kit: proved-port v0.0.0 (1234567890abcdef)' "$port/verus/RLIMIT" || fail "the stale kit line was not planted"
 rm "$port/verus/MINTS"
 headers || { cat "$tmp/out" >&2; fail "headers.sh failed on filled placeholders"; }
 grep -qx 'skip verus/MINTS: the port has none' "$tmp/out" || fail "headers.sh did not name the file it skipped"
-echo "ok headers.sh passes filled, rewrapped and deleted placeholders, a one-word short sha, a missing file"
+echo "ok headers.sh passes filled, rewrapped and deleted placeholders, the port's own comments, a stale kit line it does not read, a missing file"
 
 # bad FILE WHAT AWK: FILE edited by the awk program AWK fails.
 bad() {
@@ -635,10 +764,11 @@ bad .chainguard/ci/miri.yaml "a miri.yaml header line deleted" 'NR == 2 { next }
 bad .chainguard/reviewers.yaml "a reviewers.yaml header line reworded" 'NR == 2 { print "# something the kit never said"; next } { print }'
 bad .chainguard/review-prompt.md "the vendored-kit rule reworded" '/^- The vendored kit/ { on = 1 } on && /KIT/ { sub(/KIT/, "KITS"); on = 0 } { print }'
 bad .chainguard/review-prompt.md "the vendored-kit rule gone" '/^- The vendored kit/ { skip = 1; next } skip && (/^- / || /^$/) { skip = 0 } skip { next } { print }'
+bad .chainguard/ci/miri.yaml "a comment of the port's own run on into its header, with no blank line" '!done && !/^#/ { print "# A comment of the port'"'"'s own."; done = 1 } { print }'
 
-# badtemplate FILE WHAT AWK MESSAGE: the vendored template of FILE edited
-# by AWK so that it would hold nothing fails every port, with MESSAGE,
-# rather than pass the port's copy unchecked.
+# badtemplate FILE WHAT AWK MESSAGE: the installed template of FILE
+# edited by AWK so that it would hold nothing fails every port, with
+# MESSAGE, rather than pass the port's copy unchecked.
 badtemplate() {
   cp "$(tpl "$1")" "$tmp/keep"
   awk "$3" "$tmp/keep" > "$(tpl "$1")"
@@ -651,40 +781,55 @@ badtemplate() {
 }
 badtemplate .chainguard/review-prompt.md "a template whose vendored-kit item is reworded" \
   '{ sub(/^- The vendored kit/, "- The kit copies") } { print }' \
-  "verus/make/templates/.chainguard/review-prompt.md.tmpl has no \`- The vendored kit\` item"
+  "$templates/.chainguard/review-prompt.md has no \`- The vendored kit\` item"
 badtemplate .chainguard/review-prompt.md "a template whose vendored-kit item is gone" \
   '/^- The vendored kit/ { skip = 1; next } skip && (/^- / || /^$/) { skip = 0 } skip { next } { print }' \
-  "verus/make/templates/.chainguard/review-prompt.md.tmpl has no \`- The vendored kit\` item"
-# A template with no kit line holds its leading comment (installed
-# ports' templates have none), so only one with no leading comment at
-# all holds nothing.
+  "$templates/.chainguard/review-prompt.md has no \`- The vendored kit\` item"
+# A template with no kit line holds its whole leading comment, so only
+# one with no leading comment at all holds nothing.
 badtemplate verus/count.toml "a template with no leading comment" \
   '!body && /^#/ { next } { body = 1; print }' \
-  "verus/make/templates/verus/count.toml.tmpl has no leading comment, so it holds nothing"
-bad verus/RLIMIT "a kit line naming another commit" '/^# kit:/ { print "# kit: proved-port 0123456789abcdef"; next } { print }'
-bad verus/RLIMIT "a kit line naming a tag the kit has not" '/^# kit:/ { print "# kit: proved-port kit/v0.1.0"; next } { print }'
-bad verus/RLIMIT "a kit line with too short a sha" "/^# kit:/ { print \"# kit: proved-port $(echo "$sha" | cut -c1-6)\"; next } { print }"
-bad verus/RLIMIT "a vX.Y.Z (SHA) kit line naming another commit" '/^# kit:/ { print "# kit: proved-port v0.1.0 (0123456789abcdef)"; next } { print }'
-bad verus/RLIMIT "a vX.Y.Z (SHA) kit line with too short a sha" "/^# kit:/ { print \"# kit: proved-port v0.1.0 ($(echo "$sha" | cut -c1-6))\"; next } { print }"
-bad verus/REACH "no kit line" '/^# kit:/ { next } { print }'
+  "$templates/verus/count.toml has no leading comment, so it holds nothing"
+cp "$(tpl verus/RLIMIT)" "$tmp/keep"
+sed '/^# kit: /d' "$tmp/keep" > "$(tpl verus/RLIMIT)"
+headers || { cat "$tmp/out" >&2; fail "headers.sh failed on a template with no kit line"; }
+cp "$tmp/keep" "$(tpl verus/RLIMIT)"
+echo "ok headers.sh passes a template with no kit line"
 headers || fail "headers.sh failed after the edits were undone"
 
-# Once the kit commit is tagged v0.1.0 and the port re-syncs, KIT records
-# the tag: the vX.Y.Z (SHA) lines pass only with that version, and the
-# tag alone passes as one word.
-git -C "$kitrepo" -c tag.gpgsign=false tag v0.1.0
-sh "$kitrepo/kit/sync.sh" "$port" > /dev/null
-grep -qx 'tag v0.1.0' "$port/verus/count/KIT" || fail "sync recorded no tag v0.1.0 in KIT"
-headers || { cat "$tmp/out" >&2; fail "headers.sh failed on vX.Y.Z (SHA) lines naming KIT's tag"; }
-echo "ok headers.sh passes vX.Y.Z (SHA) lines naming KIT's tag and commit"
-cp "$port/verus/REACH" "$tmp/keep"
-awk '/^# kit:/ { print "# kit: proved-port v0.1.0"; next } { print }' "$tmp/keep" > "$port/verus/REACH"
-headers || { cat "$tmp/out" >&2; fail "headers.sh failed on a one-word kit line naming KIT's tag"; }
-cp "$tmp/keep" "$port/verus/REACH"
-echo "ok headers.sh passes a one-word kit line naming KIT's tag"
-bad verus/RLIMIT "a vX.Y.Z (SHA) kit line naming another version than KIT's tag" "/^# kit:/ { print \"# kit: proved-port v0.0.9 ($sha)\"; next } { print }"
-bad verus/RLIMIT "a vX.Y.Z (SHA) kit line naming KIT's tag and another commit" '/^# kit:/ { print "# kit: proved-port v0.1.0 (0123456789abcdef)"; next } { print }'
-headers || fail "headers.sh failed after the tagged edits were undone"
+# A port that still has the verus/make/templates (NAME.tmpl) and
+# verus/count/KIT of a vendored release: neither is read. A drifted .tmpl
+# changes nothing, and a drifted header fails against the installed
+# template, though the .tmpl beside it has the same drift.
+mkdir -p "$port/verus/make/templates/verus" "$port/verus/count"
+printf 'commit 0000000000000000000000000000000000000000\ntag v0.2.4\n' > "$port/verus/count/KIT"
+while IFS= read -r f; do
+  mkdir -p "$port/verus/make/templates/$(dirname "$f")"
+  printf '# something the kit never said\n' > "$port/verus/make/templates/$f.tmpl"
+done < "$tmp/verus-files"
+cp "$tmp/out" "$tmp/out.clean"
+headers || { cat "$tmp/out" >&2; fail "headers.sh, drifted .tmpl files in the port: got = failure, want = success (not read)"; }
+expect "headers.sh, drifted .tmpl files in the port, says what it says without them" "$(cat "$tmp/out")" "$(cat "$tmp/out.clean")"
+cp "$port/verus/FLOOR" "$tmp/floor.saved"
+awk 'NR == 2 { print "# something the kit never said"; next } { print }' "$tmp/floor.saved" > "$port/verus/FLOOR"
+cp "$port/verus/FLOOR" "$port/verus/make/templates/verus/FLOOR.tmpl"
+if headers; then
+  cat "$tmp/out" >&2
+  fail "headers.sh, a drifted verus/FLOOR with a .tmpl of the same drift: got = success, want = failure"
+fi
+grep -q "headers: verus/FLOOR: the header drifted from the kit's ($templates/verus/FLOOR)" "$tmp/out" \
+  || { cat "$tmp/out" >&2; fail "headers.sh, a drifted verus/FLOOR: the message does not name the installed template"; }
+echo "ok headers.sh reads no verus/make/templates or verus/count/KIT a port still has"
+same "on a drifted port"
+cp "$tmp/floor.saved" "$port/verus/FLOOR"
+while IFS= read -r f; do rm "$port/verus/make/templates/$f.tmpl"; done < "$tmp/verus-files"
+rm "$port/verus/count/KIT"
+rmdir "$port/verus/make/templates/.chainguard/ci" "$port/verus/make/templates/.chainguard" \
+  "$port/verus/make/templates/verus" "$port/verus/make/templates" "$port/verus/make" "$port/verus/count"
+rc=0
+(cd "$port" && sh "$home/make/headers.sh" --installed "$home/templates" > "$tmp/out" 2>&1) || rc=$?
+[ "$rc" -eq 2 ] || { cat "$tmp/out" >&2; fail "headers.sh --installed with too few arguments: got = exit $rc, want = exit 2"; }
+echo "ok headers.sh --installed with too few arguments exits 2"
 
 # A ratchet named verus/SHARES (VERUS_FLOOR): make verus-headers holds
 # its header to the verus/FLOOR template's, and fails when it drifts.

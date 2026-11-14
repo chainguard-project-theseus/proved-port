@@ -1,13 +1,12 @@
 # The kit counter's own CI (kit/count): its tests, clippy -D warnings
-# over every target, rustfmt, and the test of kit/sync.sh, which
-# vendors it (and kit/make) into a port. The ports' verus checks drop their
-# `counter tests` step when they switch to the kit counter
-# (kit/PLAN.md, step 2), so these are the counter's only tests. All
-# block. Toolchain: the Wolfi rust stream pcre3's test.yaml uses (it
+# over every target, and rustfmt. The theseus-proved-port package
+# installs the counter built from here, and a port runs that one without
+# building or testing it, so these are the counter's tests.
+# All block. Toolchain: the Wolfi rust stream pcre3's test.yaml uses (it
 # carries rustc, cargo, rustfmt and clippy); bump with it. git is for
-# the tests that build a repository to read a base revision from, and
-# for kit/sync.sh, which count-sync tests. count-installed tests the
-# installed mode of kit/make against the counter built here.
+# the tests that build a repository to read a base revision from.
+# count-installed tests kit/make as the package installs it, against
+# the counter built here.
 version: 1
 
 environment:
@@ -35,21 +34,24 @@ checks:
     timeout: 5m
     cmd: [cargo, fmt, --manifest-path, kit/count/Cargo.toml, --check]
 
+  # The check key stays because Checks refuses a change that deselects a
+  # check its run selects; the vendoring script it tested is gone, so it
+  # holds that it stays gone.
   count-sync:
     description: >-
-      kit/sync-test.sh: kit/sync.sh vendors kit/count into a scratch
-      port, and its --check passes on the copy and fails on drift.
+      The kit ships no vendoring: kit/sync.sh and kit/sync-test.sh do not
+      exist (a port takes the kit as the theseus-proved-port package).
     trigger: [presubmit, postsubmit]
     timeout: 5m
-    cmd: [sh, kit/sync-test.sh]
+    cmd: [sh, -c, 'for f in kit/sync.sh kit/sync-test.sh; do if [ -e "$f" ]; then echo "FAIL: $f exists: the kit ships no vendoring"; exit 1; fi; done; echo PASS']
 
   count-installed:
     description: >-
       kit/installed-test.sh: the kit installed into a scratch root as the
-      theseus-proved-port package installs it, then a fixture port in
-      installed mode (verus-count from PATH, no build, the
-      PROVED_PORT_VERSION guard) with the same counter output as the
-      vendored copy.
+      theseus-proved-port package installs it, then a fixture port
+      (verus-count from PATH, no build, the PROVED_PORT_VERSION and
+      counter-version guards, make verus-headers against the installed
+      templates).
     trigger: [presubmit, postsubmit]
     timeout: 15m
     environment:

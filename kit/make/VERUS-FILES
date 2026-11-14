@@ -1,16 +1,12 @@
-# The kit's Verus files: the kit/templates paths kit/sync.sh copies to
-# verus/make/templates/ (each as NAME.tmpl, so that no vendored path ends
-# in a file name the port's code owners protect, such as
-# reviewers.yaml), and so the files `make verus-headers`
-# (headers.sh) holds a port's to, one a line; an installed port's are
-# read from the package's templates/ under these names. Each holds its
-# header, the leading `#` lines up to a `# kit: proved-port` line where
-# it has one (a vendored port's file must; an installed port's need not,
-# and its header is then its whole leading comment), but
-# .chainguard/review-prompt.md, which holds its vendored-kit rule (the
-# `- The vendored kit` item). The kit's other templates (conformance,
-# consumers, fuzz, test, lint, the environments, develop.yaml,
-# deps.yaml) are starting points the port reshapes, and are not held.
+# The kit's Verus files, one a line: the files `make verus-headers`
+# (headers.sh) holds a port's copies of, each to the template of the same
+# name in the package's templates/ (/usr/share/proved-port/templates/).
+# Each template holds its header, its leading `#` comment, ending before
+# a `# kit:` line where it has one, but .chainguard/review-prompt.md,
+# which holds its vendored-kit rule (the `- The vendored kit` item). The
+# kit's other templates (conformance, consumers, fuzz, test, lint, the
+# environments, develop.yaml, deps.yaml) are starting points the port
+# reshapes, and are not held.
 verus/FLOOR
 verus/RLIMIT
 verus/REACH

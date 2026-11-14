@@ -1,14 +1,16 @@
-# Tests of kit/make, the make targets and scripts kit/sync.sh vendors
-# into a port's verus/make: kit/make-test.sh syncs them into a scratch
-# port, shows with `make -n` the commands verus, kani and the other
-# targets run for each port's settings, runs kani.sh with a stub cargo
+# Tests of kit/make, the make targets and scripts the theseus-proved-port
+# package installs in /usr/share/proved-port/make/: kit/make-test.sh lays
+# them out with the templates and a KIT in a scratch PROVED_PORT_HOME,
+# as the package does, with a stub verus-count; shows with `make -n` the
+# commands verus, kani and the other targets run for each port's
+# settings and that the guards fail them; runs kani.sh with a stub cargo
 # and headers.sh over the filled templates. No Verus or Kani runs.
 # busybox for the tools a port's checks have, make (GNU) for the
-# snippet, git for the scratch kit repository. Blocks.
+# snippet. Blocks.
 version: 1
 
 environment:
-  packages: [busybox, make, git]
+  packages: [busybox, make]
 
 checks:
   make-template:
