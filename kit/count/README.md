@@ -171,6 +171,19 @@ dir = "crates"
 
 ### Verus's build
 
+A crate's functions count as verified only when cargo verus checks the
+crate at all, which needs its Cargo.toml to set `[package.metadata.verus]
+verify = true`. A crate with a function inside `verus!` or of the
+attribute form, or a proof built only for Verus, that does not fails the
+run (exit 1), and each such crate is named. The table is necessary, not
+sufficient: `make verus`'s default `cargo verus focus` checks only the
+packages `VERUS_CRATES` names, so a crate that opts in must be one of
+them too (or the port runs `VERUS_MODE = verify`). The counter does not
+read `VERUS_CRATES`. The rlimit check catches the gap where it runs:
+with `--rlimit` against a base, as `make verus` runs it unless
+`VERUS_RLIMIT` is emptied, it fails a crate with Verus code that Verus's
+statistics leave out (`rlimit::check_covered`).
+
 A function counts as verified only when Verus's build is sure to
 compile it. A `cfg` reaches a function from its own attributes, from an
 enclosing `impl`, trait, inline `mod` or `verus!` block, from an
@@ -736,6 +749,12 @@ proof PR (the skill's lifecycle.md, phase 4):
    `verus-count --floor verus/FLOOR --base-rev "$BASE" .`. A base with
    no FLOOR prints `ok coverage floor: ... has no verus/FLOOR to compare
    with`; this PR may instead pass `--no-base`, which no later PR may.
+   Each crate with Verus code sets `[package.metadata.verus] verify =
+   true` in its Cargo.toml, and is in the Makefile's `VERUS_CRATES`:
+   cargo verus has Verus check no package without the table, whatever
+   `-p` selects, so the counter fails the run (exit 1) for each crate
+   with code Verus checks that lacks it, rather than credit as verified
+   what nothing checked (Verus's build, above).
 2. Copy `kit/templates/verus/FLOOR`, whose figures are all 0.0.
 3. On the PR's base the counter names 0.0 for every figure; on the PR it
    names the figures the proof reaches. Record those in FLOOR in the

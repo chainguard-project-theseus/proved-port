@@ -41,6 +41,13 @@
 //! `target_os = "windows"`, or any other atom, may be either.
 //! Lines run from a function's `fn` keyword to its closing brace.
 //!
+//! cargo verus has Verus check only a package whose Cargo.toml sets
+//! `[package.metadata.verus] verify = true`, whatever `-p` selects. A
+//! crate with code Verus checks (a function inside `verus!` or of the
+//! attribute form, or a proof built only for Verus) whose Cargo.toml does
+//! not fails the run (exit 1), each such crate named ([`opted_in`]):
+//! nothing would check the functions the tally credits as verified.
+//!
 //! A function an item macro writes counts too ([`Counter::item_macro`]):
 //! an invocation of a `macro_rules!` the crate defines is expanded
 //! ([`expand`]), and each function in the expansion counts as outside
@@ -5108,6 +5115,9 @@ fn main() {
         c.walk_crate(&cfg, (&root, k), cfg.ledger.is_some().then_some(&mut tests));
     }
     c.finish();
+    if !opted_in(&crates, &verus_crates(&c)) {
+        std::process::exit(1);
+    }
     if cfg.ledger.is_some() && !c.discharged.is_empty() {
         for (file, name) in &c.discharged {
             eprintln!(
@@ -5233,31 +5243,80 @@ fn main() {
         failed |= !ok;
     }
     if let Some(s) = stats {
-        // The crates with code Verus checks, as Verus spells their names:
-        // each with a function the walk recorded for Verus
-        // ([`Counter::verus_fns`]), its proofs built only for Verus
-        // (`verus_keep_ghost`) too, which no coverage tally counts, and
-        // each whose tally counts a function inside `verus!`.
-        let verus_crates: Vec<String> = c
-            .verus_fns
-            .keys()
-            .filter_map(|n| n.split("::").next().map(str::to_owned))
-            .chain(
-                c.tallies
-                    .iter()
-                    .filter(|(_, t)| {
-                        t.ghost + t.fns.iter().sum::<usize>() > t.fns[Class::Outside as usize]
-                    })
-                    .map(|(k, _)| k.replace('-', "_")),
-            )
-            .collect::<std::collections::BTreeSet<String>>()
-            .into_iter()
-            .collect();
-        failed |= !check_rlimit(&root, &cfg, &crates, &s, &verus_crates, &c, base.as_ref());
+        failed |= !check_rlimit(
+            &root,
+            &cfg,
+            &crates,
+            &s,
+            &verus_crates(&c),
+            &c,
+            base.as_ref(),
+        );
     }
     if failed {
         std::process::exit(1);
     }
+}
+
+/// The crates with code Verus checks, as Verus spells their names: each
+/// with a function the walk recorded for Verus ([`Counter::verus_fns`]),
+/// its proofs built only for Verus (`verus_keep_ghost`) too, which no
+/// coverage tally counts, and each whose tally counts a function inside
+/// `verus!`.
+fn verus_crates(c: &Counter) -> Vec<String> {
+    c.verus_fns
+        .keys()
+        .filter_map(|n| n.split("::").next().map(str::to_owned))
+        .chain(
+            c.tallies
+                .iter()
+                .filter(|(_, t)| {
+                    t.ghost + t.fns.iter().sum::<usize>() > t.fns[Class::Outside as usize]
+                })
+                .map(|(k, _)| k.replace('-', "_")),
+        )
+        .collect::<std::collections::BTreeSet<String>>()
+        .into_iter()
+        .collect()
+}
+
+/// Whether the package in `dir` opts into verification: its Cargo.toml
+/// sets `[package.metadata.verus] verify = true`. cargo verus has Verus
+/// check only such a package, whatever `-p` selects (cargo-verus's
+/// `make_cargo_plan` sets `__VERUS_DRIVER_VERIFY_` for no other), so
+/// another one's `verus!` code is compiled and never checked. A manifest
+/// that cannot be read or parsed opts in to nothing.
+fn opts_in(dir: &Path) -> bool {
+    fs::read_to_string(dir.join("Cargo.toml"))
+        .ok()
+        .and_then(|t| toml::from_str::<toml::Table>(&t).ok())
+        .and_then(|m| {
+            m.get("package")?
+                .get("metadata")?
+                .get("verus")?
+                .get("verify")?
+                .as_bool()
+        })
+        == Some(true)
+}
+
+/// Whether each of `crates` with code Verus checks (`verus`, as
+/// [`verus_crates`] spells them) opts into verification ([`opts_in`]),
+/// with a line for each that does not: Verus never checks its code, so
+/// the tally would credit its functions as verified with no proof behind
+/// them.
+fn opted_in(crates: &[Krate], verus: &[String]) -> bool {
+    let mut ok = true;
+    for k in crates {
+        if verus.contains(&k.name.replace('-', "_")) && !opts_in(&k.dir) {
+            eprintln!(
+                "FAIL verification opt-in: {} has code Verus checks, but its Cargo.toml does not set `[package.metadata.verus] verify = true`, so cargo verus never verifies it; add that table",
+                k.dir.display()
+            );
+            ok = false;
+        }
+    }
+    ok
 }
 
 /// Holds the configuration to `rev`'s copy ([`Config::explain`]): exits 1
