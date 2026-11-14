@@ -1,0 +1,113 @@
+# The Chainguard Checks deps agent opens one pull request per entry, on
+# chainguard/deps/<name>, that updates the entry's pins and fixes what the
+# updates break. It answers review comments from people with write access,
+# failing checks on its own commits, and conflicts. Schedules are UTC. The
+# paths and prompt guide the agent; they are not enforced. The agent sees
+# only its entry's prompt, so each repeats the rules it needs.
+#
+# This file moves proved-port's own pins. The ports' copy is
+# kit/templates/.chainguard/deps.yaml, whose placeholders a port fills;
+# it has no pins of proved-port's own. The one entry here that edits
+# kit/templates/ is tools, for shellcheck findings in its scripts.
+#
+# Within a scheduled run each entry's pull request is one commit, and the
+# run folds its later fixes into it. A turn (review comments, failing
+# checks, a conflict) adds a commit on top of the pull request's head and
+# never amends. The squash merge gives main one commit.
+#
+# Every entry is merge: manual: a person approves every pull request.
+# Merging one changes no port: the ports take the kit as the
+# theseus-proved-port package, built from a tagged release.
+version: 1
+updates:
+- name: toolchain
+  schedule: "0 17 * * 2" # Tuesdays
+  paths:
+    - ".chainguard/ci/count.yaml"
+    - "kit/count/**"
+  environment: .chainguard/ci/count.yaml
+  merge: manual
+  prompt: >-
+    Move the Wolfi rust-1.NN stream .chainguard/ci/count.yaml installs,
+    in its environment and in the count-installed check's packages, both
+    together, to the newest stream Wolfi ships, keeping count.yaml's
+    header comment, which names that rule, in step. If it is already that
+    stream, change nothing. Install the new stream with apk in the guest
+    and commit the move before you run anything; fold later fixes in this
+    run into that commit, and on a turn add a commit on top of the pull
+    request's head. Then run the count checks' commands: `cargo test
+    --locked --manifest-path kit/count/Cargo.toml`, `cargo clippy --locked
+    --manifest-path kit/count/Cargo.toml --all-targets -- -D warnings`,
+    `cargo fmt --manifest-path kit/count/Cargo.toml --check` and `sh
+    kit/installed-test.sh`, fixing what the new toolchain flags in
+    kit/count without changing what the counter reports. The body names
+    the commands the guest ran and any it did not finish. Do not edit
+    .chainguard/deps.yaml unless a person asks in a comment.
+
+- name: crates
+  schedule: "0 17 * * 1" # Mondays
+  paths:
+    - "kit/count/Cargo.toml"
+    - "kit/count/Cargo.lock"
+  environment: .chainguard/ci/count.yaml
+  merge: manual
+  prompt: >-
+    Update kit/count's crate dependencies and kit/count/Cargo.lock to
+    their latest compatible releases, preferring releases at least 7 days
+    old. Leave verus_syn alone: the verus_syn entry moves it. Add no new
+    dependency. Run `cargo test --locked --manifest-path
+    kit/count/Cargo.toml`, `cargo clippy --locked --manifest-path
+    kit/count/Cargo.toml --all-targets -- -D warnings` and `sh
+    kit/installed-test.sh`. An update that changes what the counter
+    reports for its tests' fixtures is left out, and the body says which
+    and how. Do not edit .chainguard/deps.yaml unless a person asks in a
+    comment.
+
+- name: verus_syn
+  schedule: "30 17 * * 2" # Tuesdays
+  paths:
+    - "kit/count/**"
+  environment: .chainguard/ci/count.yaml
+  merge: manual
+  prompt: >-
+    kit/count parses ports' sources with verus_syn, pinned exactly in
+    kit/count/Cargo.toml (`verus_syn = { version = "=0.0.0-..." }`). The
+    pin follows the newest Verus release Wolfi packages. verus_syn and
+    vstd share Verus's dated version scheme, but not every Verus release
+    publishes a verus_syn: find the newest `verus` package in Wolfi, the
+    date of its release (its vstd's dated version), and the newest
+    verus_syn on crates.io dated no later than that. If the pin is
+    already that version, change nothing. Otherwise
+    set the exact pin and its Cargo.lock entry together (`cargo update
+    --manifest-path kit/count/Cargo.toml -p verus_syn --precise
+    <version>`), and run `cargo test --locked --manifest-path
+    kit/count/Cargo.toml`, `cargo clippy --locked --manifest-path
+    kit/count/Cargo.toml --all-targets -- -D warnings` and `sh
+    kit/installed-test.sh`. Fix what the new syntax tree breaks in
+    kit/count so that the counter reads the new Verus's syntax and
+    reports the same classes and lines for code the old one read. Each
+    change to kit/count comes with a unit test in kit/count/src or a case
+    in kit/count/tests/cli.rs that fails without it
+    (.chainguard/review-prompt.md), and syntax the counter does not
+    recognize fails the run rather than being skipped, so no function
+    drops out of the count unseen. The body names every change to what
+    the counter reports, and any such change is left for a person, as a
+    draft. Do not edit
+    .chainguard/deps.yaml unless a person asks in a comment.
+
+- name: tools
+  schedule: "0 17 * * 3" # Wednesdays
+  paths:
+    - "kit/**/*.sh"
+  environment: .chainguard/ci/lint.yaml
+  merge: manual
+  prompt: >-
+    kit/shellcheck.sh fetches a pinned upstream shellcheck release and
+    checks its SHA-256, one per host (x86_64, aarch64); the shellcheck
+    check in .chainguard/ci/lint.yaml runs it. Move `version` to the
+    newest release at least 7 days old and set both sums to the SHA-256
+    of that release's linux tarballs (download them and hash them), then
+    run `sh kit/shellcheck.sh` and fix new findings in the scripts it
+    lists: every kit/*.sh, and kit/templates' scripts, which it checks
+    from kit/templates as a port runs them. Do not edit
+    .chainguard/deps.yaml unless a person asks in a comment.

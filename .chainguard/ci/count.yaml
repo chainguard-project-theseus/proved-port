@@ -2,15 +2,17 @@
 # over every target, and rustfmt. The theseus-proved-port package
 # installs the counter built from here, and a port runs that one without
 # building or testing it, so these are the counter's tests.
-# All block. Toolchain: the Wolfi rust stream pcre3's test.yaml uses (it
-# carries rustc, cargo, rustfmt and clippy); bump with it. git is for
-# the tests that build a repository to read a base revision from.
-# count-installed tests kit/make as the package installs it, against
-# the counter built here.
+# All block. Toolchain: the newest Wolfi rust stream (it carries rustc,
+# cargo, rustfmt and clippy); the toolchain entry of
+# .chainguard/deps.yaml moves it. git is for the tests that build a
+# repository to read a base revision from. apk-tools and wolfi-keys let
+# the deps agent's guest, which runs in this environment, install a new
+# stream and read Wolfi's index. count-installed tests kit/make as the
+# package installs it, against the counter built here.
 version: 1
 
 environment:
-  packages: [rust-1.99, build-base, busybox, git]
+  packages: [rust-1.99, build-base, busybox, git, apk-tools, wolfi-keys]
 
 checks:
   count-test:
