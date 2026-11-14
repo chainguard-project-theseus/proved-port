@@ -46,16 +46,23 @@ where it reports drift.
    and the sessions' environment, `.chainguard/develop.yaml` or the file
    its `from:` names), and the `ref` of the proved-port marketplace in
    `.claude/settings.json` (`v0.3.1`).
-2. Opt every crate with Verus code into verification, in the same pull
-   request: add
+2. The verification opt-in. 0.3.1 is the first release whose counter
+   requires each crate with code Verus checks to set
 
    ```toml
    [package.metadata.verus]
    verify = true
    ```
 
-   to each crate the counter's `FAIL verification opt-in` line names. A
-   crate with no Verus code needs nothing.
+   in its Cargo.toml, and fails one that lacks it with a `FAIL
+   verification opt-in` line naming the crate. A new port sets it when
+   it adopts the kit (kit/count/README.md, "Bootstrapping a port", step
+   1). A bump adds none: where the counter names a crate, the bump
+   changes no manifest and leaves the crate for a person, who adds the
+   table to it or shows that it holds no code Verus checks. What holds
+   such code is not always plain from the tree (a test crate can take
+   Verus files in by `#[path]`, a script can match `verus!` in its own
+   source).
 3. Set `VERIFY_TARGETS` in the Makefile, before the include, to the
    targets the port's checks verify with Verus and Kani, and the
    controls those checks run, when that is more than `verus kani`: a
