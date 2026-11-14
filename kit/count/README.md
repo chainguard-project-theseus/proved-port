@@ -861,14 +861,33 @@ A port takes it this way:
   together, with any new header text, in a pull request of their own
   (the kit entry of `kit/templates/.chainguard/deps.yaml`).
 
-Where the package is not installed (a Mac, a development host), build
-the counter from this repository at the pinned tag, with `cargo install
---locked --git <this repository's URL> --tag vX.Y.Z verus-count` or,
-from a clone checked out at the tag, `cargo install --locked --path
-kit/count`. Put it on PATH, or pass `VERUS_COUNT=/path/to/verus-count`
-to make. Point `PROVED_PORT_HOME` at an install root laid out as the
-package's `/usr/share/proved-port` (`make/`, `templates/` and `KIT`)
-for the make targets and the header lint. A fix the port needs in the
+Where the package is not installed (a Mac, a development host), install
+the kit from a clone of this repository checked out at the pinned tag,
+with one command, `kit/install.sh PREFIX`. It lays the kit out under
+PREFIX as the package does under `/usr`: the counter as
+`PREFIX/bin/verus-count`, and `make/`, `templates/` and a `KIT` that
+records the commit and release in `PREFIX/share/proved-port`. Then run
+the port's kit targets with that root and counter:
+
+```sh
+git -C <clone> checkout vX.Y.Z
+sh <clone>/kit/install.sh "$HOME/.local"
+make verus PROVED_PORT_HOME="$HOME/.local/share/proved-port" \
+  VERUS_COUNT="$HOME/.local/bin/verus-count" VERUS_BASE=none
+```
+
+A checkout's own `kit/` is not such a root: it has no `KIT`, and the
+kit targets fail without one, as they do on a stale install.
+`install.sh` refuses (exit 1) a checkout that is not the tag of the
+release it would record, or that has a change under `kit/`, since the
+counter's `--version` names the last release until the next one is
+tagged and `KIT` would then pass the version check for another release's
+files. `kit/install.sh --dev PREFIX` installs such a development tree
+all the same, saying so. Over an earlier install it removes that
+install's `KIT` before writing anything and replaces `make/` and
+`templates/` whole, so a reinstall that fails part way leaves no `KIT`,
+which the kit targets refuse. `kit/installed-test.sh` installs
+the kit through it. A fix the port needs in the
 counter or the make targets lands here and reaches the port with the
 next release.
 

@@ -29,12 +29,10 @@ development sessions' environment install it as the Wolfi package
 (the proved-port kit's kit/count/README.md, "Adopting: the package"),
 so where the package is not installed the Verus targets fail saying so
 and every other target still runs. On a host without the package, such as a Mac,
-install the counter at that release with `cargo install --locked --git
-<proved-port's URL> --tag vX.Y.Z verus-count` (or `cargo install --locked --path kit/count` from
-a proved-port clone at the tag), point `PROVED_PORT_HOME` at an install
-root laid out as the package's `/usr/share/proved-port` (`make/`,
-`templates/` and `KIT`), and pass `VERUS_COUNT=/path/to/verus-count`
-when the counter is not on PATH.
+install the kit from a proved-port clone checked out at that release with
+`sh kit/install.sh "$HOME/.local"`, then pass
+`PROVED_PORT_HOME="$HOME/.local/share/proved-port"` and
+`VERUS_COUNT="$HOME/.local/bin/verus-count"` to the Verus targets.
 
 ## Contributing
 

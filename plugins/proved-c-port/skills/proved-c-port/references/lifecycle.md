@@ -175,11 +175,10 @@ or an open bug.
    The pins move together with the marketplace ref in the port's
    `.claude/settings.json`, through the deps template's kit entry
    (`kit/count/README.md`, "Adopting: the package"). On a Mac, install
-   the counter with `cargo install --locked --git <proved-port's URL>
-   --tag vX.Y.Z verus-count` (or `--path kit/count` from a clone at the
-   tag), point `PROVED_PORT_HOME` at an install root laid out as
-   `/usr/share/proved-port`, and pass `VERUS_COUNT` when the counter is
-   not on PATH. A port on a vendored 0.2.4 copy moves to the package in
+   the kit from a proved-port clone at the tag with `sh kit/install.sh
+   PREFIX`, which lays it out as the package does (with the `KIT` the
+   kit targets check), then pass `PROVED_PORT_HOME=PREFIX/share/proved-port`
+   and `VERUS_COUNT=PREFIX/bin/verus-count`. A port on a vendored 0.2.4 copy moves to the package in
    one PR (`kit/count/README.md`, "Moving from a vendored copy").
 3. Prove leaf modules first (UTF decoding, tables, parsers), where vstd
    already has a specification to prove against.
