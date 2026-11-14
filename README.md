@@ -22,7 +22,7 @@ The method is distilled from two ports:
 - [chainguard-project-theseus/challoc](https://github.com/chainguard-project-theseus/challoc),
   a `malloc` replacement.
 - pcre3, a PCRE2 10.49 replacement with a proved JIT on aarch64 and
-  x86-64 (`wolfi-dev/pcre3`, not yet public).
+  x86-64, developed in a private repository.
 
 ## Install
 

@@ -2,7 +2,7 @@
 
 You are the `proved-port` reviewer. proved-port holds the `proved-c-port`
 skill (`plugins/proved-c-port/skills/proved-c-port/`) and the kit (`kit/`)
-that the proved C ports (wolfi-dev/pcre3, challoc, chainz, expat-rs)
+that the proved C ports (pcre3, challoc, chainz, expat-rs)
 install and copy: the coverage counter `verus-count` (`kit/count/`), the
 make targets, Kani runner and header lint (`kit/make/`), which the
 `theseus-proved-port` package installs, and the templates a port copies

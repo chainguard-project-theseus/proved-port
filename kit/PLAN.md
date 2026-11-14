@@ -1,8 +1,9 @@
 # Starter kit: plan
 
 A plan for moving the reusable tooling of proved C-ABI ports into
-`kit/` in this repository, from wolfi-dev/pcre3 (main `5216e03d`),
-wolfi-dev/challoc (main `7ef336c4`) and the box and emulator scripts
+`kit/` in this repository, from pcre3 (a private repository),
+chainguard-project-theseus/challoc (main `7ef336c4`) and the box and
+emulator scripts
 that are not yet in any repository. Section 5 gives each step's
 status.
 
@@ -249,7 +250,7 @@ is deleted in that PR.
    the kit counter's `checked-*`. The FLOOR template's raise rule is one
    rule for every port: FLOOR and the badge rise in their own PR, to the
    figures the check names, never in the PR that earns them (challoc's,
-   expat-rs's and chainz#59's rule; pcre3 moves to it from same-PR).
+   expat-rs's and chainz's rule; pcre3 moves to it from same-PR).
    Exit: neither port restates a header's rule
    outside the header, and each header holds the template's text.
    **Status:** the kit side is done: `kit/templates/` (FLOOR, RLIMIT,
@@ -258,8 +259,8 @@ is deleted in that PR.
    theorem and Kani record skeletons, the `ABI-nnn` ledger, AGENTS.md and
    CONTRIBUTING.md outlines; `kit/templates/README.md` says how to apply
    them). The rest of the verus README's prose and the TODO skeleton are
-   not templated yet. pcre3's restatements point at its headers
-   (wolfi-dev/pcre3#1073). The lint that diffs a header against its
+   not templated yet. pcre3's restatements point at its headers.
+   The lint that diffs a header against its
    template is `kit/make/headers.sh` (`make verus-headers`), installed
    with the counter by the package: it reads the installed templates,
    and from v0.3.0 neither the templates nor a port's files carry a
@@ -295,7 +296,7 @@ is deleted in that PR.
      generated ledger) and pcre3's REACH, CD1, MINTS, recursion and
      rlimit checks behind sections of the configuration. Its output is
      byte-identical to challoc's counter (main `fcde6b2`) and to
-     pcre3's (main `158cf87a`) but for the `ok compile inputs` line,
+     pcre3's but for the `ok compile inputs` line,
      which also names the roots it resolved, under
      `kit/count/configs/`. It also counts Verus's attribute form, for
      expat-rs. `.chainguard/ci/count.yaml` runs its tests, clippy and
@@ -375,6 +376,5 @@ is deleted in that PR.
    sidecar with its rendering. Each, filled with a sample port's values,
    passes `chainctl checks validate`. One setting is not a file: the
    default branch requires `Chainguard Checks (presubmit)` pinned to the
-   `chainguard` check app, through chainguard-dev/infra's github-iac
-   (chainguard-dev/infra#5389; `kit/templates/README.md`, "The required
-   check"). Still to come: the Makefile include and the lint.
+   `chainguard` check app, through the organization's repository
+   rulesets (`kit/templates/README.md`, "The required check"). Still to come: the Makefile include and the lint.
