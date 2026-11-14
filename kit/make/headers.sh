@@ -1,33 +1,46 @@
 #!/bin/sh
-# verus/make/headers.sh [PORT_ROOT]: hold a port's copies of the kit's
-# Verus files to the kit's text (`make verus-headers`,
-# verus/make/proved-port.mk). Vendored from the proved-port kit's
-# kit/make by kit/sync.sh, which copies beside it, under
-# verus/make/templates/, the templates kit/make/VERUS-FILES names, each
-# with `.tmpl` added to its name (verus/FLOOR.tmpl), as they are at the
-# kit commit verus/count/KIT records: verus/FLOOR, RLIMIT,
-# REACH, MINTS and count.toml, .chainguard/ci/verus.yaml, miri.yaml and
-# .chainguard/reviewers.yaml, and .chainguard/review-prompt.md. The kit's
-# other templates (conformance, consumers, fuzz, test, lint, the
-# environments, develop.yaml, deps.yaml) are starting points the port
-# reshapes, and this does not hold them. The vendored copies themselves
-# (verus/count, verus/make) are kit/sync.sh --check's.
+# headers.sh [--installed TEMPLATES KIT FILES] [PORT_ROOT]: hold a port's
+# copies of the kit's Verus files to the kit's text (`make
+# verus-headers`, proved-port.mk). The theseus-proved-port package
+# installs it in /usr/share/proved-port/make/, beside VERUS-FILES, with
+# the kit's templates in /usr/share/proved-port/templates/ and KIT in
+# /usr/share/proved-port/.
+#
+# TEMPLATES is the installed templates' directory, KIT the installed KIT
+# and FILES the list of the kit's Verus files (VERUS-FILES). Without
+# --installed they are PROVED_PORT_HOME/templates and PROVED_PORT_HOME/KIT
+# (PROVED_PORT_HOME as proved-port.mk exports it; unset, the directory
+# above this script's, where the package installs both) and the
+# VERUS-FILES beside this script. Only these arguments, or the
+# PROVED_PORT_HOME proved-port.mk gives, choose the paths. KIT must be
+# there, and a drift message names the release it records. PORT_ROOT
+# defaults to `.`; nothing under it but the Verus files themselves is
+# read, so a verus/make or verus/count a port still has from an earlier,
+# vendored release is not.
+#
+# The files held are the ones FILES names, each against the template of
+# the same name: verus/FLOOR, RLIMIT, REACH, MINTS and count.toml,
+# .chainguard/ci/verus.yaml, miri.yaml and .chainguard/reviewers.yaml,
+# and .chainguard/review-prompt.md. The installed directory holds the
+# kit's other templates too (conformance, consumers, fuzz, test, lint,
+# the environments, develop.yaml, deps.yaml): starting points the port
+# reshapes, which this does not hold.
 #
 # For each of those templates the port has (one it lacks is skipped and
-# named), the header is the file's leading `#` comment lines, up to a
-# `# kit:` line where the file has one. The port's header must hold the
-# template's text, where
-# each placeholder (`{NAME}`, `{NAME: guidance}`, `{Guidance}`) stands for
-# any text the port fills in, and a placeholder that fills whole lines
-# (a list item, a sentence of its own) may be deleted with its lines. The
-# comparison ignores white space and the `#` that starts each line, so a
-# filled placeholder may rewrap its paragraph. Comment lines the port
-# adds after its `# kit:` line are its own.
+# named), the header is the file's leading `#` comment lines, ending
+# before a `# kit:` line where the file has one; that line is not read or
+# checked, in the template or the port. The port's header must hold the
+# template's text, where each placeholder (`{NAME}`, `{NAME: guidance}`,
+# `{Guidance}`) stands for any text the port fills in, and a placeholder
+# that fills whole lines (a list item, a sentence of its own) may be
+# deleted with its lines. The comparison ignores white space and the `#`
+# that starts each line, so a filled placeholder may rewrap its
+# paragraph. The port's own comments go after its header, past a blank
+# line.
 #
 # .chainguard/review-prompt.md is Markdown, with no `#` header: the port's
 # prompt must hold, anywhere and ignoring white space, the template's
-# vendored-kit rule, its `- The vendored kit` list item, which says how
-# verus/count, verus/make and KIT may change. It carries no kit line.
+# vendored-kit rule, its `- The vendored kit` list item.
 #
 # VERUS_FLOOR (from the environment, as proved-port.mk passes it; a path
 # under PORT_ROOT, default verus/FLOOR) is the port's ratchet file, which
@@ -35,69 +48,35 @@
 # directory names it otherwise, verus/SHARES say, as verus/FLOOR and
 # verus/floor/ are one path on a case-insensitive file system).
 #
-# Vendored, the port's header ends at its `# kit: proved-port VERSION`
-# line, which it must have, and which must name the commit
-# verus/count/KIT records (in full or a prefix of 7 or more characters),
-# or its tag: the headers are the kit's text at that version. VERSION is
-# one word, or the templates' `vX.Y.Z (SHA)` form, where SHA names that
-# commit as above and vX.Y.Z is its tag; when the commit has no tag (a
-# copy taken between releases) vX.Y.Z is the release before it, which
-# KIT does not record, so any vX.Y.Z passes.
-#
-# Installed mode: `headers.sh --installed TEMPLATES KIT FILES
-# [PORT_ROOT]`, as proved-port.mk runs it when the theseus-proved-port
-# package's copy of it is the one included. Only those arguments choose
-# it, never the environment, so nothing a vendored port's shell exports
-# can switch its check. The templates are TEMPLATES' under their own
-# names, and the files held are the ones the list FILES (VERUS-FILES)
-# names, not every file the directory holds, since the installed
-# directory holds all the kit's templates. KIT is the installed KIT. The
-# port's own verus/make and verus/count, if it still has them, are not
-# read. Installed, a port's file needs no `# kit:` line: the release is
-# the package pin's. Its header is its whole leading comment, so its own
-# comments go after a blank line; a `# kit:` line it still has ends the
-# header and is not checked.
-#
 # Exit 0: every header matches; 1: one drifted or a file is missing; 2:
 # usage.
 set -eu
 
 usage="usage: $0 [--installed TEMPLATES KIT FILES] [PORT_ROOT]"
-installed=
 if [ "${1:-}" = --installed ]; then
   [ $# -ge 4 ] || { echo "$usage" >&2; exit 2; }
-  installed=yes
   templates=$2
   kit=$3
   files=$4
   shift 4
+else
+  here=$(cd "$(dirname "$0")" && pwd)
+  home=${PROVED_PORT_HOME:-$(dirname "$here")}
+  templates=$home/templates
+  kit=$home/KIT
+  files=$here/VERUS-FILES
 fi
 [ $# -le 1 ] || { echo "$usage" >&2; exit 2; }
 root=${1:-.}
 floor=${VERUS_FLOOR:-verus/FLOOR}
-if [ -n "$installed" ]; then
-  kit_name=$kit
-  fix='reinstall the theseus-proved-port package'
-else
-  templates=$root/verus/make/templates
-  kit=$root/verus/count/KIT
-  kit_name=verus/count/KIT
-  fix='re-run kit/sync.sh'
-fi
+fix='reinstall the theseus-proved-port package'
 [ -d "$templates" ] || { echo "headers: no $templates; $fix" >&2; exit 1; }
 [ -f "$kit" ] || { echo "headers: no $kit; $fix" >&2; exit 1; }
-sha=$(sed -n 's/^commit //p' "$kit")
+[ -f "$files" ] || { echo "headers: no $files, the list of the kit's Verus files; $fix" >&2; exit 1; }
 tag=$(sed -n 's/^tag //p' "$kit")
-[ -n "$sha" ] || { echo "headers: $kit records no commit" >&2; exit 1; }
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-
-# header FILE: FILE's leading `#` lines up to and including its first
-# `# kit:` line; fails when the leading lines have none.
-header() {
-  awk '!/^#/ { exit } { print } /^# kit:/ { found = 1; exit } END { exit !found }' "$1"
-}
 
 # body FILE: FILE's leading `#` lines, up to but not including a
 # `# kit:` line.
@@ -112,35 +91,6 @@ kit_rule() {
     on && (/^- / || /^#/ || /^[ \t]*$/) { exit }
     /^- The vendored kit/ { on = 1 }
     on { print }' "$1"
-}
-
-# version LINE: the VERSION of a `# kit: proved-port VERSION` line, with
-# the `vX.Y.Z (SHA)` form printed as `vX.Y.Z SHA`.
-version() {
-  echo "$1" | sed -n \
-    -e 's/^# kit: proved-port \(v[0-9][0-9.]*\) (\([0-9a-f]*\)) *$/\1 \2/p' \
-    -e 's/^# kit: proved-port \([^ ]*\) *$/\1/p'
-}
-
-# commit SHA: whether SHA is the commit KIT records, in full or a prefix
-# of 7 or more characters.
-commit() {
-  [ ${#1} -ge 7 ] || return 1
-  case $sha in "$1"*) return 0 ;; esac
-  return 1
-}
-
-# known VERSION: whether VERSION names the commit or tag KIT records.
-known() {
-  [ -n "$1" ] || return 1
-  case $1 in
-    *' '*)
-      commit "${1#* }" || return 1
-      [ "$tag" = none ] || [ "${1%% *}" = "$tag" ]
-      ;;
-    "$sha" | "$tag") [ "$1" != none ] ;;
-    *) commit "$1" ;;
-  esac
 }
 
 # match TEMPLATE PORT: whether the port header (PORT, its `# kit:` line
@@ -226,37 +176,22 @@ match() {
     }' "$1" "$2"
 }
 
-if [ -n "$installed" ]; then
-  [ -f "$files" ] || { echo "headers: no $files, the list of the kit's Verus files; $fix" >&2; exit 1; }
-  # Each listed template, which must be installed: one missing would
-  # leave its file unheld.
-  grep -v -e '^#' -e '^[[:space:]]*$' "$files" > "$tmp/files" || true
-  : > "$tmp/unsorted"
-  while IFS= read -r rel; do
-    if [ ! -f "$templates/$rel" ]; then
-      echo "headers: $files names $rel, but $templates/$rel is not installed; $fix" >&2
-      exit 1
-    fi
-    printf '%s\n' "$templates/$rel" >> "$tmp/unsorted"
-  done < "$tmp/files"
-  LC_ALL=C sort "$tmp/unsorted" > "$tmp/list"
-else
-  find "$templates" -type f | LC_ALL=C sort > "$tmp/list"
-fi
-[ -s "$tmp/list" ] || { echo "headers: $templates holds no templates; $fix" >&2; exit 1; }
-drift=
-while IFS= read -r t; do
-  # src: the template; rel: the kit template it is, without the `.tmpl`
-  # kit/sync.sh adds to a vendored one so that no vendored path ends in
-  # the name of a file the port's code owners protect (reviewers.yaml).
-  rel=${t#"$templates"/}
-  if [ -n "$installed" ]; then
-    src=$t
-  else
-    src=verus/make/templates/$rel
-    rel=${rel%.tmpl}
+
+# Each listed template, which must be installed: one missing would leave
+# its file unheld.
+grep -v -e '^#' -e '^[[:space:]]*$' "$files" > "$tmp/files" || true
+[ -s "$tmp/files" ] || { echo "headers: $files names no files; $fix" >&2; exit 1; }
+while IFS= read -r rel; do
+  if [ ! -f "$templates/$rel" ]; then
+    echo "headers: $files names $rel, but $templates/$rel is not installed; $fix" >&2
+    exit 1
   fi
-  # path: the port's file the template rel holds.
+done < "$tmp/files"
+LC_ALL=C sort "$tmp/files" > "$tmp/list"
+drift=
+while IFS= read -r rel; do
+  # t: the template; path: the port's file it holds.
+  t=$templates/$rel
   path=$rel
   [ "$rel" != verus/FLOOR ] || path=$floor
   f=$root/$path
@@ -275,12 +210,12 @@ while IFS= read -r t; do
     # With no rule between them, the two placeholders match any prompt:
     # fail rather than pass every port's.
     if [ "$(wc -l < "$tmp/t.body")" -le 2 ]; then
-      echo "headers: $src has no \`- The vendored kit\` item; $fix" >&2
+      echo "headers: $t has no \`- The vendored kit\` item; $fix" >&2
       drift=1
       continue
     fi
     if ! missing=$(match "$tmp/t.body" "$f"); then
-      echo "headers: $path: the vendored-kit rule drifted from the kit's (the \`- The vendored kit\` item of $src); it lacks: $missing" >&2
+      echo "headers: $path: the vendored-kit rule drifted from the kit's (the \`- The vendored kit\` item of $t); it lacks: $missing" >&2
       drift=1
       continue
     fi
@@ -291,40 +226,20 @@ while IFS= read -r t; do
   # rather than pass every port's copy.
   body "$t" > "$tmp/t.body"
   if [ ! -s "$tmp/t.body" ]; then
-    echo "headers: $src has no leading comment, so it holds nothing; $fix" >&2
+    echo "headers: $t has no leading comment, so it holds nothing; $fix" >&2
     drift=1
     continue
   fi
-  if [ -n "$installed" ]; then
-    # Installed: the header is the leading comment, and a `# kit:` line,
-    # if the port still has one, ends it and is not read.
-    body "$f" > "$tmp/p.body"
-  else
-    if ! header "$f" > "$tmp/p"; then
-      echo "headers: $path: its leading comment has no \`# kit: proved-port VERSION\` line (the kit's: $src)" >&2
-      drift=1
-      continue
-    fi
-    line=$(tail -n 1 "$tmp/p")
-    v=$(version "$line")
-    if ! known "$v"; then
-      echo "headers: $path: \`$line\` does not name the kit commit $kit_name records ($sha, tag $tag)" >&2
-      drift=1
-    fi
-    sed '$d' "$tmp/p" > "$tmp/p.body"
-  fi
+  body "$f" > "$tmp/p.body"
   if ! missing=$(match "$tmp/t.body" "$tmp/p.body"); then
-    echo "headers: $path: the header drifted from the kit's ($src); it lacks: $missing" >&2
+    echo "headers: $path: the header drifted from the kit's ($t); it lacks: $missing" >&2
     drift=1
     continue
   fi
   echo "ok $path"
 done < "$tmp/list"
 if [ -n "$drift" ]; then
-  if [ -n "$installed" ]; then
-    echo "headers: restore the kit's text, or change kit/templates in the proved-port kit and move the package pin to the release that carries it" >&2
-  else
-    echo "headers: restore the kit's text, or change kit/templates in the proved-port kit and re-sync" >&2
-  fi
+  echo "headers: the installed kit is ${tag:-untagged} ($kit)" >&2
+  echo "headers: restore the kit's text, or change kit/templates in the proved-port kit and move the package pin to the release that carries it" >&2
   exit 1
 fi

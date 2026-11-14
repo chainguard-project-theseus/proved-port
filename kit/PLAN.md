@@ -257,10 +257,9 @@ is deleted in that PR.
    (wolfi-dev/pcre3#1073). The version lines take the
    `v{KIT_VERSION} ({KIT_SHA})` form, naming the release tag and the
    commit. The lint that diffs a header against its template is
-   `kit/make/headers.sh` (`make verus-headers`), vendored with the
-   counter: it reads the templates of the kit commit `verus/count/KIT`
-   records and takes a version line naming that commit, or its tag once
-   the first release (section 4) gives one.
+   `kit/make/headers.sh` (`make verus-headers`), installed with the
+   counter by the package: it reads the installed templates, and from
+   v0.3.0 a port's held files carry no version line.
 2. **Counter, unsafe/assume lint and Kani runner.**
    - pcre3: delete `verus/count/` and `verus/kani/run.sh`; add
      `verus/count.toml` (the four crates, the `test-util` feature, the
@@ -271,7 +270,7 @@ is deleted in that PR.
      keeping `KANI_ONLY`, `KANI_EXCLUDE` and `KANI_JOBS`. In
      `.chainguard/ci/verus.yaml` the `counter tests` step leaves the
      `verus` and `verus-main` checks (the kit's own CI tests the
-     counter), and the check builds the vendored copy (section 4);
+     counter), and the check runs the package's counter (section 4);
      `make verus` and `make kani` stay the commands. `lint.yaml`'s
      `forbid(unsafe_code) roots` step runs the kit lint in place of
      `ci/lint-unsafe.sh`, which is deleted.
@@ -297,17 +296,16 @@ is deleted in that PR.
      expat-rs. `.chainguard/ci/count.yaml` runs its tests, clippy and
      rustfmt. pcre3's switch PR carries the call-arity and dropped-rlimit
      fixes the kit made to pcre3's code, so the two match on the
-     switching commit. The install mechanism is vendoring (section 4):
-     a port's `verus/count/` is the copy `kit/sync.sh` makes, so
-     "delete `verus/count/`" above means replacing the in-tree counter
-     with that copy, and `kit/sync.sh --check` is what shows no other
-     copy is left. `count-sync` tests the sync. The Kani runner is
-     `kit/make/kani.sh` (`make kani`), vendored with the counter into
-     `verus/make/`: pcre3's crate halves, chainz's one harness per
+     switching commit. The install mechanism is the theseus-proved-port
+     package (section 4): "delete `verus/count/`" above means the port
+     carries no counter of its own and runs the package's `verus-count`;
+     `count-installed` tests kit/make as the package installs it. The
+     Kani runner is `kit/make/kani.sh` (`make kani`), installed with the
+     counter: pcre3's crate halves, chainz's one harness per
      instance and challoc's weighted shards with a fail pattern, each
      as variables (`make-template` tests it with a stub cargo). Still
      to come in this step: the unsafe/assume lint, and the pcre3 and
-     challoc PRs that switch to the vendored kit counter.
+     challoc PRs that switch to the package's kit counter.
 3. **Seam ledger generator** (Go rewrite of challoc's `verus/seams.sh`,
    with `verus/seams-mutants.sh` as its tests). challoc: the Makefile's
    `sh verus/seams.sh --check` runs the kit generator; the generated
@@ -358,8 +356,8 @@ is deleted in that PR.
    delete their own. The `.chainguard/ci/*.yaml` files stay in each port
    (Checks reads them from the repository); the kit ships templates for
    new ports and a lint that a port's checks call the kit's targets.
-   **Status:** `kit/make/proved-port.mk` is the include, vendored by
-   `kit/sync.sh` to `verus/make/`, with the `verus` (and its
+   **Status:** `kit/make/proved-port.mk` is the include, installed by
+   the package in `/usr/share/proved-port/make/`, with the `verus` (and its
    `verus-proofs` and `verus-count` halves), `verus-count-test`,
    `verus-headers`, `kani` and `kani-list` targets; `bench` and
    `remote` are still to come. The templates are in
