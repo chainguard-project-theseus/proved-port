@@ -4,8 +4,9 @@
 # into a scratch root with kit/install.sh, the way the package's build
 # does: the counter built from kit/count as usr/bin/verus-count,
 # kit/make/* (mode 0644) in usr/share/proved-port/make/, all of
-# kit/templates in usr/share/proved-port/templates/, and
-# usr/share/proved-port/KIT with the commit and tag. It holds the script's
+# kit/templates in usr/share/proved-port/templates/, kit/CHANGELOG.md as
+# usr/share/proved-port/CHANGELOG.md with porting notes for the release,
+# and usr/share/proved-port/KIT with the commit and tag. It holds the script's
 # refusals (an untagged commit, a changed kit/, but with --dev) and a
 # reinstall over an earlier install (a failed one leaves no KIT; one that
 # succeeds replaces make/ and templates/ whole). Then a fixture port whose Makefile includes
@@ -49,7 +50,7 @@ target=${CARGO_TARGET_DIR:-$tmp/target}
 # --- the scratch kit: this tree's kit/, committed -------------------------
 kitrepo=$tmp/kit
 mkdir -p "$kitrepo/kit"
-cp -R kit/make kit/templates kit/install.sh "$kitrepo/kit/"
+cp -R kit/make kit/templates kit/install.sh kit/CHANGELOG.md "$kitrepo/kit/"
 mkdir "$kitrepo/kit/count"
 for f in Cargo.toml Cargo.lock src; do
   cp -R "kit/count/$f" "$kitrepo/kit/count/"
@@ -91,6 +92,13 @@ install "$root/usr" || { cat "$tmp/install.err" >&2; fail "kit/install.sh at the
 expect "kit/install.sh records the commit and the counter's release in KIT" \
   "$(sed 1d "$home/KIT")" "commit $sha
 tag v$version"
+# CHANGELOG.md beside KIT, as kit/ has it, with the porting notes of the
+# release KIT records.
+cmp -s kit/CHANGELOG.md "$home/CHANGELOG.md" \
+  || fail "kit/install.sh: got = no CHANGELOG.md or another one, want = kit/CHANGELOG.md in $home"
+expect "the installed CHANGELOG.md is mode 0644" "$(find "$home/CHANGELOG.md" -perm 644)" "$home/CHANGELOG.md"
+expect "the installed CHANGELOG.md has porting notes for v$version" \
+  "$(awk -v v="## $version" '$0 == v { s = 1; next } /^## / { s = 0 } s && $0 == "### Porting notes" { print "yes"; exit }' "$home/CHANGELOG.md")" "yes"
 # At the tag with a change under kit/: refused.
 : > "$kitrepo/kit/stray"
 if install "$tmp/changed"; then
