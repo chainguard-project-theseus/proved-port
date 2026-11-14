@@ -165,11 +165,13 @@ or an open bug.
    read): on a case-insensitive file system `verus/FLOOR` and
    `verus/floor/` are the same path (`verus/SHARES` in both, say).
    **Pin the kit:** pin the Wolfi package `theseus-proved-port~X.Y.Z`
-   (v0.3.0 or later) in `.chainguard/ci/verus.yaml` and
-   `.chainguard/ci/env/dev.yaml`, set `PROVED_PORT_VERSION = X.Y.Z` in
-   the Makefile and include
-   `$(PROVED_PORT_HOME)/make/proved-port.mk` (`PROVED_PORT_HOME ?=
-   /usr/share/proved-port`); the package puts `verus-count` on PATH.
+   (v0.3.0 or later) in `.chainguard/ci/verus.yaml` and the development
+   sessions' environment (`.chainguard/develop.yaml`, or the file its
+   `from:` names), set `PROVED_PORT_VERSION = X.Y.Z` in the Makefile and
+   include `$(PROVED_PORT_HOME)/make/proved-port.mk` (`PROVED_PORT_HOME
+   ?= /usr/share/proved-port`) behind the guard `kit/count/README.md`
+   recommends, so the port's other targets run where the package is not
+   installed; the package puts `verus-count` on PATH.
    The pins move together with the marketplace ref in the port's
    `.claude/settings.json`, through the deps template's kit entry
    (`kit/count/README.md`, "Adopting: the package"). On a Mac, install

@@ -12,8 +12,10 @@ placeholders and the rows.
 
 A port takes the kit as the theseus-proved-port package, pinned
 `theseus-proved-port~{KIT_VERSION}` (v0.3.0 or later). The release is
-the package pin (the Checks environments, `.chainguard/ci/env/dev.yaml`
-and the Makefile's `PROVED_PORT_VERSION`, with the proved-port
+the package pin (the Checks environments, the development sessions'
+environment, `.chainguard/develop.yaml` or the file its `from:` names,
+here `.chainguard/ci/env/dev.yaml`, and the Makefile's
+`PROVED_PORT_VERSION`, with the proved-port
 marketplace ref in `.claude/settings.json`), so no file names it in a
 line of its own. `make verus-headers`
 (`/usr/share/proved-port/make/headers.sh`) holds each file's header,
