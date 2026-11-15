@@ -196,7 +196,23 @@ Each passes on a port with no proofs yet:
   harness deletes the line. `kani.sh`'s header says the same.
 
 A port that will never use Kani (expat-rs) leaves `kani` and
-`kani-main` out from its first commit, as verus.yaml's header says.
+`kani-main` out from its first commit, as verus.yaml's header says, and
+sets `VERIFY_TARGETS = verus` in its Makefile.
+
+`make verify` runs every target `VERIFY_TARGETS` lists, by default
+`verus kani`. The package build runs it (chainguard-dev/stereo's
+`theseus/verify` pipeline, with `VERUS_BASE=none`) and nothing else,
+so a port whose checks verify more (challoc's second quantum, its
+not-Copy control and Kani bool-comparison scan, its regular-format Kani
+run, `make kani-regular`) lists those
+targets too, in the Makefile, before the include:
+
+```make
+VERIFY_TARGETS = verus verus-q8 notcopy-control kani-boolcmp kani kani-q8 kani-regular kani-regular-q8
+```
+
+A check that adds verification adds its target to the list in the same
+pull request.
 
 Where the ports differ, a template takes the shape most of them share,
 and its comments say what a port may change: a second architecture for

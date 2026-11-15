@@ -34,6 +34,26 @@ install the kit from a proved-port clone checked out at that release with
 `PROVED_PORT_HOME="$HOME/.local/share/proved-port"` and
 `VERUS_COUNT="$HOME/.local/bin/verus-count"` to the Verus targets.
 
+`make verify` runs every target the Makefile's `VERIFY_TARGETS` lists
+(the kit's default is `verus kani`): everything the checks verify, as
+one command. The port's package build runs it too, with
+`VERUS_BASE=none`, so a target a check adds to the port's Verus or Kani
+verification goes into `VERIFY_TARGETS` in the same pull request.
+
+The package build takes its defaults: the latest kit, Verus and Kani,
+and every vCPU. It does not pass `PROVED_PORT_VERSION`, so the
+Makefile's pin is still held to the installed kit: once a kit release
+is tagged and packaged, the package build fails at that check until the
+port's pin moves to it (the deps agent's kit entry). A Verus release
+the port's pins lag fails it too: `cargo verus` refuses a vstd pin in
+Cargo.toml that is not the installed Verus's. The package build also
+holds the `kani~` and `cbmc~` pins in the port's checks to the Kani and
+CBMC it installs; nothing in the kit does that (`make kani` checks
+Kani's version only when the port sets `KANI_VERSION`). To build
+meanwhile, the package pins the older release, with a comment saying
+why and until when (the issue that moves the port's pin); any other
+departure from the package build's defaults carries one too.
+
 ## Contributing
 
 CONTRIBUTING.md has the rules every change follows, and AGENTS.md the

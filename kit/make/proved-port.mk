@@ -50,6 +50,12 @@
 #                     KANI_NONE = yes declares the port has none yet.
 #   kani-list         kani.sh --list: the harnesses, one `CRATE NAME FILE`
 #                     a line (or this shard's, with KANI_SHARDS).
+#   kani-regular      kani.sh one harness at a time in regular format
+#                     with CBMC's --verbosity 9, failing on
+#                     KANI_IGNORING_PATTERN (challoc's kani-ignoring).
+#   verify            every target VERIFY_TARGETS lists (by default verus
+#                     kani), in order: everything the port's checks
+#                     verify, as the one command a package build runs.
 
 # The directory this file is in (the package's make/), for its scripts.
 PROVED_PORT_MAKE := $(dir $(lastword $(MAKEFILE_LIST)))
@@ -178,7 +184,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -205,3 +211,62 @@ kani: ## the Kani harnesses, all or a shard (kani.sh; KANI_SHARD/KANI_SHARDS; KA
 kani-list: ## the Kani harnesses, one CRATE NAME FILE a line
 	$(proved_port_version_check)
 	sh $(PROVED_PORT_MAKE)kani.sh --list $(KANI_ARGS)
+
+# KANI_IGNORING_PATTERN: what kani-regular fails on. CBMC prints
+# `warning: ignoring` when it leaves an expression unconstrained (Kani
+# 0.68.0 with CBMC 6.11.0 does so for `<`, `<=`, `>` and `>=` on two
+# non-constant bools), and the harness can then pass vacuously; the terse
+# output KANI_JOBS implies hides the line. It becomes kani.sh's
+# KANI_FAIL_PATTERN, a grep -E pattern, inside single quotes. Empty
+# fails kani-regular: kani.sh reads an empty pattern as none, and the
+# run would pass on the very line it exists to catch.
+#
+# kani-regular also fails a KANI_CBMC_ARGS that sets --verbosity. CBMC
+# 6.11.0 takes an option's first value (cmdlinet::value_opt), and Kani
+# 0.68.0 puts --cbmc-args before its own --verbosity 9, so a port's lower
+# level would win, hide the warning and let the scan pass.
+KANI_IGNORING_PATTERN ?= warning: ignoring
+kani_ignoring_empty = KANI_IGNORING_PATTERN is empty: kani-regular fails on that pattern, and an empty one would scan for nothing (by default warning: ignoring)
+kani_cbmc_verbosity = KANI_CBMC_ARGS sets --verbosity: kani-regular runs CBMC at --verbosity 9, and CBMC takes the first --verbosity, so a lower one would hide KANI_IGNORING_PATTERN's line
+
+kani-regular: ## every Kani harness one at a time in regular format with CBMC's --verbosity 9, failing on KANI_IGNORING_PATTERN
+	$(proved_port_version_check)
+	$(if $(strip $(KANI_IGNORING_PATTERN)),,$(error $(kani_ignoring_empty)))
+	$(if $(findstring --verbosity,$(KANI_CBMC_ARGS)),$(error $(kani_cbmc_verbosity)))
+	KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='$(strip $(KANI_CBMC_ARGS) --verbosity 9)' KANI_FAIL_PATTERN='$(KANI_IGNORING_PATTERN)' sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
+
+# --- verify ----------------------------------------------------------------
+# VERIFY_TARGETS: every target the port's checks verify with, in the
+# order `make verify` runs them, each in its own make. A package build
+# of the port runs `make verify VERUS_BASE=none` and nothing else, so
+# the list names everything the checks verify with Verus and Kani, and
+# the controls those checks run, the port's own targets included:
+# challoc's lists its quantum-8 proofs, its not-Copy control, its Kani
+# bool-comparison scan, and kani and kani-regular at each quantum.
+# Tests, Miri, fuzzing and other suites stay out: the package build has
+# its own tests. A port that leaves Kani out sets `VERIFY_TARGETS =
+# verus`.
+#
+# verify refuses a list that is empty, that names verify (which would
+# run itself without end), or that names a file or directory in the
+# port's root other than the kit's own targets, which are .PHONY (a
+# port has a verus/ directory): make takes a target with no rule, or one
+# not marked .PHONY, that has a file of its name as done, so the run
+# would print the name, check nothing for it and pass. Each sub-make runs
+# with make's built-in rules off (-r), so a listed name with no rule of
+# the port's fails ("No rule to make target") even beside a NAME.sh or
+# NAME.c a built-in rule would build it from.
+VERIFY_TARGETS ?= verus kani
+# The kit's targets, .PHONY above (verify aside).
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular
+verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
+verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
+verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end
+verify_targets_files = VERIFY_TARGETS names $(verify_targets_on_disk), a file or directory in the port's root, which make could take as done and check nothing for: give the target another name
+
+verify: ## every target VERIFY_TARGETS lists (by default verus kani), in order: what the port's checks verify, as one command
+	$(proved_port_version_check)
+	$(if $(strip $(VERIFY_TARGETS)),,$(error $(verify_targets_empty)))
+	$(if $(filter verify,$(VERIFY_TARGETS)),$(error $(verify_targets_self)))
+	$(if $(verify_targets_on_disk),$(error $(verify_targets_files)))
+	@for t in $(VERIFY_TARGETS); do echo "verify: make $$t"; $(MAKE) -r --no-print-directory $$t || exit 1; done

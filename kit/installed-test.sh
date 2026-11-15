@@ -202,7 +202,7 @@ expect "make -n kani-list: the package's kani.sh" \
   "$(shows "$installed" kani-list)" "sh $home/make/kani.sh --list"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular verify; do
   make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
     || { cat "$tmp/err" >&2; fail "make -n $t, PROVED_PORT_VERSION=$version (KIT's): got = failure, want = success"; }
   if make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$other" > "$tmp/out" 2> "$tmp/err"; then

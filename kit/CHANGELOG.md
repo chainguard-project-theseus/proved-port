@@ -23,7 +23,9 @@ where it reports drift.
 - `make kani-regular` runs every Kani harness one at a time in regular
   format with CBMC's `--verbosity 9`, and fails on
   `KANI_IGNORING_PATTERN` (`warning: ignoring`), which the terse output
-  of `KANI_JOBS` hides (#61).
+  of `KANI_JOBS` hides (#61). It refuses a `KANI_CBMC_ARGS` that sets
+  `--verbosity`: CBMC takes the first, so a lower level would hide the
+  line it scans for.
 - The counter fails a crate with code Verus checks whose Cargo.toml does
   not opt into verification (#53): cargo verus checks only a package
   that sets `[package.metadata.verus] verify = true`, and the counter
@@ -78,7 +80,8 @@ where it reports drift.
 4. A port whose checks ran the regular-format Kani run by hand
    (`KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='--verbosity 9'
    KANI_FAIL_PATTERN=...`) calls `make kani-regular` instead, with its
-   shard variables.
+   shard variables, and with no `--verbosity` in `KANI_CBMC_ARGS`, which
+   `make kani-regular` refuses.
 5. Run `make verus-headers` and take the kit's text where it reports
    drift: `.chainguard/ci/verus.yaml` (whose verus checks now run `make
    verus-headers` first) and the kit rule of
