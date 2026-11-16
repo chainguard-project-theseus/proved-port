@@ -14,7 +14,7 @@
 #
 #   VERUS_CRATES = pcre3-unicode pcre3-syntax pcre3 pcre3-capi
 #   KANI_CRATES  = $(VERUS_CRATES)
-#   PROVED_PORT_VERSION = 0.3.1
+#   PROVED_PORT_VERSION = 0.4.0
 #   PROVED_PORT_HOME ?= /usr/share/proved-port
 #   include $(PROVED_PORT_HOME)/make/proved-port.mk
 #

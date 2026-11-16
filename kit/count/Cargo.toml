@@ -3,14 +3,14 @@ name = "verus-count"
 description = "Counts a proved port's verified, trusted and unverified functions, and holds them to its FLOOR (kit/count/README.md)"
 # The kit release this counter comes from, which --version prints; the
 # release that tags vX.Y.Z sets it to X.Y.Z first.
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
 
 [dependencies]
 proc-macro2 = { version = "1", features = ["span-locations"] }
-verus_syn = { version = "=0.0.0-2026-09-06-0133", features = ["full", "extra-traits", "visit"] }
+verus_syn = { version = "=0.0.0-2026-11-01-0251", features = ["full", "extra-traits", "visit"] }
 serde_json = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.2.1"

@@ -22,6 +22,13 @@
 //! no `verus/seams/kani-*.md` record covers fails the run. With a
 //! `[ledger]` section, a generated seam ledger ([`ledger`]) says which
 //! trusted functions are discharged instead, and the marker is refused.
+//! `#[verifier::assume_unsupported_attributes]` changes no class: Verus
+//! still checks the body, and takes only the item's `no_mangle`,
+//! `export_name` or `link_section` on trust. Each function inside
+//! `verus!` that carries it is a seam of its own, the linkage alone: the
+//! report lists and counts them after the tables ([`print_assumed`]), and
+//! with `[ledger]` each needs an `unsupported-attribute` entry
+//! ([`ledger::match_assumed`]), and the count is the ledger's.
 //! `spec` and `proof` functions are ghost code, erased from ordinary
 //! builds, and are counted apart. Items under the test-only `cfg`s
 //! (`#[cfg(test)]`, `#[cfg(kani)]`, the Kani harnesses) or test-only
@@ -292,6 +299,10 @@ struct Counter {
     /// Each trusted function's crate, `FILE:LINE` and lines, for the
     /// generated ledger ([`ledger::match_ledger`]).
     trusted: Vec<(String, String, usize)>,
+    /// The `FILE:LINE` of each function inside `verus!` with
+    /// `#[verifier::assume_unsupported_attributes]` ([`assumes_attributes`]),
+    /// a seam of the linkage alone ([`ledger::match_assumed`]).
+    assumed: Vec<String>,
     /// Whether ghost functions of code built only for Verus count in the
     /// ghost column (`[crates] verus_only_ghost`).
     verus_only_ghost: bool,
@@ -464,6 +475,7 @@ impl Counter {
             atoms,
             fn_ptr_macro,
             trusted: Vec::new(),
+            assumed: Vec::new(),
             verus_only_ghost: false,
             macros: BTreeMap::new(),
             uses: BTreeMap::new(),
@@ -2090,6 +2102,29 @@ fn is_external(attrs: &[Attribute]) -> bool {
     })
 }
 
+/// Whether `attrs` hold `#[verifier::assume_unsupported_attributes]`, read
+/// through [`applied_attrs`]. Verus then takes the item's attributes it
+/// cannot check (`no_mangle`, `export_name`, `link_section`) on trust,
+/// and still checks its body: the function keeps its class, and the
+/// attribute is a seam of its own ([`ledger::UNSUPPORTED_ATTRIBUTE`]). It
+/// fails closed, so no such seam goes unlisted: the name counts anywhere
+/// in an attribute's tokens outside a literal, so in any path and in
+/// `#[verifier(assume_unsupported_attributes)]`, which `verus!` rewrites
+/// to the path form, and one a `cfg_attr` applies counts whatever its
+/// predicate.
+fn assumes_attributes(attrs: &[Attribute]) -> bool {
+    fn names(toks: TokenStream) -> bool {
+        toks.into_iter().any(|t| match t {
+            TokenTree::Ident(i) => i == "assume_unsupported_attributes",
+            TokenTree::Group(g) => names(g.stream()),
+            _ => false,
+        })
+    }
+    applied_attrs(attrs)
+        .into_iter()
+        .any(|(_, toks)| names(toks.into_iter().collect()))
+}
+
 /// Whether `attrs` hold Verus's attribute form, which marks a plain Rust
 /// function outside `verus!` for verification: `#[verus_verify]` or
 /// `#[verus_spec(..)]` (by any path), alone or as an attribute a
@@ -2409,6 +2444,20 @@ impl Counter {
             Some(line) => (*line, expansion_lines(sig, body.as_ref(), close)),
             None => (start, end.saturating_sub(start) + 1),
         };
+        if in_verus && assumes_attributes(attrs) {
+            match &mut self.dry {
+                // A candidate definition's walk: its seam is a row of what
+                // it writes, so two candidates that differ only in the
+                // attribute count differently and fail the run, rather
+                // than leave one build's seams out of the report.
+                Some(rows) => rows.push((
+                    Class::Trusted,
+                    format!("#[verifier::assume_unsupported_attributes] {}", sig.ident),
+                    0,
+                )),
+                None => self.assumed.push(format!("{}:{at}", self.file.display())),
+            }
+        }
         if built == Built::Verus || !self.shipped {
             // A shipped build compiles none of this code, so its verified,
             // ghost and outside functions leave the tally. A trusted one
@@ -6068,6 +6117,7 @@ fn report(
         }
         print_row("total", &total);
         print_row("shipped", &shipped);
+        print_assumed(&c.assumed, c.assumed.len());
         fail_on_errors(c.errors);
         return shares(&shipped, (0, 0));
     };
@@ -6096,7 +6146,9 @@ fn report(
     };
     let seams = ledger::read_ledger(&root.join(&l.dir), &premises)
         .unwrap_or_else(|e| usage(format!("{}: {e}", l.dir)));
-    let (checked, warnings, errors) = ledger::match_ledger(&c.trusted, &seams);
+    let (checked, mut warnings, errors) = ledger::match_ledger(&c.trusted, &seams);
+    let (assumed_seams, w) = ledger::match_assumed(&c.assumed, &seams);
+    warnings.extend(w);
     for w in &warnings {
         eprintln!("warning: {w}");
     }
@@ -6117,6 +6169,7 @@ fn report(
         print_combined_row("total", &total, &total_checked);
         print_combined_row("shipped", &shipped, &shipped_checked);
     }
+    print_assumed(&c.assumed, assumed_seams);
     if !errors.is_empty() {
         for e in &errors {
             eprintln!("FAIL ledger: {e}");
@@ -6124,6 +6177,22 @@ fn report(
         std::process::exit(1);
     }
     shares(&shipped, shipped_checked.discharged)
+}
+
+/// The trust summary's linkage seams, after the tables, when there are
+/// any: `seams` (the ledger's `unsupported-attribute` entries, or without
+/// a ledger the functions themselves), then each function inside
+/// `verus!` with `#[verifier::assume_unsupported_attributes]`, `fns`.
+/// Each function keeps its class; only its `no_mangle`, `export_name` or
+/// `link_section` is trusted, with the port's ABI tests as the evidence.
+fn print_assumed(fns: &[String], seams: usize) {
+    if seams == 0 && fns.is_empty() {
+        return;
+    }
+    println!("unsupported-attribute seams (linkage trusted, bodies keep their class)\t{seams}");
+    for loc in fns {
+        println!("unsupported-attribute\t{loc}");
+    }
 }
 
 /// One row of the ledger back end's first table: the classes Verus sees,
@@ -8979,8 +9048,9 @@ fn uncalled() {
     /// other attributes, and only under predicates that hold in no build
     /// whatever is declared; under one some build may meet it fails
     /// closed. An `external_body` a `cfg_attr` applies counts whatever its
-    /// predicate (the function is trusted), and prose in a doc comment is
-    /// no attribute.
+    /// predicate (the function is trusted), as does an
+    /// `assume_unsupported_attributes` (its seam is listed), and prose in a
+    /// doc comment is no attribute.
     #[test]
     fn markers_are_read_through_every_cfg_attr() {
         let attrs = |src: &str| {
@@ -9032,6 +9102,31 @@ fn uncalled() {
         ] {
             let got = is_external(&attrs(src));
             assert_eq!(got, want, "external {src}: got = {got}, wanted = {want}");
+        }
+        for (src, want) in [
+            ("#[verifier::assume_unsupported_attributes]", true),
+            ("#[verus::verifier::assume_unsupported_attributes]", true),
+            (
+                "#[cfg_attr(windows, inline, verifier::assume_unsupported_attributes)]",
+                true,
+            ),
+            ("#[verifier(assume_unsupported_attributes)]", true),
+            (
+                "#[cfg_attr(unix, verifier(assume_unsupported_attributes))]",
+                true,
+            ),
+            // Not a form Verus reads, but listed: the check fails closed.
+            ("#[verifier::assume_unsupported_attributes(x)]", true),
+            ("#[unsafe(no_mangle)]", false),
+            ("#[verifier(external_body)]", false),
+            ("/// Not `assume_unsupported_attributes`.", false),
+            (
+                "#[doc = \"verifier::assume_unsupported_attributes\"]",
+                false,
+            ),
+        ] {
+            let got = assumes_attributes(&attrs(src));
+            assert_eq!(got, want, "assumes {src}: got = {got}, wanted = {want}");
         }
     }
 
@@ -9119,6 +9214,54 @@ fn uncalled() {
             t.fns
         );
         assert_eq!(t.ghost, 4, "ghost: got = {}, wanted = 4", t.ghost);
+    }
+
+    /// `assume_unsupported_attributes` trusts the linkage, not the body:
+    /// each function keeps the class it has without it, and every one
+    /// inside `verus!` is kept, at its `fn` line, for the trust summary.
+    #[test]
+    fn assumed_attributes_keep_the_class_and_are_listed() {
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("lib.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        let src = "verus! {\n\
+            #[unsafe(no_mangle)]\n\
+            #[verifier::assume_unsupported_attributes]\n\
+            pub extern \"C\" fn exported() {}\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[unsafe(export_name = \"e\")]\n\
+            #[verifier::assume_unsupported_attributes]\n\
+            #[verifier::external_body]\n\
+            pub extern \"C\" fn exported_and_marked() {}\n\
+            #[unsafe(export_name = \"t\")]\n\
+            #[verifier::assume_unsupported_attributes]\n\
+            #[verifier::external_body]\n\
+            pub extern \"C\" fn exported_trusted() {}\n\
+            fn plain() {}\n\
+            }\n\
+            #[unsafe(no_mangle)]\n\
+            #[verifier::assume_unsupported_attributes]\n\
+            pub extern \"C\" fn outside() {}\n";
+        c.items(&parse_file(src).expect("parses").items, false);
+        assert_eq!(c.errors, 0, "errors: got = {}, wanted = 0", c.errors);
+        let t = c.tallies.remove("k").unwrap_or_default();
+        assert_eq!(
+            t.fns,
+            [2, 1, 1, 1],
+            "verified, trusted, outside, discharged: got = {:?}, wanted = [2, 1, 1, 1]",
+            t.fns
+        );
+        let want = ["lib.rs:4", "lib.rs:9", "lib.rs:13"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(
+            c.assumed, want,
+            "assumed: got = {:?}, wanted = {want:?}",
+            c.assumed
+        );
     }
 
     /// A marked function built only for Verus is discharged as a shipped

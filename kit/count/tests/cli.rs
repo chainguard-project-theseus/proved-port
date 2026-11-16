@@ -2269,6 +2269,103 @@ fn crate_of(name: &str, files: &[(&str, &str)]) -> PathBuf {
     dir
 }
 
+/// `assume_unsupported_attributes` trusts an export's linkage, not its
+/// body: both exports stay verified, the report counts the ledger's
+/// `unsupported-attribute` seams (a static's included) and lists each
+/// function, a function without an entry is a warning, and an entry whose
+/// status is not `trusted` fails the run.
+#[test]
+fn an_export_s_linkage_is_a_seam_of_its_own() {
+    let lib = "verus! {\n#[unsafe(no_mangle)]\n#[verifier::assume_unsupported_attributes]\npub extern \"C\" fn e1() {}\n#[unsafe(no_mangle)]\n#[verifier::assume_unsupported_attributes]\npub extern \"C\" fn e2() {}\n}\n";
+    let dir = crate_of("unsupported-attribute", &[("lib.rs", lib)]);
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}[ledger]\ndir = \"verus/ledger\"\n"),
+    )
+    .expect("write");
+    fs::create_dir_all(dir.join("verus/ledger")).expect("mkdir");
+    let ledger = |status: &str| {
+        format!(
+            "crates/a/src/lib.rs:4. Kind: unsupported-attribute. Category: C ABI export.\nTool: ABI tests. Status: {status}\n\ncrates/a/src/lib.rs:20. Kind: unsupported-attribute. Category: C ABI export.\nTool: ABI tests. Status: trusted\n"
+        )
+    };
+    fs::write(dir.join("verus/ledger/lib.rs.md"), ledger("trusted")).expect("write");
+    let (got, out, err) = count(&dir, &["--list"]);
+    let classes: Vec<String> = list_rows(&out).into_iter().map(|r| r.0).collect();
+    assert!(
+        got == 0 && classes == ["Verified", "Verified"],
+        "classes: got = exit {got}, {classes:?}, {err:?}; wanted = exit 0, two Verified"
+    );
+    for line in [
+        "unsupported-attribute seams (linkage trusted, bodies keep their class)\t2",
+        "unsupported-attribute\tcrates/a/src/lib.rs:4",
+        "unsupported-attribute\tcrates/a/src/lib.rs:7",
+    ] {
+        assert!(
+            out.lines().any(|l| l == line),
+            "summary: got = {out:?}, wanted = a line {line:?}"
+        );
+    }
+    let warning = "warning: function at crates/a/src/lib.rs:7 assumes its attributes and has no unsupported-attribute ledger entry";
+    assert!(
+        err.lines().any(|l| l == warning),
+        "warnings: got = {err:?}, wanted = {warning:?}"
+    );
+    fs::write(
+        dir.join("verus/ledger/lib.rs.md"),
+        ledger("discharged (ABI tests)"),
+    )
+    .expect("write");
+    let (got, _, err) = count(&dir, &[]);
+    assert!(
+        got == 2
+            && err.contains(
+                "crates/a/src/lib.rs:4: an unsupported-attribute seam's status is `trusted`"
+            ),
+        "a discharged entry: got = exit {got}, {err:?}; wanted = exit 2 naming the entry"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// An export a macro writes is listed once, at the invocation's line (the
+/// line a ledger entry for it takes), also when the walk first compares
+/// two candidate definitions under `cfg`s the counter cannot settle.
+#[test]
+fn an_export_a_macro_writes_is_listed_at_its_invocation() {
+    let def = "macro_rules! export { ($n:ident) => { verus! {\n#[unsafe(no_mangle)]\n#[verifier::assume_unsupported_attributes]\npub extern \"C\" fn $n() {}\n} }; }\n";
+    let lib = format!("#[cfg(unix)]\n{def}#[cfg(not(unix))]\n{def}export!(e1);\nexport!(e2);\n");
+    let dir = crate_of("unsupported-attribute-macro", &[("lib.rs", &lib)]);
+    let (got, out, err) = count(&dir, &[]);
+    let lines: Vec<&str> = out
+        .lines()
+        .filter(|l| l.starts_with("unsupported-attribute"))
+        .collect();
+    let want = [
+        "unsupported-attribute seams (linkage trusted, bodies keep their class)\t2",
+        "unsupported-attribute\tcrates/a/src/lib.rs:13",
+        "unsupported-attribute\tcrates/a/src/lib.rs:14",
+    ];
+    assert!(
+        got == 0 && lines == want,
+        "summary: got = exit {got}, {lines:?}, {err:?}; wanted = exit 0, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // Candidates that differ only in the attribute, either one carrying
+    // it, count differently: the run fails rather than report one
+    // build's linkage seams and drop the other's.
+    let bare = def.replace("#[verifier::assume_unsupported_attributes]\n", "");
+    for (unix, other) in [(def, bare.as_str()), (bare.as_str(), def)] {
+        let lib = format!("#[cfg(unix)]\n{unix}#[cfg(not(unix))]\n{other}export!(e1);\n");
+        let dir = crate_of("unsupported-attribute-macro-differs", &[("lib.rs", &lib)]);
+        let (got, _, err) = count(&dir, &[]);
+        assert!(
+            got != 0 && err.contains("export! could be any of 2 definitions"),
+            "differing candidates: got = exit {got}, {err:?}; wanted = a failure naming export!"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 /// An invocation expands the definition rustc would: one a shipped build
 /// compiles (not one under `#[cfg(test)]`, in a `#[cfg(test)]` module or
 /// `verus!` block, or in a test-only file), and one whose textual scope it is in (not one in

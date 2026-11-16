@@ -21,7 +21,11 @@
 //! checked ones are shown apart and not counted. A trusted function with
 //! no ledger entry is a warning; a discharged function seam that matches
 //! no trusted function, or a seam of a kind the counter does not know,
-//! fails the run.
+//! fails the run. An `unsupported-attribute` seam (an item with
+//! `#[verifier::assume_unsupported_attributes]`) is the item's linkage
+//! attribute alone: its status must be trusted, it classes no function,
+//! and every function that carries the attribute needs one
+//! ([`match_assumed`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -88,6 +92,16 @@ pub(crate) struct Seam {
 /// the counter classes as trusted.
 const FN_KINDS: &[&str] = &["external_body", "external_body proof", "axiom"];
 
+/// The seam of an item with `#[verifier::assume_unsupported_attributes]`,
+/// at the item's line (a function's `fn` line): Verus takes its
+/// `no_mangle`, `export_name` or `link_section` on trust, the symbol name
+/// or section it gives the item. Verus still checks a function's body, so
+/// the function stays verified; the seam is the linkage alone, and the
+/// port's ABI tests (its exported-symbol checks) are the evidence for it.
+/// Nothing in Verus or Kani checks an attribute, so its status is always
+/// `trusted`.
+pub(crate) const UNSUPPORTED_ATTRIBUTE: &str = "unsupported-attribute";
+
 /// The other kinds a generator writes: items that are not functions, or
 /// that sit elsewhere than a trusted function's `fn` line (a
 /// `no_decreases` function counts as verified; an `assume_new` seam is the
@@ -102,6 +116,7 @@ const OTHER_KINDS: &[&str] = &[
     "no_decreases",
     "assume_new",
     "ghost_assume_new",
+    UNSUPPORTED_ATTRIBUTE,
 ];
 
 /// The status of an Isla check or a Kani harness whose contract rests on
@@ -200,6 +215,15 @@ pub(crate) fn parse_ledger(text: &str, premises: &Premises) -> Result<Vec<Seam>,
         let Some((_, status)) = para.split_once("Status: ") else {
             return Err(format!("line {}: {loc} has no status", i + 1));
         };
+        // Read from the text: the classes below take every status they do
+        // not know as unchecked, and an empty or unknown one is not
+        // `trusted`.
+        if kind == UNSUPPORTED_ATTRIBUTE && status.trim().trim_end_matches('.') != "trusted" {
+            return Err(format!(
+                "line {}: {loc}: an {UNSUPPORTED_ATTRIBUTE} seam's status is `trusted`, since nothing outside Verus checks an attribute, not {status:?}",
+                i + 1
+            ));
+        }
         let status = if let Some(rest) = status.strip_prefix(PREMISED) {
             premised(rest, premises).map_err(|e| format!("line {}: {loc}: {e}", i + 1))?
         } else if status.contains("; callers: ") {
@@ -480,6 +504,25 @@ pub(crate) fn match_ledger(
         }
     }
     (checked, warnings, errors)
+}
+
+/// Matches the functions that carry `#[verifier::assume_unsupported_attributes]`
+/// (`FILE:LINE` of each `fn`) to the ledger's [`UNSUPPORTED_ATTRIBUTE`]
+/// seams. Returns the number of such seams (the trust summary's count,
+/// statics and other items included) and warnings (such a function with
+/// no seam at its line). [`parse_ledger`] has refused any such seam whose
+/// status is not `trusted`.
+pub(crate) fn match_assumed(assumed: &[String], seams: &[Seam]) -> (usize, Vec<String>) {
+    let ours: Vec<&Seam> = seams
+        .iter()
+        .filter(|s| s.kind == UNSUPPORTED_ATTRIBUTE)
+        .collect();
+    let warnings = assumed
+        .iter()
+        .filter(|loc| !ours.iter().any(|s| s.loc == **loc))
+        .map(|loc| format!("function at {loc} assumes its attributes and has no {UNSUPPORTED_ATTRIBUTE} ledger entry"))
+        .collect();
+    (ours.len(), warnings)
 }
 
 /// The paths of the `#[test]` fns in `items`, a file's or an inline
@@ -1007,6 +1050,86 @@ See README.md:3. Kind: of a note. Status: discharged
             vec!["src/a.rs:10: two function seams on one line".to_owned()],
             "errors: got = {errors:?}"
         );
+    }
+
+    #[test]
+    fn unsupported_attribute_seams_are_trusted_and_class_no_function() {
+        // The ledger entry as a generator writes it.
+        let text = "src/a.rs:10. Kind: unsupported-attribute. Category: C ABI export.\n\
+                    Tool: ABI tests. Status: trusted.\n";
+        let got = parse_ledger(text, &Premises::default());
+        let want = Ok(vec![seam(
+            "src/a.rs:10",
+            "unsupported-attribute",
+            Status::Unchecked,
+        )]);
+        assert_eq!(got, want, "entry: got = {got:?}, want = {want:?}");
+        // A verified function's seam: no trusted function to match, and
+        // beside the external_body seam of a trusted one it does not
+        // class that function, nor count as a second function seam.
+        let trusted = vec![("k".to_owned(), "src/a.rs:20".to_owned(), 7)];
+        let seams = vec![
+            seam("src/a.rs:10", "unsupported-attribute", Status::Unchecked),
+            seam("src/a.rs:20", "unsupported-attribute", Status::Unchecked),
+            seam("src/a.rs:20", "external_body", Status::Discharged),
+            // A `static`'s.
+            seam("src/a.rs:30", "unsupported-attribute", Status::Unchecked),
+        ];
+        let (checked, warnings, errors) = match_ledger(&trusted, &seams);
+        let want: BTreeMap<String, Checked> = [(
+            "k".to_owned(),
+            Checked {
+                discharged: (1, 7),
+                partly: (0, 0),
+            },
+        )]
+        .into();
+        assert_eq!(checked, want, "checked: got = {checked:?}, want = {want:?}");
+        assert!(
+            warnings.is_empty(),
+            "warnings: got = {warnings:?}, want = none"
+        );
+        assert!(errors.is_empty(), "errors: got = {errors:?}, want = none");
+        // Every function that assumes its attributes needs one at its
+        // line; the count is every such seam, the static's too.
+        let assumed = vec!["src/a.rs:10".to_owned(), "src/a.rs:40".to_owned()];
+        let (n, warnings) = match_assumed(&assumed, &seams);
+        assert_eq!(n, 3, "count: got = {n}, wanted = 3");
+        assert_eq!(
+            warnings,
+            vec!["function at src/a.rs:40 assumes its attributes and has no unsupported-attribute ledger entry".to_owned()],
+            "warnings: got = {warnings:?}"
+        );
+        // Its status is `trusted`, read from the text: any other, the
+        // ones the classes take as unchecked too, is refused.
+        for status in ["trusted", "trusted.", " trusted. "] {
+            let text = format!("src/a.rs:10. Kind: unsupported-attribute.\nStatus: {status}\n");
+            let got = parse_ledger(&text, &Premises::default());
+            assert!(got.is_ok(), "{status:?}: got = {got:?}, want = ok");
+        }
+        for status in [
+            "discharged (ABI tests)",
+            "trusted (partly checked, ABI tests)",
+            "trusted (claims nothing: x)",
+            "verified",
+            ".",
+            "trustedx",
+        ] {
+            let text = format!("src/a.rs:10. Kind: unsupported-attribute.\nStatus: {status}\n");
+            let got = parse_ledger(&text, &Premises::default());
+            assert!(
+                got.as_ref().is_err_and(
+                    |e| e.contains("an unsupported-attribute seam's status is `trusted`")
+                ),
+                "{status:?}: got = {got:?}, want = an error"
+            );
+        }
+        // An empty status is no status at all.
+        let got = parse_ledger(
+            "src/a.rs:10. Kind: unsupported-attribute.\nStatus: \n",
+            &Premises::default(),
+        );
+        assert!(got.is_err(), "empty: got = {got:?}, want = an error");
     }
 
     #[test]

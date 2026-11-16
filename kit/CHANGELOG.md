@@ -13,6 +13,57 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.0
+
+### Changes
+
+- The counter reads Verus 0.2026.11.02's syntax: its `verus_syn` pin
+  moves to `=0.0.0-2026-11-01-0251`, the vstd that release names.
+- The `unsupported-attribute` seam kind. Verus 0.2026.11.02 refuses
+  `no_mangle`, `export_name` and `link_section` inside `verus!` unless
+  the item carries `#[verifier::assume_unsupported_attributes]`, and
+  then takes the attribute on trust while still checking the body. The
+  counter keeps each such function's class (a verified export stays
+  verified), prints the count of these seams and each function after
+  the tables, and with a generated ledger requires an
+  `unsupported-attribute` entry, status `trusted`, for each
+  (kit/count/README.md, "Linkage attributes Verus takes on trust").
+- The counter's version is 0.4.0, ready for the v0.4.0 tag.
+
+### Porting notes
+
+1. Move the pin together, to 0.4.0, as 0.3.1's note 1 lists, and move
+   to Verus 0.2026.11.02 in the same change: every `verus~` pin
+   (`.chainguard/ci/*.yaml` and the sessions' environment), and vstd
+   (with `verus_builtin` and `verus_builtin_macros` where the port pins
+   them) to `=0.0.0-2026-11-01-0251` in every Cargo.toml and Cargo.lock
+   that names it, sub-crates included. Rust stays 1.99.
+2. Add `#[verifier::assume_unsupported_attributes]` to each item inside
+   `verus!` that Verus now refuses for `no_mangle`, `export_name` or
+   `link_section` (once in an export macro's body where one writes
+   them). No function changes class. List each item as an
+   `unsupported-attribute` seam, status `trusted`, its grounds the ABI
+   test that checks the symbol or section: a row of the seams table, or,
+   with a generated ledger, an entry the generator writes at the item's
+   line for every such item, statics included, and for a function a
+   macro writes at the invocation's line, where the counter lists it
+   (then regenerate the ledger). The audit grep (the skill's SKILL.md
+   and the AGENTS.md template) now matches the attribute: copy the
+   template's grep into the port's AGENTS.md, which `make
+   verus-headers` does not hold.
+3. Delete the port's own `assume_specification`s that vstd now states
+   (`get_unchecked(_mut)`, `split_at_unchecked`, slice `swap`,
+   `cmp::min`/`max` and their `_by`/`_by_key` forms, `assert_failed`,
+   `Vec`'s `AsRef`), and re-point a Kani record that discharged one at
+   vstd's contract or record it as vstd's trust. Replace
+   `IteratorSpec::will_return_none` with `IteratorSpec::produces(&iter).all(|p:
+   bool| p)`, move a const outside `verus!` that a verified type uses
+   into `verus!`, and mark a `use vstd::prelude::{Ghost, Tracked}` that
+   only Verus's build uses
+   `#[cfg_attr(not(verus_keep_ghost), allow(unused_imports))]`.
+4. Run `make verus` and hold every function under verus/RLIMIT's share
+   cap without raising an rlimit: split a proof that crosses it.
+
 ## 0.3.1
 
 ### Changes
