@@ -44,8 +44,14 @@ pub struct CrateStats {
 /// each crate a function is named under, as Verus spells the crate
 /// (`pcre3_syntax`). A document's result line goes to the crate most of
 /// its functions are named under. A document with no per-function
-/// breakdown (Verus run without `--time-expanded`) is an error.
+/// breakdown (Verus run without `--time-expanded`) is an error, and so
+/// are documents that interleave ([`interleaved`]).
 pub fn read_stats(text: &str) -> Result<BTreeMap<String, CrateStats>, String> {
+    if let Some((opened, at)) = interleaved(text) {
+        return Err(format!(
+            "documents interleave: line {at} starts a document before the one line {opened} starts ends. cargo printed two crates' --output-json at once, which it does when it runs Verus on crates in parallel: run cargo verus with -j 1 (make verus-proofs' VERUS_JOBS, 1 by default)"
+        ));
+    }
     let mut out: BTreeMap<String, CrateStats> = BTreeMap::new();
     for doc in serde_json::Deserializer::from_str(text).into_iter::<serde_json::Value>() {
         let doc = doc.map_err(|e| format!("not Verus's --output-json: {e}"))?;
@@ -95,6 +101,28 @@ pub fn read_stats(text: &str) -> Result<BTreeMap<String, CrateStats>, String> {
         s.errors = field("errors").unwrap_or(0);
     }
     Ok(out)
+}
+
+/// Where two documents interleave: the lines (from 1) of the `{` that
+/// opened a document and of the `{` that opened another before the first
+/// one's `}`. Verus pretty-prints `--output-json`, each document opening
+/// with a line that is `{` and closing with one that is `}`, and cargo
+/// re-prints each crate's output a line at a time, so when two crates
+/// finish at once their lines mix and the stream may still parse, or fail
+/// at a line that is only the other crate's.
+fn interleaved(text: &str) -> Option<(usize, usize)> {
+    let mut open = None;
+    for (i, line) in text.lines().enumerate() {
+        match line {
+            "{" => match open {
+                Some(opened) => return Some((opened, i + 1)),
+                None => open = Some(i + 1),
+            },
+            "}" => open = None,
+            _ => {}
+        }
+    }
+    None
 }
 
 /// A function's `#[verifier::rlimit(N)]`, read from its source: the name
@@ -517,6 +545,83 @@ mod tests {
         assert!(
             read_stats(r#"{"verification-results":{"verified":1}}"#).is_err(),
             "no breakdown: got = ok, wanted = an error"
+        );
+    }
+
+    /// [`doc`] as Verus prints it: pretty-printed, a line per key.
+    fn pretty(fns: &[(&str, u64)], verified: u64) -> String {
+        let v: serde_json::Value = serde_json::from_str(&doc(fns, verified)).expect("doc is JSON");
+        serde_json::to_string_pretty(&v).expect("prints")
+    }
+
+    #[test]
+    fn pretty_documents_back_to_back_are_read() {
+        let text = format!(
+            "{}\n{}\n",
+            pretty(&[("a::f", 11)], 1),
+            pretty(&[("b::g", 22)], 2)
+        );
+        let got = read_stats(&text).expect("reads");
+        assert_eq!(
+            (got["a"].used["a::f"], got["b"].used["b::g"]),
+            (11, 22),
+            "counts: got = {:?}, wanted = (11, 22)",
+            (got["a"].used["a::f"], got["b"].used["b::g"])
+        );
+        assert_eq!(
+            interleaved(&text),
+            None,
+            "back to back: got = interleaved, wanted = none"
+        );
+    }
+
+    #[test]
+    fn interleaved_documents_are_refused() {
+        let a: Vec<String> = pretty(&[("a::f", 11), ("a::h", 12)], 2)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let b: Vec<String> = pretty(&[("b::g", 22)], 1)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        // cargo's line-at-a-time re-print: B's lines land among A's, from
+        // A's fourth line on, one each.
+        let mut lines = a[..3].to_vec();
+        let (mut ai, mut bi) = (a[3..].iter(), b.iter());
+        loop {
+            match (bi.next(), ai.next()) {
+                (None, None) => break,
+                (x, y) => lines.extend(x.into_iter().chain(y).cloned()),
+            }
+        }
+        let text = lines.join("\n");
+        assert_eq!(
+            interleaved(&text),
+            Some((1, 4)),
+            "interleaved: got = {:?}, wanted = Some((1, 4))",
+            interleaved(&text)
+        );
+        let err = read_stats(&text).expect_err("interleaved documents");
+        assert!(
+            err.starts_with(
+                "documents interleave: line 4 starts a document before the one line 1 starts ends."
+            ) && err.contains("-j 1")
+                && err.contains("VERUS_JOBS"),
+            "error: got = {err}, wanted = the interleave message"
+        );
+        // One document opening inside another, whole, is refused too.
+        let inside = format!(
+            "{}\n{}\n{}",
+            a[..3].join("\n"),
+            b.join("\n"),
+            a[3..].join("\n")
+        );
+        assert!(
+            read_stats(&inside)
+                .expect_err("a document inside another")
+                .starts_with("documents interleave: line 4 "),
+            "inside: got = ok or another error, wanted = the interleave message"
         );
     }
 

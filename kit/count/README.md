@@ -34,6 +34,11 @@ on the base, and giving it with `--base-rev` fails the run (exit 2);
 by its type's path, from the module that defines the type, wherever its
 `impl` is. A `#[verifier::rlimit]` on a function the statistics do not
 name fails the run (exit 2), and the failure names every such limit.
+Statistics in which one crate's document starts before another's ends
+fail the run too (exit 2, "documents interleave"): cargo re-prints each
+crate's output a line at a time, so crates Verus checks in parallel mix
+their pretty-printed documents, and `make verus-proofs` runs cargo with
+`-j 1` (`VERUS_JOBS`) so that they do not.
 `--version` prints the counter's version, which
 is the kit release (`verus-count 0.3.0`): `kit/count/Cargo.toml`'s
 version, which the release sets before it tags (Release, below).

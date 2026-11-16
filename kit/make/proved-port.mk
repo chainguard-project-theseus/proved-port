@@ -27,7 +27,8 @@
 # Targets:
 #   verus             verus-proofs, then verus-count: the verus checks'
 #                     command (.chainguard/ci/verus.yaml).
-#   verus-proofs      cargo verus over VERUS_CRATES, Verus's statistics
+#   verus-proofs      cargo verus over VERUS_CRATES, one crate at a time
+#                     (VERUS_JOBS), Verus's statistics
 #                     (--time-expanded --output-json) into VERUS_STATS,
 #                     after cleaning VERUS_CLEAN's earlier results so
 #                     Verus checks them again and the statistics are this
@@ -89,6 +90,16 @@ VERUS_CARGO_FLAGS ?=
 # VERUS_THREADS: Verus's --num-threads; empty leaves Verus's default (the
 # host's available parallelism). The verus checks pass CG_CPUS.
 VERUS_THREADS ?=
+# VERUS_JOBS: cargo's -j for cargo verus; empty leaves cargo's default
+# (as many jobs as the host has CPUs). cargo re-prints each crate's
+# output a line at a time, so two crates Verus checks at once mix their
+# pretty-printed --output-json documents in VERUS_STATS, and the counter
+# refuses the file. 1 checks one crate at a time, and dependencies build
+# one at a time too (a port with eight verified crates, cold: 77 s, 45 s
+# with cargo's default); Verus still runs VERUS_THREADS SMT threads in
+# each crate. Only a port whose cargo verus checks one crate sets it
+# empty.
+VERUS_JOBS ?= 1
 # VERUS_FLAGS: further Verus flags, after the statistics flags.
 VERUS_FLAGS ?=
 # VERUS_STATS: where verus-proofs writes Verus's statistics and
@@ -146,6 +157,7 @@ verus_clean_cmd = cargo clean --locked \
   $(verus_profile_flags) \
   --target-dir $(VERUS_TARGET_DIR)$(if $(filter focus,$(VERUS_MODE)),/verus-partial)
 verus_proofs_cmd = cargo verus $(VERUS_MODE) --locked \
+  $(if $(VERUS_JOBS),-j $(VERUS_JOBS)) \
   $(addprefix -p ,$(VERUS_CRATES)) $(VERUS_CARGO_FLAGS) \
   -- --time-expanded --output-json \
   $(if $(VERUS_THREADS),--num-threads $(VERUS_THREADS)) $(VERUS_FLAGS) \
