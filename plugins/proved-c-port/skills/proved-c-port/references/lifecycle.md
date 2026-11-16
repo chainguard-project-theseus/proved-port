@@ -147,10 +147,13 @@ or an open bug.
    figures the counter names on that PR, with `[badge]` set and the
    README's badge line at those figures (`verus-count --badge .`). Run the counter on the PR's
    base too: every figure there is 0.0, which shows the gate measured
-   before the proof moved it. This raise is the one exception to the
-   kit's raise rule, which every port follows: FLOOR and the badge rise
-   in a PR of their own, to the figures the check names, never in the
-   PR that earns them (`references/proofs.md`, "The FLOOR ratchet"). No
+   before the proof moved it. This raise is one of the two exceptions
+   to the kit's raise rule, which every port follows: FLOOR and the
+   badge rise in a PR of their own, to the figures the check names,
+   never in the PR that earns them (`references/proofs.md`, "The FLOOR
+   ratchet"). The other lets a FLOOR PR record a figure below the one
+   the check names, never below the base's, for an open PR that lands
+   that share lower (FLOOR's header). No
    figure can rise before a counter and a proof exist, so the first
    raise lands with them (expat-rs #193). A port whose counter landed
    earlier at FLOOR 0.0 (from its setup, or in a PR of its own) takes

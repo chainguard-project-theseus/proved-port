@@ -45,7 +45,9 @@ a change cites. The checks below are what a change must not get wrong.
   check names (FLOOR's header): a raise in a pull request that changes
   anything else is a Question citing that header, unless it is the port's
   first proof pull request, raising FLOOR from 0.0, whether or not it
-  brings the counter.
+  brings the counter. A FLOOR pull request that records a figure below
+  the one the check names, never below the base revision's, and names
+  the open pull request that lands that share lower, follows the rule.
 - The kit, of which this port carries no copy: it takes the kit as
   the theseus-proved-port package, whose installed `KIT` names the
   release. Its pin is the `theseus-proved-port~X.Y.Z` package version in
