@@ -147,18 +147,30 @@ cargo clean --locked -p zlib-core --target-dir target/verus-partial
 cargo verus focus --locked -j 1 -p zlib-core -- --time-expanded --output-json > target/verus-stats.json
 verus-count --floor verus/SHARES --rlimit target/verus-stats.json --base-rev main ."
 
+# With VERUS_CRATES and VERUS_CLEAN empty, the clean takes the packages
+# cargo selects with no -p, the workspace's default members, from cargo
+# metadata (a virtual manifest has no root package for `cargo pkgid`),
+# and fails before it cleans anything when it finds none.
+# shellcheck disable=SC2016
+members_clean='members=$(cargo metadata --locked --no-deps --format-version 1 | sed -n '\''s/.*"workspace_default_members":\[\([^]]*\)\].*/\1/p'\'' | tr -d '\''"'\'' | tr '\'','\'' '\'' '\'') && [ -n "$members" ] || { echo '\''verus-proofs: cargo metadata names no workspace default members to clean: set VERUS_CLEAN to the packages cargo verus checks'\'' >&2; exit 1; }; cargo clean --locked $(printf '\'' -p %s'\'' $members)'
 expect "make -n verus, challoc (verify, no RLIMIT yet)" \
   "$(shows verus VERUS_MODE=verify VERUS_CRATES= VERUS_RLIMIT= VERUS_BASE=main)" \
   "mkdir -p target/
-cargo clean --locked -p \"\$(cargo pkgid)\" --target-dir target
+$members_clean --target-dir target
 cargo verus verify --locked -j 1 -- --time-expanded --output-json > target/verus-stats.json
 verus-count --floor verus/FLOOR --base-rev main ."
 
 expect "make -n verus-proofs, challoc's second quantum" \
   "$(shows verus-proofs VERUS_MODE=verify VERUS_CRATES= VERUS_CARGO_FLAGS='--no-default-features --features quantum8' VERUS_STATS=target/q8/stats.json)" \
   "mkdir -p target/q8/
-cargo clean --locked -p \"\$(cargo pkgid)\" --target-dir target
+$members_clean --target-dir target
 cargo verus verify --locked -j 1 --no-default-features --features quantum8 -- --time-expanded --output-json > target/q8/stats.json"
+
+expect "make -n verus-proofs, focus mode over a virtual workspace (cg-libxml2)" \
+  "$(shows verus-proofs VERUS_CRATES=)" \
+  "mkdir -p target/
+$members_clean --target-dir target/verus-partial
+cargo verus focus --locked -j 1 -- --time-expanded --output-json > target/verus-stats.json"
 
 # verus-proofs cleans the checked packages' earlier results first, where
 # cargo verus keeps them, so a rerun with nothing changed still runs
@@ -208,10 +220,11 @@ cargo clean --locked -p alpha -p beta --target-dir out
 cargo verus verify --locked -j 1 -p alpha -p beta -- --time-expanded --output-json > target/verus-stats.json"
 
 # The clean runs, and stops the target when it fails, before cargo verus:
-# a stub cargo logs its calls.
+# a stub cargo logs its calls, and answers `cargo metadata` with
+# CARGO_METADATA.
 mkdir -p "$tmp/cargobin"
 # shellcheck disable=SC2016
-printf '#!/bin/sh\necho "cargo $*" >> "%s"\n[ "$1 $2" != "clean --locked" ] || [ -z "${CARGO_CLEAN_FAILS-}" ] || exit 1\n' \
+printf '#!/bin/sh\necho "cargo $*" >> "%s"\n[ "$1" != metadata ] || printf "%%s\\n" "${CARGO_METADATA-}"\n[ "$1 $2" != "clean --locked" ] || [ -z "${CARGO_CLEAN_FAILS-}" ] || exit 1\n' \
   "$tmp/cargo.log" > "$tmp/cargobin/cargo"
 chmod +x "$tmp/cargobin/cargo"
 : > "$tmp/cargo.log"
@@ -226,6 +239,29 @@ if CARGO_CLEAN_FAILS=1 PATH="$tmp/cargobin:$PATH" make -s -C "$port" CARGO_TARGE
 fi
 expect "a failed clean stops verus-proofs before cargo verus" "$(tr -s ' ' < "$tmp/cargo.log" | sed 's/ $//')" \
   "cargo clean --locked -p alpha -p beta --target-dir target/verus-partial"
+# With VERUS_CRATES empty, the clean names each default member by the
+# package ID cargo metadata gives (cargo metadata prints one line).
+: > "$tmp/cargo.log"
+CARGO_METADATA='{"packages":[],"workspace_members":["path+file:///w/crates/a#0.1.0","path+file:///w/crates/b#0.1.0","path+file:///w/tools/c#0.1.0"],"workspace_default_members":["path+file:///w/crates/a#0.1.0","path+file:///w/crates/b#0.1.0"],"resolve":null,"version":1}' \
+  PATH="$tmp/cargobin:$PATH" make -s -C "$port" CARGO_TARGET_DIR= VERUS_CRATES= verus-proofs > /dev/null 2>&1 \
+  || fail "make verus-proofs VERUS_CRATES= with a stub cargo: got = failure, want = success"
+expect "make verus-proofs VERUS_CRATES= cleans the workspace's default members" "$(tr -s ' ' < "$tmp/cargo.log" | sed 's/ $//')" \
+  "cargo metadata --locked --no-deps --format-version 1
+cargo clean --locked -p path+file:///w/crates/a#0.1.0 -p path+file:///w/crates/b#0.1.0 --target-dir target/verus-partial
+cargo verus focus --locked -j 1 -- --time-expanded --output-json"
+# None (a cargo without the field, or a failed cargo metadata): the
+# target fails with the message before any clean, since a cargo clean
+# with no -p would remove the whole target directory.
+for metadata in '{"packages":[],"workspace_default_members":[],"version":1}' '{"packages":[],"version":1}' ''; do
+  : > "$tmp/cargo.log"
+  if CARGO_METADATA=$metadata PATH="$tmp/cargobin:$PATH" make -s -C "$port" CARGO_TARGET_DIR= VERUS_CRATES= verus-proofs > /dev/null 2> "$tmp/err"; then
+    fail "make verus-proofs VERUS_CRATES=, cargo metadata ${metadata:-empty}: got = success, want = failure"
+  fi
+  grep -q 'verus-proofs: cargo metadata names no workspace default members to clean: set VERUS_CLEAN' "$tmp/err" \
+    || fail "make verus-proofs VERUS_CRATES=, cargo metadata ${metadata:-empty}: got = $(cat "$tmp/err"), want = the no-members message"
+  expect "no default members (${metadata:-empty}) fails before any clean" "$(tr -s ' ' < "$tmp/cargo.log" | sed 's/ $//')" \
+    "cargo metadata --locked --no-deps --format-version 1"
+done
 rm -rf "$port/target"
 
 expect "make -n verus-count, VERUS_COUNT given" \

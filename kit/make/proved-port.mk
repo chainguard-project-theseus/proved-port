@@ -107,13 +107,20 @@ VERUS_FLAGS ?=
 VERUS_STATS ?= target/verus-stats.json
 # VERUS_CLEAN: the packages whose earlier results verus-proofs cleans
 # before cargo verus runs; by default VERUS_CRATES, and with neither set
-# the root package (`cargo pkgid`). cargo keeps a package's result when
+# the packages cargo selects with no -p: the workspace's default members
+# (`workspace_default_members` in `cargo metadata`), which are the root
+# package alone when the root manifest is a package and has no
+# default-members, and every member, or the listed default-members, when
+# it is a virtual manifest. cargo keeps a package's result when
 # nothing it fingerprints changed, and then Verus does not run and
 # VERUS_STATS is empty, which the rlimit headroom check fails; a touched
 # source does not count as a change. A port whose cargo verus
-# checks more than VERUS_CRATES (VERUS_MODE=verify over a workspace) names
-# every package Verus checks here. Their dependencies, vstd among them,
-# are kept.
+# checks packages beyond VERUS_CRATES or cargo's default selection
+# names every package Verus checks here: in
+# VERUS_MODE=verify, the verified workspace packages the selected ones
+# depend on (cargo verus verify checks dependencies too), or a
+# `--workspace` in VERUS_CARGO_FLAGS. Other dependencies, vstd among
+# them, are kept.
 VERUS_CLEAN ?= $(VERUS_CRATES)
 # VERUS_TARGET_DIR: cargo's target directory. cargo verus keeps focus
 # mode's results apart, under its verus-partial/, and verify mode's in it.
@@ -152,8 +159,16 @@ verus_after = $(if $(word 2,$2),$(if $(filter $1,$(firstword $2)),$1 $(word 2,$2
 verus_profile_flags = $(filter -r --release --profile=% --target=%,$(VERUS_CARGO_FLAGS)) \
   $(call verus_after,--profile,$(VERUS_CARGO_FLAGS)) \
   $(call verus_after,--target,$(VERUS_CARGO_FLAGS))
-verus_clean_cmd = cargo clean --locked \
-  $(if $(VERUS_CLEAN),$(addprefix -p ,$(VERUS_CLEAN)),-p "$$(cargo pkgid)") \
+# With VERUS_CLEAN empty, the clean reads the default members' package
+# IDs from `cargo metadata`'s one-line JSON (an ID holds no `"`, `,` or
+# `]`), and fails, before it cleans anything, when it finds none: a
+# `cargo clean` with no -p would remove the whole target directory.
+verus_clean_none = verus-proofs: cargo metadata names no workspace default members to clean: set VERUS_CLEAN to the packages cargo verus checks
+verus_clean_members = members=$$(cargo metadata --locked --no-deps --format-version 1 \
+  | sed -n 's/.*"workspace_default_members":\[\([^]]*\)\].*/\1/p' | tr -d '"' | tr ',' ' ') \
+  && [ -n "$$members" ] || { echo '$(verus_clean_none)' >&2; exit 1; };
+verus_clean_cmd = $(if $(VERUS_CLEAN),,$(verus_clean_members) )cargo clean --locked \
+  $(if $(VERUS_CLEAN),$(addprefix -p ,$(VERUS_CLEAN)),$$(printf ' -p %s' $$members)) \
   $(verus_profile_flags) \
   --target-dir $(VERUS_TARGET_DIR)$(if $(filter focus,$(VERUS_MODE)),/verus-partial)
 verus_proofs_cmd = cargo verus $(VERUS_MODE) --locked \
