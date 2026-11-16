@@ -340,10 +340,9 @@ pub fn check_covered(
             if strict {
                 String::new()
             } else {
-                format!(
-                    ", whose earlier result cargo kept (`cargo clean -p {}` checks it again)",
-                    k.replace('_', "-")
-                )
+                // `make verus-proofs` cleans where cargo verus keeps the
+                // result, which a bare `cargo clean -p` misses in focus mode.
+                ", whose earlier result cargo kept (`make verus-proofs` checks it again)".to_owned()
             }
         );
     }
@@ -762,8 +761,8 @@ mod tests {
         let (ok, report) = check_covered(&crates, &stats, false);
         assert!(ok, "no base: got = false, wanted = true ({report})");
         assert!(
-            report.contains("ok rlimit headroom: no statistics for j"),
-            "no base: got = {report}, wanted = a note for j"
+            report.contains("ok rlimit headroom: no statistics for j, whose earlier result cargo kept (`make verus-proofs` checks it again)"),
+            "no base: got = {report}, wanted = a note for j naming make verus-proofs"
         );
         let (ok, report) = check_covered(&crates, &stats, true);
         assert!(!ok, "against a base: got = true, wanted = false ({report})");

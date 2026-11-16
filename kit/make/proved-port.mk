@@ -14,7 +14,7 @@
 #
 #   VERUS_CRATES = pcre3-unicode pcre3-syntax pcre3 pcre3-capi
 #   KANI_CRATES  = $(VERUS_CRATES)
-#   PROVED_PORT_VERSION = 0.4.0
+#   PROVED_PORT_VERSION = 0.4.1
 #   PROVED_PORT_HOME ?= /usr/share/proved-port
 #   include $(PROVED_PORT_HOME)/make/proved-port.mk
 #
@@ -28,7 +28,10 @@
 #   verus             verus-proofs, then verus-count: the verus checks'
 #                     command (.chainguard/ci/verus.yaml).
 #   verus-proofs      cargo verus over VERUS_CRATES, Verus's statistics
-#                     (--time-expanded --output-json) into VERUS_STATS.
+#                     (--time-expanded --output-json) into VERUS_STATS,
+#                     after cleaning VERUS_CLEAN's earlier results so
+#                     Verus checks them again and the statistics are this
+#                     run's.
 #   verus-count       the counter (VERUS_COUNT, the package's
 #                     verus-count; nothing is built) over the port: the
 #                     coverage floor (VERUS_FLOOR), with the rlimit
@@ -91,6 +94,19 @@ VERUS_FLAGS ?=
 # VERUS_STATS: where verus-proofs writes Verus's statistics and
 # verus-count reads them.
 VERUS_STATS ?= target/verus-stats.json
+# VERUS_CLEAN: the packages whose earlier results verus-proofs cleans
+# before cargo verus runs; by default VERUS_CRATES, and with neither set
+# the root package (`cargo pkgid`). cargo keeps a package's result when
+# nothing it fingerprints changed, and then Verus does not run and
+# VERUS_STATS is empty, which the rlimit headroom check fails; a touched
+# source does not count as a change. A port whose cargo verus
+# checks more than VERUS_CRATES (VERUS_MODE=verify over a workspace) names
+# every package Verus checks here. Their dependencies, vstd among them,
+# are kept.
+VERUS_CLEAN ?= $(VERUS_CRATES)
+# VERUS_TARGET_DIR: cargo's target directory. cargo verus keeps focus
+# mode's results apart, under its verus-partial/, and verify mode's in it.
+VERUS_TARGET_DIR ?= $(or $(CARGO_TARGET_DIR),target)
 # VERUS_FLOOR: the ratchet file, the counter's --floor. It is the
 # `[floor] path` of verus/count.toml too (verus/SHARES, say, in a port
 # with a verus/floor/ directory).
@@ -116,6 +132,19 @@ VERUS_COUNT_FLAGS ?=
 # is, verus and verus-count check its --version against KIT.
 VERUS_COUNT ?= verus-count
 
+# The profile and targets VERUS_CARGO_FLAGS builds with (`-r`,
+# `--release`, `--profile P`, `--target T`, each value form also as
+# `--flag=V`): cargo clean -p removes one profile's artifacts, the
+# default dev profile's, and one layout, the host's, unless told others.
+# cargo verus passes these flags on to cargo.
+verus_after = $(if $(word 2,$2),$(if $(filter $1,$(firstword $2)),$1 $(word 2,$2)) $(call verus_after,$1,$(wordlist 2,$(words $2),$2)))
+verus_profile_flags = $(filter -r --release --profile=% --target=%,$(VERUS_CARGO_FLAGS)) \
+  $(call verus_after,--profile,$(VERUS_CARGO_FLAGS)) \
+  $(call verus_after,--target,$(VERUS_CARGO_FLAGS))
+verus_clean_cmd = cargo clean --locked \
+  $(if $(VERUS_CLEAN),$(addprefix -p ,$(VERUS_CLEAN)),-p "$$(cargo pkgid)") \
+  $(verus_profile_flags) \
+  --target-dir $(VERUS_TARGET_DIR)$(if $(filter focus,$(VERUS_MODE)),/verus-partial)
 verus_proofs_cmd = cargo verus $(VERUS_MODE) --locked \
   $(addprefix -p ,$(VERUS_CRATES)) $(VERUS_CARGO_FLAGS) \
   -- --time-expanded --output-json \
@@ -147,6 +176,7 @@ proved_port_count_check = $(if $(and $(proved_port_kit_tag),$(findstring $(prove
 define verus_proofs_recipe
 $(proved_port_version_check)
 mkdir -p $(dir $(VERUS_STATS))
+$(verus_clean_cmd)
 $(verus_proofs_cmd)
 endef
 

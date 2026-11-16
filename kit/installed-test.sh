@@ -166,7 +166,9 @@ chmod +x "$tmp/opt/verus-count"
 shows() {
   _port=$1
   shift
-  make -s -n -C "$_port" "$@" | tr -s ' ' | sed 's/ $//'
+  # CARGO_TARGET_DIR= keeps the build cache this script may set (above)
+  # out of the commands shown.
+  make -s -n -C "$_port" CARGO_TARGET_DIR= "$@" | tr -s ' ' | sed 's/ $//'
 }
 
 # --- the counter runs, unbuilt -------------------------------------------
@@ -184,6 +186,7 @@ echo "ok make verus-count builds nothing"
 expect "make -n verus: verus-count from PATH, no build" \
   "$(shows "$installed" verus VERUS_BASE=abc123)" \
   "mkdir -p target/
+cargo clean --locked -p a --target-dir target/verus-partial
 cargo verus focus --locked -p a -- --time-expanded --output-json > target/verus-stats.json
 verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --base-rev abc123 ."
 mkdir -p "$installed/verus/count"

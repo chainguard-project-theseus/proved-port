@@ -13,6 +13,33 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.1
+
+### Changes
+
+- `make verus-proofs` (and `make verus`) cleans the checked packages'
+  earlier results before `cargo verus` runs (#72). cargo kept them when
+  nothing it fingerprints had changed, so a rerun ran no Verus, wrote
+  empty statistics, and failed the rlimit headroom check with "no
+  statistics". `VERUS_CLEAN` names the packages (default `VERUS_CRATES`,
+  or the root package when that is empty), and `VERUS_TARGET_DIR` names
+  cargo's target directory (default `CARGO_TARGET_DIR`, else `target`).
+  The clean takes the profile and targets `VERUS_CARGO_FLAGS` builds
+  with (`-r`, `--release`, `--profile`, `--target`). The counter's
+  no-statistics note names `make verus-proofs` rather than a bare
+  `cargo clean -p`, which misses focus mode's results.
+- The counter's version is 0.4.1, ready for the v0.4.1 tag.
+
+### Porting notes
+
+1. Move the pin together, to 0.4.1, as 0.3.1's note 1 lists.
+2. A port whose `cargo verus` checks packages that `VERUS_CRATES` does
+   not name (`VERUS_MODE = verify` over a workspace with an empty
+   `VERUS_CRATES`, whose root package is not the only one checked) sets
+   `VERUS_CLEAN` to every package Verus checks. A port whose cargo target
+   directory is set elsewhere than `CARGO_TARGET_DIR` (a
+   `.cargo/config.toml` `target-dir`) sets `VERUS_TARGET_DIR` to it.
+
 ## 0.4.0
 
 ### Changes

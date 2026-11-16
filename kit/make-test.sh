@@ -66,9 +66,11 @@ include \$(PROVED_PORT_HOME)/make/proved-port.mk"
 printf '%s\n' 'VERUS_CRATES = alpha beta' "$pin" > "$port/Makefile"
 
 # shows TARGET [VAR=VALUE...]: `make -n TARGET` in the port, each run of
-# spaces one space.
+# spaces one space. CARGO_TARGET_DIR= keeps a target directory the
+# caller's shell sets out of the commands shown; a later
+# CARGO_TARGET_DIR=DIR among the arguments sets one.
 shows() {
-  make -s -n -C "$port" "$@" | tr -s ' ' | sed 's/ $//'
+  make -s -n -C "$port" CARGO_TARGET_DIR= "$@" | tr -s ' ' | sed 's/ $//'
 }
 
 # expect WHAT GOT WANT: GOT and WANT are the same lines.
@@ -84,6 +86,7 @@ expect() {
 expect "make -n verus, the template's verus check" \
   "$(shows verus VERUS_THREADS=16 VERUS_BASE=abc123)" \
   "mkdir -p target/
+cargo clean --locked -p alpha -p beta --target-dir target/verus-partial
 cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json --num-threads 16 > target/verus-stats.json
 verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --base-rev abc123 ."
 
@@ -107,36 +110,110 @@ done
 expect "make -n verus-proofs needs no base" \
   "$(shows verus-proofs)" \
   "mkdir -p target/
+cargo clean --locked -p alpha -p beta --target-dir target/verus-partial
 cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json > target/verus-stats.json"
 
 expect "make -n verus VERUS_BASE=none, a local run (--no-base)" \
   "$(shows verus VERUS_BASE=none)" \
   "mkdir -p target/
+cargo clean --locked -p alpha -p beta --target-dir target/verus-partial
 cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json > target/verus-stats.json
 verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --no-base ."
 
 expect "make -n verus, expat-rs (--features verus)" \
   "$(shows verus VERUS_CRATES=expat-rs VERUS_CARGO_FLAGS='--features verus' VERUS_THREADS=4 VERUS_BASE=HEAD^)" \
   "mkdir -p target/
+cargo clean --locked -p expat-rs --target-dir target/verus-partial
 cargo verus focus --locked -p expat-rs --features verus -- --time-expanded --output-json --num-threads 4 > target/verus-stats.json
 verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --base-rev HEAD^ ."
 
 expect "make -n verus, another name (verus/SHARES)" \
   "$(shows verus VERUS_CRATES=zlib-core VERUS_FLOOR=verus/SHARES VERUS_BASE=main)" \
   "mkdir -p target/
+cargo clean --locked -p zlib-core --target-dir target/verus-partial
 cargo verus focus --locked -p zlib-core -- --time-expanded --output-json > target/verus-stats.json
 verus-count --floor verus/SHARES --rlimit target/verus-stats.json --base-rev main ."
 
 expect "make -n verus, challoc (verify, no RLIMIT yet)" \
   "$(shows verus VERUS_MODE=verify VERUS_CRATES= VERUS_RLIMIT= VERUS_BASE=main)" \
   "mkdir -p target/
+cargo clean --locked -p \"\$(cargo pkgid)\" --target-dir target
 cargo verus verify --locked -- --time-expanded --output-json > target/verus-stats.json
 verus-count --floor verus/FLOOR --base-rev main ."
 
 expect "make -n verus-proofs, challoc's second quantum" \
   "$(shows verus-proofs VERUS_MODE=verify VERUS_CRATES= VERUS_CARGO_FLAGS='--no-default-features --features quantum8' VERUS_STATS=target/q8/stats.json)" \
   "mkdir -p target/q8/
+cargo clean --locked -p \"\$(cargo pkgid)\" --target-dir target
 cargo verus verify --locked --no-default-features --features quantum8 -- --time-expanded --output-json > target/q8/stats.json"
+
+# verus-proofs cleans the checked packages' earlier results first, where
+# cargo verus keeps them, so a rerun with nothing changed still runs
+# Verus and writes this run's statistics.
+expect "make -n verus-proofs cleans VERUS_CLEAN when given, in CARGO_TARGET_DIR" \
+  "$(shows verus-proofs CARGO_TARGET_DIR=/tmp/t VERUS_CLEAN='alpha gamma')" \
+  "mkdir -p target/
+cargo clean --locked -p alpha -p gamma --target-dir /tmp/t/verus-partial
+cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json > target/verus-stats.json"
+# cargo clean -p removes one profile's artifacts, so it cleans the
+# profile cargo verus builds with.
+expect "make -n verus-proofs cleans the --release profile cargo verus builds" \
+  "$(shows verus-proofs VERUS_CARGO_FLAGS='--features x --release')" \
+  "mkdir -p target/
+cargo clean --locked -p alpha -p beta --release --target-dir target/verus-partial
+cargo verus focus --locked -p alpha -p beta --features x --release -- --time-expanded --output-json > target/verus-stats.json"
+expect "make -n verus-proofs cleans a --profile=P profile" \
+  "$(shows verus-proofs VERUS_CARGO_FLAGS='--profile=bench')" \
+  "mkdir -p target/
+cargo clean --locked -p alpha -p beta --profile=bench --target-dir target/verus-partial
+cargo verus focus --locked -p alpha -p beta --profile=bench -- --time-expanded --output-json > target/verus-stats.json"
+expect "make -n verus-proofs cleans a --profile P profile in verify mode" \
+  "$(shows verus-proofs VERUS_MODE=verify VERUS_CARGO_FLAGS='--features x --profile ci --no-default-features')" \
+  "mkdir -p target/
+cargo clean --locked -p alpha -p beta --profile ci --target-dir target
+cargo verus verify --locked -p alpha -p beta --features x --profile ci --no-default-features -- --time-expanded --output-json > target/verus-stats.json"
+expect "make -n verus-proofs cleans the -r profile" \
+  "$(shows verus-proofs VERUS_CARGO_FLAGS='-r')" \
+  "mkdir -p target/
+cargo clean --locked -p alpha -p beta -r --target-dir target/verus-partial
+cargo verus focus --locked -p alpha -p beta -r -- --time-expanded --output-json > target/verus-stats.json"
+# It cleans the layout of each --target too, which is not the host's.
+expect "make -n verus-proofs cleans a --target T layout" \
+  "$(shows verus-proofs VERUS_CARGO_FLAGS='--target x86_64-unknown-linux-gnu --features x')" \
+  "mkdir -p target/
+cargo clean --locked -p alpha -p beta --target x86_64-unknown-linux-gnu --target-dir target/verus-partial
+cargo verus focus --locked -p alpha -p beta --target x86_64-unknown-linux-gnu --features x -- --time-expanded --output-json > target/verus-stats.json"
+expect "make -n verus-proofs cleans --target=T layouts, two of them, with a profile" \
+  "$(shows verus-proofs VERUS_CARGO_FLAGS='--target=aarch64-unknown-linux-gnu --release --target riscv64gc-unknown-linux-gnu')" \
+  "mkdir -p target/
+cargo clean --locked -p alpha -p beta --target=aarch64-unknown-linux-gnu --release --target riscv64gc-unknown-linux-gnu --target-dir target/verus-partial
+cargo verus focus --locked -p alpha -p beta --target=aarch64-unknown-linux-gnu --release --target riscv64gc-unknown-linux-gnu -- --time-expanded --output-json > target/verus-stats.json"
+expect "make -n verus-proofs, a port's own VERUS_TARGET_DIR in verify mode" \
+  "$(shows verus-proofs VERUS_MODE=verify VERUS_TARGET_DIR=out)" \
+  "mkdir -p target/
+cargo clean --locked -p alpha -p beta --target-dir out
+cargo verus verify --locked -p alpha -p beta -- --time-expanded --output-json > target/verus-stats.json"
+
+# The clean runs, and stops the target when it fails, before cargo verus:
+# a stub cargo logs its calls.
+mkdir -p "$tmp/cargobin"
+# shellcheck disable=SC2016
+printf '#!/bin/sh\necho "cargo $*" >> "%s"\n[ "$1 $2" != "clean --locked" ] || [ -z "${CARGO_CLEAN_FAILS-}" ] || exit 1\n' \
+  "$tmp/cargo.log" > "$tmp/cargobin/cargo"
+chmod +x "$tmp/cargobin/cargo"
+: > "$tmp/cargo.log"
+PATH="$tmp/cargobin:$PATH" make -s -C "$port" CARGO_TARGET_DIR= verus-proofs > /dev/null 2>&1 \
+  || fail "make verus-proofs with a stub cargo: got = failure, want = success"
+expect "make verus-proofs runs the clean, then cargo verus" "$(tr -s ' ' < "$tmp/cargo.log" | sed 's/ $//')" \
+  "cargo clean --locked -p alpha -p beta --target-dir target/verus-partial
+cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json"
+: > "$tmp/cargo.log"
+if CARGO_CLEAN_FAILS=1 PATH="$tmp/cargobin:$PATH" make -s -C "$port" CARGO_TARGET_DIR= verus-proofs > /dev/null 2>&1; then
+  fail "make verus-proofs with a failing clean: got = success, want = failure"
+fi
+expect "a failed clean stops verus-proofs before cargo verus" "$(tr -s ' ' < "$tmp/cargo.log" | sed 's/ $//')" \
+  "cargo clean --locked -p alpha -p beta --target-dir target/verus-partial"
+rm -rf "$port/target"
 
 expect "make -n verus-count, VERUS_COUNT given" \
   "$(shows verus-count VERUS_BASE=none VERUS_COUNT="$countbin/verus-count")" \
@@ -169,6 +246,7 @@ expect "make -n verify prints its loop over VERIFY_TARGETS" "$(shows verify VERU
 expect "make -n verify, the default (verus kani)" "$(shows verify VERUS_BASE=none VERUS_THREADS=8 | sed 1d)" \
   "verify: make verus
 mkdir -p target/
+cargo clean --locked -p alpha -p beta --target-dir target/verus-partial
 cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json --num-threads 8 > target/verus-stats.json
 verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --no-base .
 verify: make kani
@@ -176,6 +254,7 @@ sh $home/make/kani.sh"
 expect "make -n verify, a port's own list" "$(shows verify VERUS_BASE=none VERIFY_TARGETS='verus-proofs kani-regular' | sed 1d)" \
   "verify: make verus-proofs
 mkdir -p target/
+cargo clean --locked -p alpha -p beta --target-dir target/verus-partial
 cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json > target/verus-stats.json
 verify: make kani-regular
 KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='--verbosity 9' KANI_FAIL_PATTERN='warning: ignoring' sh $home/make/kani.sh"
@@ -269,6 +348,7 @@ printf '%s\n' 'VERUS_CRATES = alpha beta' "PROVED_PORT_VERSION = $version" "PROV
 expect "make -n verus, proved-port.mk included from verus/make/: the counter from PATH, no build" \
   "$(shows verus VERUS_BASE=main)" \
   "mkdir -p target/
+cargo clean --locked -p alpha -p beta --target-dir target/verus-partial
 cargo verus focus --locked -p alpha -p beta -- --time-expanded --output-json > target/verus-stats.json
 verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --base-rev main ."
 expect "make -n verus-count-test, proved-port.mk included from verus/make/: no cargo test" \
