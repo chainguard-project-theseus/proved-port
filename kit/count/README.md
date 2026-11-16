@@ -152,7 +152,7 @@ crate.
 | | `verus_features` | features only Verus's build enables, as `verus_keep_ghost` |
 | | `verus_sets` | `cfg` atoms Verus's build is sure to set, which shipped builds may set too (`'feature = "jit"'` for a default feature the proof run keeps, `"unix"`): "Verus's build", below |
 | | `verus_never_sets` | `cfg` atoms Verus's build never sets (`"miri"`), so `not(miri)` is sure there |
-| | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords that the counter does not handle itself (a Verus keyword naming a field, a parameter or a `let` binding outside `verus!`, such as `exec: u8` or `let tracked = ..`, needs none: it is read as a raw identifier); one that would rewrite a name the counter classes code by (`external_body`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, `unsafe`, a test cfg, a configured macro or mint, ...) is refused |
+| | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords that the counter does not handle itself (a Verus keyword naming a field, a parameter or a `let` binding outside `verus!`, such as `exec: u8` or `let tracked = ..`, needs none: it is read as a raw identifier); one that would rewrite a name the counter classes code by (`external_body`, `assume_unsupported_attributes`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, `unsafe`, a test cfg, a configured macro or mint, ...) is refused |
 | | `verus_only_ghost` | count the ghost functions of Verus-only code in the ghost column |
 | `[floor]` | `path`, `checked`, `renamed_from` | the FLOOR file (default `verus/FLOOR`); the prefix of the two verified-or-discharged figures (default `checked`); an older prefix the base revision's copy may still give them under, for the change that renames them (challoc's `combined`) |
 | `[rlimit]` | `path` | the RLIMIT file (default `verus/RLIMIT`) |
@@ -391,6 +391,36 @@ the file sits, so keep the file at the root.
   trusted. The report is challoc's two tables, the second the combined
   share. The marker is refused in this mode, so a function cannot be
   discharged twice.
+
+## Linkage attributes Verus takes on trust
+
+Verus refuses `no_mangle`, `export_name` and `link_section` inside
+`verus!` unless the item carries
+`#[verifier::assume_unsupported_attributes]`, and then takes the
+attribute on trust. What is trusted is the symbol name or section the
+attribute gives the item, not the item's code: Verus still checks the
+body, so the attribute changes no function's class (a verified export
+stays verified). The evidence for the linkage is the port's ABI tests,
+its exported-symbol checks.
+
+Each such item is a seam of its own, of kind `unsupported-attribute`.
+The counter reads the attribute in the path form or as
+`#[verifier(assume_unsupported_attributes)]`, directly or under any
+`cfg_attr`, and
+after the tables prints the count of these seams and each function's
+`FILE:LINE`. With a generated ledger, the generator writes an
+`unsupported-attribute` entry at each such item's line, statics and
+other items included: for a function, the line the counter lists it at,
+its `fn` line, or for one a macro writes the invocation's line (as an
+`external_body` entry takes, "Functions a macro writes"), with status
+`trusted`, since nothing in Verus or Kani checks an attribute: any other
+status text, an unknown or empty one included, fails the run (exit 2),
+and a function with the attribute and no entry is a warning. The entry
+classes no function, so it may share a line with the function's
+`external_body` seam, and the count is the ledger's. Two candidate
+definitions of a macro (under `cfg`s the counter cannot settle) that
+differ in the attribute count differently and fail the run, so no
+build's linkage seams drop out of the report.
 
 Verus's attribute form (`#[verus_verify]`, `#[verus_spec(..)]`, alone
 or under a `cfg_attr`) counts as code inside `verus!`, for a port whose

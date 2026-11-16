@@ -37,8 +37,13 @@ contract is still trusted, now as vstd's.
 - **item**: the items the seam covers, as the source names them.
 - **kind**: `assume_specification`, `external_body`,
   `external_fn_specification`, `external_type_specification`,
-  `external_trait_specification`, `#[verifier::external]`, `axiom`, or a
-  token minted on trust (`Tracked::assume_new`).
+  `external_trait_specification`, `#[verifier::external]`, `axiom`,
+  `unsupported-attribute` (an item with
+  `#[verifier::assume_unsupported_attributes]`: Verus takes its
+  `no_mangle`, `export_name` or `link_section` on trust, the symbol or
+  section, while it still checks the body; always `trusted`, with the
+  ABI tests as grounds), or a token minted on trust
+  (`Tracked::assume_new`).
 - **category**: `core library`, `std library`, `permanent (the C
   caller's contract)`, `operating system`, `machine model`, a
   dependency (`the memchr crate`), `Verus limit` (a construct Verus

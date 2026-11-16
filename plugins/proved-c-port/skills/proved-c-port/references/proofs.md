@@ -122,9 +122,12 @@ A seam is anything a verified function relies on without proof:
 `assume_specification` contracts for `core`, `external_body` functions,
 `external_fn_specification`, `external_type_specification` and
 `external_trait_specification` items, `#[verifier::external]` code,
-`axiom fn` declarations, `assume` and `admit` in proof code, and
-`Tracked::assume_new` ghost-token mints for the C caller's premises.
-SKILL.md's audit grep matches every one of these spellings.
+`axiom fn` declarations, `assume` and `admit` in proof code,
+`Tracked::assume_new` ghost-token mints for the C caller's premises, and
+`#[verifier::assume_unsupported_attributes]`, which trusts the symbol
+or section a `no_mangle`, `export_name` or `link_section` item gets
+(its body stays verified; the ABI tests are the grounds). SKILL.md's
+audit grep matches every one of these spellings.
 
 - One `external_body` or `assume_specification` around the single
   unverifiable call, with a contract stating only what callers rely on.

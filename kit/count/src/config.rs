@@ -325,9 +325,10 @@ impl Config {
     /// still passes. The configured macro, conversion and mint names are
     /// among them.
     fn read_names(&self) -> Vec<String> {
-        const FIXED: [&str; 25] = [
+        const FIXED: [&str; 26] = [
             "external_body",
             "external",
+            "assume_unsupported_attributes",
             "assume",
             "admit",
             "assume_new",
@@ -1137,6 +1138,11 @@ mod tests {
             (r#"["verus_verify", "verus_verifx"]"#, "", "verus_verify"),
             (r#"["verus_spec", "verus_spex"]"#, "", "verus_spec"),
             (r#"["discharged_by", "discharged_bx"]"#, "", "discharged_by"),
+            (
+                r#"["unsupported_attributes]", "unsupported_attributex]"]"#,
+                "",
+                "assume_unsupported_attributes",
+            ),
             (r#"["body]", "bodx]"]"#, "", "external_body"),
             (r#"["y]", "x]"]"#, "", "external_body"),
             (r##"["#[cfg(", "#[cfx("]"##, "", "cfg"),
