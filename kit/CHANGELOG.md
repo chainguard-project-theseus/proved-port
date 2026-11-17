@@ -28,6 +28,7 @@ where it reports drift.
   `--manifest-path=P`) that `VERUS_CARGO_FLAGS` gives cargo verus (#93).
   A port whose workspace is in a subdirectory failed at once on 0.4.1
   and 0.4.2 with "could not find `Cargo.toml`".
+- The counter's version is 0.4.3, ready for the v0.4.3 tag.
 
 ### Porting notes
 
