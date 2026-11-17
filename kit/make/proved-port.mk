@@ -124,6 +124,9 @@ VERUS_STATS ?= target/verus-stats.json
 VERUS_CLEAN ?= $(VERUS_CRATES)
 # VERUS_TARGET_DIR: cargo's target directory. cargo verus keeps focus
 # mode's results apart, under its verus-partial/, and verify mode's in it.
+# A port whose VERUS_CARGO_FLAGS names another workspace's manifest
+# (--manifest-path) sets it to that workspace's target directory, the
+# one cargo verus builds in, so the clean removes the results there.
 VERUS_TARGET_DIR ?= $(or $(CARGO_TARGET_DIR),target)
 # VERUS_FLOOR: the ratchet file, the counter's --floor. It is the
 # `[floor] path` of verus/count.toml too (verus/SHARES, say, in a port
@@ -160,17 +163,22 @@ verus_after = $(if $(word 2,$2),$(if $(filter $1,$(firstword $2)),$1 $(word 2,$2
 verus_profile_flags = $(filter -r --release --profile=% --target=%,$(VERUS_CARGO_FLAGS)) \
   $(call verus_after,--profile,$(VERUS_CARGO_FLAGS)) \
   $(call verus_after,--target,$(VERUS_CARGO_FLAGS))
+# The manifest VERUS_CARGO_FLAGS points cargo verus at (`--manifest-path
+# P`, also as `--manifest-path=P`): the clean and its cargo metadata read
+# the same workspace, which need not be the one where make runs.
+verus_manifest_flags = $(filter --manifest-path=%,$(VERUS_CARGO_FLAGS)) \
+  $(call verus_after,--manifest-path,$(VERUS_CARGO_FLAGS))
 # With VERUS_CLEAN empty, the clean reads the default members' package
 # IDs from `cargo metadata`'s one-line JSON (an ID holds no `"`, `,` or
 # `]`), and fails, before it cleans anything, when it finds none: a
 # `cargo clean` with no -p would remove the whole target directory.
 verus_clean_none = verus-proofs: cargo metadata names no workspace default members to clean: set VERUS_CLEAN to the packages cargo verus checks
-verus_clean_members = members=$$(cargo metadata --locked --no-deps --format-version 1 \
+verus_clean_members = members=$$(cargo metadata --locked --no-deps --format-version 1 $(verus_manifest_flags) \
   | sed -n 's/.*"workspace_default_members":\[\([^]]*\)\].*/\1/p' | tr -d '"' | tr ',' ' ') \
   && [ -n "$$members" ] || { echo '$(verus_clean_none)' >&2; exit 1; };
 verus_clean_cmd = $(if $(VERUS_CLEAN),,$(verus_clean_members) )cargo clean --locked \
   $(if $(VERUS_CLEAN),$(addprefix -p ,$(VERUS_CLEAN)),$$(printf ' -p %s' $$members)) \
-  $(verus_profile_flags) \
+  $(verus_manifest_flags) $(verus_profile_flags) \
   --target-dir $(VERUS_TARGET_DIR)$(if $(filter focus,$(VERUS_MODE)),/verus-partial)
 # cargo verus refuses a -j before a -p ("Args forwarded to Cargo must
 # precede args forwarded to Verus"), so -j comes last.
