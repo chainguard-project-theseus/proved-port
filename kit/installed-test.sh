@@ -185,7 +185,8 @@ echo "ok make verus-count builds nothing"
 # --- make -n ----------------------------------------------------------------
 expect "make -n verus: verus-count from PATH, no build" \
   "$(shows "$installed" verus VERUS_BASE=abc123)" \
-  "mkdir -p target/
+  "[ -f target/CACHEDIR.TAG ] || { mkdir -p target && printf '%s\\n' 'Signature: 8a477f597d28d172789f06886806bc55' '# This file is a cache directory tag created by cargo.' '# For information about cache directory tags see https://bford.info/cachedir/' > target/CACHEDIR.TAG; }
+mkdir -p target/
 cargo clean --locked -p a --target-dir target/verus-partial
 cargo verus focus --locked -p a -j 1 -- --time-expanded --output-json > target/verus-stats.json
 verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --base-rev abc123 ."

@@ -176,6 +176,18 @@ verus_clean_none = verus-proofs: cargo metadata names no workspace default membe
 verus_clean_members = members=$$(cargo metadata --locked --no-deps --format-version 1 $(verus_manifest_flags) \
   | sed -n 's/.*"workspace_default_members":\[\([^]]*\)\].*/\1/p' | tr -d '"' | tr ',' ' ') \
   && [ -n "$$members" ] || { echo '$(verus_clean_none)' >&2; exit 1; };
+# cargo writes CACHEDIR.TAG only into a target directory it creates, and
+# refuses to clean one without it ("missing or invalid `CACHEDIR.TAG`").
+# The recipe can create VERUS_TARGET_DIR before cargo does (the default
+# VERUS_STATS is in it), so it writes cargo's tag there itself: else a
+# fresh verify-mode checkout, whose clean is that directory, fails, and
+# a clean skipped instead would leave a warm rerun empty statistics.
+# The tag's text is cargo's own, all three lines.
+verus_cachedir_tag = 'Signature: 8a477f597d28d172789f06886806bc55' \
+  '\# This file is a cache directory tag created by cargo.' \
+  '\# For information about cache directory tags see https://bford.info/cachedir/'
+verus_tag_cmd = [ -f $(VERUS_TARGET_DIR)/CACHEDIR.TAG ] || { mkdir -p $(VERUS_TARGET_DIR) \
+  && printf '%s\n' $(verus_cachedir_tag) > $(VERUS_TARGET_DIR)/CACHEDIR.TAG; }
 verus_clean_cmd = $(if $(VERUS_CLEAN),,$(verus_clean_members) )cargo clean --locked \
   $(if $(VERUS_CLEAN),$(addprefix -p ,$(VERUS_CLEAN)),$$(printf ' -p %s' $$members)) \
   $(verus_manifest_flags) $(verus_profile_flags) \
@@ -213,6 +225,7 @@ proved_port_count_check = $(if $(and $(proved_port_kit_tag),$(findstring $(prove
 
 define verus_proofs_recipe
 $(proved_port_version_check)
+$(verus_tag_cmd)
 mkdir -p $(dir $(VERUS_STATS))
 $(verus_clean_cmd)
 $(verus_proofs_cmd)

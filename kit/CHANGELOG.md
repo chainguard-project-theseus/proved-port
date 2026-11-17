@@ -13,6 +13,30 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.4
+
+### Changes
+
+- `make verus-proofs` (and `make verus`) writes cargo's `CACHEDIR.TAG`
+  into `VERUS_TARGET_DIR` when the directory has none, before it makes
+  `VERUS_STATS`'s directory (#96). The recipe made that directory (the
+  default `VERUS_STATS` is in it) before cargo ran, and cargo writes the
+  tag only into a target directory it creates itself. cargo also refuses
+  to clean a directory without the tag ("missing or invalid
+  `CACHEDIR.TAG`"). So in verify mode, whose clean is `VERUS_TARGET_DIR`
+  itself, `make verus` failed on a fresh checkout before any proof ran
+  (from 0.4.1). Focus mode's `verus-partial/` is a directory cargo
+  creates, so its clean was unaffected.
+
+### Porting notes
+
+1. Move the pin together, to 0.4.4, as 0.3.1's note 1 lists, then run
+   `make verus-headers`. A port moving from 0.4.2 or earlier applies the
+   notes of each release in between first. Nothing else changes.
+2. A verify-mode checkout whose target directory an earlier kit made
+   (it has no `CACHEDIR.TAG`) gets the tag on its next run, and the
+   clean then runs as it does on a fresh checkout.
+
 ## 0.4.3
 
 ### Changes
