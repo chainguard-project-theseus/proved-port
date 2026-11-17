@@ -1735,6 +1735,78 @@ fn a_split_impl_s_limit_is_held_to_the_base() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A run against a base that has verus/RLIMIT must hold the head to it:
+/// without `--rlimit` it fails (exit 1), naming the base's file and
+/// VERUS_RLIMIT. A base without the file, or `--no-base`, does not need
+/// `--rlimit`.
+#[test]
+fn a_base_with_rlimit_needs_rlimit() {
+    let lib = "use vstd::prelude::*;\nverus! {\npub fn f() {}\n}\n";
+    let dir = crate_of("rlimit-required", &[("lib.rs", lib)]);
+    fs::write(dir.join("verus/count.toml"), RATCHET_CONFIG).expect("write");
+    fs::write(dir.join("verus/FLOOR"), RATCHET_FLOOR).expect("write");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "crates", "verus"]);
+    git(&dir, &["commit", "-q", "-m", "no RLIMIT"]);
+    fs::write(dir.join("verus/RLIMIT"), RATCHET_RLIMIT).expect("write");
+    git(&dir, &["add", "verus"]);
+    git(&dir, &["commit", "-q", "-m", "RLIMIT"]);
+    let stats = dir.join("stats.json");
+    fs::write(&stats, stats_naming(&[("a::f", 1_000_000)])).expect("write");
+    let (floor, s) = (
+        dir.join("verus/FLOOR").to_string_lossy().into_owned(),
+        stats.to_string_lossy().into_owned(),
+    );
+    let needs = "FAIL rlimit headroom: HEAD:verus/RLIMIT holds each verified function to its rlimit share, but this run has no --rlimit";
+    for (case, args, code, want) in [
+        (
+            "no --rlimit, base has RLIMIT",
+            vec!["--floor", &floor, "--base-rev", "HEAD"],
+            1,
+            needs,
+        ),
+        (
+            "--rlimit, base has RLIMIT",
+            vec!["--floor", &floor, "--rlimit", &s, "--base-rev", "HEAD"],
+            0,
+            "ok rlimit headroom: 1 functions",
+        ),
+        (
+            "no --rlimit, base without RLIMIT",
+            vec!["--floor", &floor, "--base-rev", "HEAD^"],
+            0,
+            "ok coverage floor",
+        ),
+        (
+            "no --rlimit, --no-base",
+            vec!["--floor", &floor, "--no-base"],
+            0,
+            "ok coverage floor",
+        ),
+    ] {
+        let (got, out, err) = count(&dir, &args);
+        assert!(
+            got == code
+                && (out.contains(want) || err.contains(want))
+                && (code == 0) != err.contains("VERUS_RLIMIT"),
+            "{case}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+        );
+    }
+    // The head moves `[rlimit] path` and drops --rlimit: the run is held
+    // to the path the base's configuration gives, which the base has.
+    fs::write(
+        dir.join("verus/count.toml"),
+        RATCHET_CONFIG.replace("verus/RLIMIT", "verus/RLIMIT2"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &["--floor", &floor, "--base-rev", "HEAD"]);
+    assert!(
+        got == 1 && err.contains(needs) && err.contains("VERUS_RLIMIT"),
+        "moved [rlimit] path, no --rlimit: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {needs:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// The ratchets a port's verus check runs, through the command line it
 /// runs them with (`--floor verus/FLOOR --rlimit STATS --base-rev REV`):
 /// a coverage figure lowered with and without a `lowered` line

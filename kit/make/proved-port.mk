@@ -124,7 +124,8 @@ VERUS_TARGET_DIR ?= $(or $(CARGO_TARGET_DIR),target)
 VERUS_FLOOR ?= verus/FLOOR
 # VERUS_RLIMIT: non-empty passes --rlimit VERUS_STATS, which holds each
 # verified function to verus/RLIMIT; empty leaves it out, for a port
-# with no verus/RLIMIT yet.
+# with no verus/RLIMIT yet. Once the base revision has verus/RLIMIT, the
+# counter fails a run against that base without it.
 VERUS_RLIMIT ?= yes
 # VERUS_BASE: the revision verus/FLOOR, verus/RLIMIT and the counter's
 # other ratchets compare with (--base-rev). The verus checks pass the

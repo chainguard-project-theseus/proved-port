@@ -34,6 +34,10 @@ on the base, and giving it with `--base-rev` fails the run (exit 2);
 by its type's path, from the module that defines the type, wherever its
 `impl` is. A `#[verifier::rlimit]` on a function the statistics do not
 name fails the run (exit 2), and the failure names every such limit.
+A run with `--base-rev REV` and no `--rlimit` fails (exit 1) when REV has
+the RLIMIT file (`[rlimit] path` in REV's configuration): with RLIMIT on
+the base, dropping `--rlimit` (`VERUS_RLIMIT =`) would turn the
+headroom check off. A `--no-base` run needs no `--rlimit`.
 Statistics in which one crate's document starts before another's ends
 fail the run too (exit 2, "documents interleave"): cargo re-prints each
 crate's output a line at a time, so crates Verus checks in parallel mix

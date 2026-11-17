@@ -130,6 +130,10 @@
 //! module that defines the type, not the module of its `impl`
 //! ([`Counter::name_methods`]). A `#[verifier::rlimit]` on a function the
 //! statistics do not name fails the run, and every such limit is named.
+//! A run against a base whose tree has the RLIMIT file (the path the
+//! base's configuration gives it) fails without `--rlimit` (exit 1), so
+//! a change cannot turn the headroom check off by dropping the flag
+//! (`VERUS_RLIMIT =`); a `--no-base` run is not held.
 //! Statistics in which a document starts before the one before it ends
 //! fail the run too ("documents interleave", exit 2): cargo printed two
 //! crates' documents at once, which `make verus-proofs` prevents with
@@ -5499,6 +5503,11 @@ fn main() {
         cfg: check_config(&root, &config_file, &cfg, &rev),
         rev,
     });
+    if stats.is_none()
+        && let Some(b) = &base
+    {
+        rlimit_required(&root, b, &cfg);
+    }
     let crates = crate_dirs(&root, &cfg).unwrap_or_else(|e| usage(e));
     let mut unshipped = Vec::new();
     let mut c = Counter {
@@ -5686,6 +5695,31 @@ fn main() {
     }
     if failed {
         std::process::exit(1);
+    }
+}
+
+/// Fails a run with no `--rlimit` (exit 1) whose base revision has the
+/// RLIMIT file, at the path the base's configuration gives it: the base
+/// held each verified function to verus/RLIMIT, and a run without the
+/// statistics holds none, so dropping `--rlimit` (`VERUS_RLIMIT =` in a
+/// port's Makefile) would turn the gate off with every check green. A
+/// base that does not resolve fails the run (exit 2), as the floor's
+/// comparison does. A run with `--no-base` has no base and is not held.
+fn rlimit_required(root: &Path, base: &Base, cfg: &Config) {
+    let path = base.cfg.as_ref().unwrap_or(cfg).rlimit.path.as_str();
+    match base_file(root, &base.rev, path) {
+        Ok(None) => {}
+        Ok(Some(_)) => {
+            eprintln!(
+                "FAIL rlimit headroom: {}:{path} holds each verified function to its rlimit share, but this run has no --rlimit, so nothing is held to it: give --rlimit STATS (make verus with VERUS_RLIMIT non-empty, its default)",
+                base.rev
+            );
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("FAIL rlimit headroom: {e}");
+            std::process::exit(2);
+        }
     }
 }
 
