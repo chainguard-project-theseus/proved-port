@@ -13,6 +13,61 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.2
+
+### Changes
+
+- `make verus-proofs` (and `make verus`) runs `cargo verus` with
+  `-j VERUS_JOBS`, 1 by default (#79). cargo re-prints each crate's
+  output a line at a time, so two crates Verus checked at once mixed
+  their pretty-printed `--output-json` documents in `VERUS_STATS`, and
+  the rlimit headroom check failed on a JSON parse error after every
+  proof had passed. Empty `VERUS_JOBS` leaves cargo's default. The
+  counter now refuses statistics in which one document starts before
+  the one before it ends ("documents interleave", exit 2), naming both
+  lines and `-j 1`.
+- With `VERUS_CRATES` and `VERUS_CLEAN` both empty, the clean takes the
+  workspace's default members from `cargo metadata` (#81), the
+  packages cargo verus checks with no `-p`: the root package for a
+  package manifest, every member (or `default-members`) for a virtual
+  manifest. 0.4.1 ran `cargo pkgid`, which fails on a virtual manifest.
+  When cargo metadata names none, the target fails before any clean.
+- verus/FLOOR's header: a FLOOR pull request may record a figure below
+  the one the check names, never below the base revision's, when an
+  open pull request lands that share lower without a `lowered` line;
+  its description names that pull request (#82). verus/README.md,
+  AGENTS.md, the review prompt's Verus item and the skill say so too.
+- A counter run with `--base-rev` and no `--rlimit` fails when the base
+  has verus/RLIMIT (#86), so `VERUS_RLIMIT =` cannot turn the headroom
+  check off.
+- The shipped files no longer name the theseus ports' private
+  repositories, and `kit/internal-test.sh` flags those names. The
+  counter's example configuration for the PCRE2 port is now
+  `kit/count/configs/pcre2.toml`, under the upstream library's name.
+- The counter's version is 0.4.2, ready for the v0.4.2 tag.
+
+### Porting notes
+
+1. Move the pin together, to 0.4.2, as 0.3.1's note 1 lists, then run
+   `make verus-headers` and take the kit's FLOOR header.
+2. Copy the review prompt template's new Verus-item sentence (the FLOOR
+   pull request that records a figure below the one the check names)
+   into the port's `.chainguard/review-prompt.md`: `make verus-headers`
+   holds only its `- The kit` item.
+3. A port that set `VERUS_CLEAN` only because its root manifest is
+   virtual (0.4.1's `cargo pkgid` failure, in focus mode with an empty
+   `VERUS_CRATES`) may drop it. Keep it where cargo verus checks more
+   than the default members: verify mode's verified workspace
+   dependencies, or a `--workspace` in `VERUS_CARGO_FLAGS` (0.4.1's
+   note 2 still applies).
+4. A port that runs `make verus` with `VERUS_RLIMIT =` while its main has
+   verus/RLIMIT now fails its checks: drop the override.
+5. A port whose cargo verus checks one crate may set `VERUS_JOBS =`
+   (empty) to build its dependencies in parallel again.
+6. A port whose comments cite the counter's example configuration by its
+   old file name cites `kit/count/configs/pcre2.toml`. No port passes
+   that path to the counter.
+
 ## 0.4.1
 
 ### Changes
