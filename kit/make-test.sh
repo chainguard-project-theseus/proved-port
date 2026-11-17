@@ -218,6 +218,19 @@ expect "make -n verus-proofs, a port's own VERUS_TARGET_DIR in verify mode" \
   "mkdir -p target/
 cargo clean --locked -p alpha -p beta --target-dir out
 cargo verus verify --locked -p alpha -p beta -j 1 -- --time-expanded --output-json > target/verus-stats.json"
+# A workspace that is not the one make runs in (a port whose Cargo.toml
+# is in a subdirectory): the clean reads the manifest cargo verus is
+# given, in the target directory the port names for that workspace.
+expect "make -n verus-proofs cleans in the workspace --manifest-path P names" \
+  "$(shows verus-proofs VERUS_CARGO_FLAGS='--manifest-path w/Cargo.toml' VERUS_TARGET_DIR=w/target)" \
+  "mkdir -p target/
+cargo clean --locked -p alpha -p beta --manifest-path w/Cargo.toml --target-dir w/target/verus-partial
+cargo verus focus --locked -p alpha -p beta --manifest-path w/Cargo.toml -j 1 -- --time-expanded --output-json > target/verus-stats.json"
+expect "make -n verus-proofs cleans in the workspace --manifest-path=P names, with a profile" \
+  "$(shows verus-proofs VERUS_CARGO_FLAGS='--release --manifest-path=w/Cargo.toml')" \
+  "mkdir -p target/
+cargo clean --locked -p alpha -p beta --manifest-path=w/Cargo.toml --release --target-dir target/verus-partial
+cargo verus focus --locked -p alpha -p beta --release --manifest-path=w/Cargo.toml -j 1 -- --time-expanded --output-json > target/verus-stats.json"
 
 # The clean runs, and stops the target when it fails, before cargo verus:
 # a stub cargo logs its calls, and answers `cargo metadata` with
@@ -249,6 +262,15 @@ expect "make verus-proofs VERUS_CRATES= cleans the workspace's default members" 
   "cargo metadata --locked --no-deps --format-version 1
 cargo clean --locked -p path+file:///w/crates/a#0.1.0 -p path+file:///w/crates/b#0.1.0 --target-dir target/verus-partial
 cargo verus focus --locked -j 1 -- --time-expanded --output-json"
+# cargo metadata reads the workspace --manifest-path names.
+: > "$tmp/cargo.log"
+CARGO_METADATA='{"packages":[],"workspace_default_members":["path+file:///w/crates/a#0.1.0"],"version":1}' \
+  PATH="$tmp/cargobin:$PATH" make -s -C "$port" CARGO_TARGET_DIR= VERUS_CRATES= VERUS_CARGO_FLAGS='--manifest-path w/Cargo.toml' VERUS_TARGET_DIR=w/target verus-proofs > /dev/null 2>&1 \
+  || fail "make verus-proofs VERUS_CRATES= --manifest-path with a stub cargo: got = failure, want = success"
+expect "make verus-proofs VERUS_CRATES= reads the --manifest-path workspace's default members" "$(tr -s ' ' < "$tmp/cargo.log" | sed 's/ $//')" \
+  "cargo metadata --locked --no-deps --format-version 1 --manifest-path w/Cargo.toml
+cargo clean --locked -p path+file:///w/crates/a#0.1.0 --manifest-path w/Cargo.toml --target-dir w/target/verus-partial
+cargo verus focus --locked --manifest-path w/Cargo.toml -j 1 -- --time-expanded --output-json"
 # None (a cargo without the field, or a failed cargo metadata): the
 # target fails with the message before any clean, since a cargo clean
 # with no -p would remove the whole target directory.

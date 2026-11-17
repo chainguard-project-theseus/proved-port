@@ -13,6 +13,39 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.3
+
+### Changes
+
+- `make verus-proofs` (and `make verus`) passes `-j VERUS_JOBS` after
+  the `-p` list and `VERUS_CARGO_FLAGS`, just before `--` (#91). 0.4.2
+  put it first, and cargo verus refuses a `-j` before a `-p` ("Args
+  forwarded to Cargo must precede args forwarded to Verus"), so
+  `make verus` exited 2 before any proof ran in every port that sets
+  `VERUS_CRATES` and kept `VERUS_JOBS` at its default of 1.
+- The clean before cargo verus, and its `cargo metadata` when
+  `VERUS_CRATES` is empty, get the `--manifest-path P` (or
+  `--manifest-path=P`) that `VERUS_CARGO_FLAGS` gives cargo verus (#93).
+  A port whose workspace is in a subdirectory failed at once on 0.4.1
+  and 0.4.2 with "could not find `Cargo.toml`".
+
+### Porting notes
+
+1. Move the pin together, to 0.4.3, as 0.3.1's note 1 lists, then run
+   `make verus-headers`. A port moving from 0.4.0 or 0.4.1 applies
+   0.4.1's and 0.4.2's notes first.
+2. A port that set `VERUS_JOBS =` (empty) only to get past 0.4.2's
+   `-j` order, and whose cargo verus checks more than one crate, drops
+   the override: `-j 1` keeps the crates' statistics from interleaving
+   (0.4.2's first change).
+3. A port whose `VERUS_CARGO_FLAGS` names another workspace's manifest
+   (`--manifest-path`) sets `VERUS_TARGET_DIR` to that workspace's
+   target directory, the one cargo verus builds in (for a workspace in
+   crates/w: `VERUS_TARGET_DIR = crates/w/target`). The kit does not guess
+   it, and with the default `target` the clean removes nothing there:
+   a warm rerun runs no Verus and writes empty statistics, as before
+   0.4.1.
+
 ## 0.4.2
 
 ### Changes
