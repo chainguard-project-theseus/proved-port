@@ -67,7 +67,7 @@ pub(crate) struct Crates {
     /// run (`test_util_enablers`).
     #[serde(default)]
     pub(crate) test_features: Vec<String>,
-    /// Features that only Verus's build enables (expat-rs's `verus`, which
+    /// Features that only Verus's build enables (the Expat port's `verus`, which
     /// pulls in vstd for a port whose MSRV is below vstd's): an item under
     /// `feature = "F"` is built only for Verus, as one under
     /// `verus_keep_ghost` is.
@@ -1106,7 +1106,7 @@ mod tests {
         }
     }
 
-    /// pcre3's and challoc's stand-ins pass. Negative: a stand-in that
+    /// The PCRE2 port's and challoc's stand-ins pass. Negative: a stand-in that
     /// rewrites a name the classifier reads, by containing it, by being
     /// part of it, or by overlapping its end, is refused, and so is one of
     /// a configured name or an empty `from`.
@@ -1182,7 +1182,7 @@ mod tests {
         }
     }
 
-    /// pcre3's configuration, which every gate section has, with a member
+    /// The PCRE2 port's configuration, which every gate section has, with a member
     /// and a Verus feature so that every `[crates]` key it holds is set.
     const FULL: &str = r#"
 [crates]
@@ -1203,10 +1203,10 @@ fn_ptr_macro = "fn_ptr"
 conversion = "from_c"
 [inputs]
 table = "verus/theorems/CD1.md"
-crates = ["pcre3", "pcre3-syntax", "pcre3-unicode"]
+crates = ["pcre2", "pcre2-syntax", "pcre2-unicode"]
 roots = [
-  { file = "crates/pcre3/src/regex.rs", owner = "Regex", name = "new" },
-  { file = "crates/pcre3/src/serialize.rs", name = "encode_as" },
+  { file = "crates/pcre2/src/regex.rs", owner = "Regex", name = "new" },
+  { file = "crates/pcre2/src/serialize.rs", name = "encode_as" },
 ]
 lazy = true
 describe = "Regex::new"
@@ -1216,7 +1216,7 @@ path = "README.md"
 path = "verus/MINTS"
 mint = "c_mint"
 token_trait = "CToken"
-home = "crates/pcre3-capi/src/object.rs"
+home = "crates/pcre2-capi/src/object.rs"
 "#;
 
     /// A configuration that keeps every gate, or widens or renames one,
@@ -1239,7 +1239,7 @@ home = "crates/pcre3-capi/src/object.rs"
         };
         for (from, to) in [
             ("", ""),
-            ("\"pcre3-unicode\"]", "\"pcre3-unicode\", \"pcre3-capi\"]"),
+            ("\"pcre2-unicode\"]", "\"pcre2-unicode\", \"pcre2-capi\"]"),
             ("verus/theorems/RN1.md", "verus/theorems/RN2.md"),
             ("mint = \"c_mint\"", "mint = \"c_make\""),
             ("path = \"verus/REACH\"", "path = \"verus/reach/REACH\""),
@@ -1327,19 +1327,19 @@ home = "crates/pcre3-capi/src/object.rs"
                 "[reach] conversion changes from \"from_c\" to \"from_x\"",
             ),
             (
-                ", \"pcre3-unicode\"",
+                ", \"pcre2-unicode\"",
                 "",
-                "[inputs] crates drops \"pcre3-unicode\"",
+                "[inputs] crates drops \"pcre2-unicode\"",
             ),
             (
-                "  { file = \"crates/pcre3/src/serialize.rs\", name = \"encode_as\" },\n",
+                "  { file = \"crates/pcre2/src/serialize.rs\", name = \"encode_as\" },\n",
                 "",
-                "[inputs] roots drops encode_as in crates/pcre3/src/serialize.rs",
+                "[inputs] roots drops encode_as in crates/pcre2/src/serialize.rs",
             ),
             (
                 "owner = \"Regex\", ",
                 "",
-                "[inputs] roots drops Regex::new in crates/pcre3/src/regex.rs",
+                "[inputs] roots drops Regex::new in crates/pcre2/src/regex.rs",
             ),
             ("lazy = true\n", "", "[inputs] lazy is turned off"),
             (
@@ -1399,8 +1399,8 @@ home = "crates/pcre3-capi/src/object.rs"
             ),
             (
                 "path = \"extra\"",
-                "path = \"crates/pcre3\"",
-                "[crates] member \"extra\" moves from \"extra\" to \"crates/pcre3\"",
+                "path = \"crates/pcre2\"",
+                "[crates] member \"extra\" moves from \"extra\" to \"crates/pcre2\"",
             ),
             // A rename that keeps the crate shipped, and a directory given
             // way to a member with `ships` unset, as the base read it,

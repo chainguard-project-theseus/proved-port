@@ -3,7 +3,7 @@
 //! (kit/count/README.md). The port's `verus/count.toml` ([`config`]) names
 //! its crates, its test-only `cfg`s and features, and where each table the
 //! checks below read lives; a check whose section it leaves out does not
-//! run. The paths below are pcre3's, which the defaults follow.
+//! run. The paths below are the PCRE2 port's, which the defaults follow.
 //!
 //! A function is *verified* when it sits inside `verus! { ... }`, or
 //! carries Verus's attribute form (`#[verus_verify]` or `#[verus_spec]`,
@@ -258,7 +258,7 @@ struct Counter {
     /// ([`Counter::name_methods`]).
     methods: Vec<Method>,
     /// The module [`Counter::items`] is walking, as Verus names it: the
-    /// crate (`pcre3_syntax`), then each module of the file's path and of
+    /// crate (`pcre2_syntax`), then each module of the file's path and of
     /// any inline `mod` around the item.
     module: Vec<String>,
     /// The instance of `module` [`Counter::items`] is walking
@@ -504,7 +504,7 @@ impl Counter {
 type NestedFn<'a> = (&'a [Attribute], &'a Signature, &'a verus_syn::Block);
 
 /// The `fn_ptr!` macro's one rule and its invocations: the definition
-/// lives in one file (pcre3-capi's width.rs) and the invocations in
+/// lives in one file (pcre2-capi's width.rs) and the invocations in
 /// others, read in any order.
 #[derive(Default)]
 struct FnPtrs {
@@ -1942,14 +1942,14 @@ fn cfg_needs_test(tokens: &str, atoms: &Atoms) -> bool {
 }
 
 /// The packages that a build of the workspace at `root` compiles with one
-/// of the test-only `features` (pcre3's `test-util`), each with the
+/// of the test-only `features` (the PCRE2 port's `test-util`), each with the
 /// feature, so that [`cfg_needs_test`] could not leave its
 /// items out, as cargo itself resolves them: `cargo tree` over every
 /// member (a plain `cargo build` builds them all and unifies their
 /// features), for every target, along normal and build edges only, once
 /// with the default features and once with every member's every other
 /// feature too ([`member_features`]), as a build such as
-/// `--features pcre3-capi/hardened` turns them on. Tests' dev-dependencies
+/// `--features pcre2-capi/hardened` turns them on. Tests' dev-dependencies
 /// are the one place that may enable it, with a member's own `test-util`
 /// feature, which forwards it. Reading cargo's resolution rather than the
 /// manifests leaves no TOML form (quoting, tables, forwarding features,
@@ -2616,7 +2616,7 @@ impl Counter {
 
     /// The functions each `width::fn_ptr!` invocation writes: its
     /// definition's transcriber, with the invocation's struct bound to its
-    /// metavariables, parsed. For pcre3-capi that is the struct's `Clone`
+    /// metavariables, parsed. For pcre2-capi that is the struct's `Clone`
     /// and the `FromC` conversion an export applies to a C function
     /// pointer argument, and whatever those bodies call is walked from
     /// them. They are outside `verus!`, and are recorded for the walks
@@ -3260,7 +3260,7 @@ impl Counter {
         let mut paths = Vec::new();
         rust_files(src, &mut paths);
         // A same-length stand-in for an identifier Verus keeps as a keyword
-        // (pcre3's `assert::`) keeps the line numbers.
+        // (the PCRE2 port's `assert::`) keeps the line numbers.
         let read: Vec<(PathBuf, Option<verus_syn::Result<verus_syn::File>>)> = paths
             .into_iter()
             .map(|f| {
@@ -5193,7 +5193,7 @@ fn shown(t: u32) -> String {
 }
 
 /// Whether a crate ships: every crate but one whose Cargo.toml says
-/// `publish = false` (pcre3-testdata, the conformance harness's reader).
+/// `publish = false` (pcre2-testdata, the conformance harness's reader).
 fn ships(krate: &Path) -> bool {
     fs::read_to_string(krate.join("Cargo.toml")).map_or(true, |t| !unpublished(&t))
 }
@@ -6050,7 +6050,7 @@ impl Base {
     }
 }
 
-/// The recursion check (`[recursion]`, pcre3's verus/theorems/RN1.md):
+/// The recursion check (`[recursion]`, the PCRE2 port's verus/theorems/RN1.md):
 /// exits 1 on a cycle through a function Verus does not check, or through
 /// a verified one that `table`'s table does not name ([`documented`]).
 fn check_recursion(root: &Path, table: &str, fns: &[FnRef], unshipped: &[String]) {
@@ -7164,7 +7164,7 @@ fn funcs(fns: &[FnRef]) -> Vec<inputs::Func<'_>> {
         .collect()
 }
 
-/// The compile-inputs check (`[inputs]`, pcre3's verus/theorems/CD1.md,
+/// The compile-inputs check (`[inputs]`, the PCRE2 port's verus/theorems/CD1.md,
 /// [`inputs`]): every hidden input a function reachable from the
 /// configured roots reads is in the table `i` names, and every row of the
 /// table is still read. Prints what it finds; `false` when it fails.
@@ -7238,9 +7238,9 @@ fn compile_inputs(root: &Path, i: &config::Inputs, c: &Counter) -> bool {
 /// that exports its symbol (`#[no_mangle]` or `#[export_name]`, whose ABI
 /// [`Counter::entry`] holds to C's) or whose address a `const` or
 /// `static` hands out (`FnRef::entry`); each free function an exports
-/// macro block (pcre3's `width::exports!`) in its file exports
+/// macro block (the PCRE2 port's `width::exports!`) in its file exports
 /// (`exported`); and each `conversion` method, one-argument and without a
-/// receiver (pcre3's `from_c`, the `width::FromC` conversions the exports'
+/// receiver (the PCRE2 port's `from_c`, the `width::FromC` conversions the exports'
 /// wrappers apply to their arguments: the identity one, and those
 /// `width::fn_ptr!` writes).
 fn entry_roots(
@@ -7511,7 +7511,7 @@ fn fail_on_errors(errors: usize) {
 mod tests {
     use super::*;
 
-    /// The `cfg` atoms of pcre3's configuration, which the fixtures use:
+    /// The `cfg` atoms of the PCRE2 port's configuration, which the fixtures use:
     /// `test`, `kani` and the `test-util` feature test-only,
     /// `verus_keep_ghost` and the `verus` feature Verus-only, the `jit`
     /// feature sure in Verus's build and `miri` never set there.
@@ -7528,7 +7528,7 @@ mod tests {
         vec!["test-util".into()]
     }
 
-    /// A counter as pcre3's configuration sets one up, with its `fn_ptr`
+    /// A counter as the PCRE2 port's configuration sets one up, with its `fn_ptr`
     /// macro.
     fn counter() -> Counter {
         Counter::new(false, atoms(), Some("fn_ptr".into()))
@@ -7638,7 +7638,7 @@ mod tests {
                 true,
             ),
             // Features that forward it, on by default or not (found in
-            // review: pcre3-capi's `hardened`, which docs/design.md, ci/abi.sh
+            // review: pcre2-capi's `hardened`, which docs/design.md, ci/abi.sh
             // and ci/consumers.sh build with, is not on by default), or name it
             // by default.
             (
@@ -8678,7 +8678,7 @@ mod tests {
         }
     }
 
-    /// pcre3-capi's `width::fn_ptr!`, as width.rs defines it.
+    /// pcre2-capi's `width::fn_ptr!`, as width.rs defines it.
     const FN_PTR_RULE: &str = r#"
 macro_rules! fn_ptr {
     (
@@ -9270,12 +9270,12 @@ fn uncalled() {
 
     /// A marked function built only for Verus is discharged as a shipped
     /// one is, so it needs a Kani record too. The case is S6's usize fill
-    /// axiom (`crates/pcre3-unicode/src/vspec.rs`) moved under
+    /// axiom (`crates/pcre2-unicode/src/vspec.rs`) moved under
     /// `cfg(verus_keep_ghost)`, against `verus/seams/kani-s6.md` with and
     /// without its quote.
     #[test]
     fn a_verus_only_discharged_function_needs_a_record() {
-        let file = "crates/pcre3-unicode/src/vspec.rs";
+        let file = "crates/pcre2-unicode/src/vspec.rs";
         let mut c = Counter {
             krate: "k".into(),
             file: PathBuf::from(file),
@@ -9912,10 +9912,10 @@ fn outside() {}
     #[test]
     fn module_paths_follow_the_file() {
         for (krate, rel, want) in [
-            ("pcre3-syntax", "lib.rs", "pcre3_syntax"),
-            ("pcre3", "vm/exec.rs", "pcre3::vm::exec"),
-            ("pcre3", "vm/mod.rs", "pcre3::vm"),
-            ("pcre3", "vm/assert.rs", "pcre3::vm::assert"),
+            ("pcre2-syntax", "lib.rs", "pcre2_syntax"),
+            ("pcre2", "vm/exec.rs", "pcre2::vm::exec"),
+            ("pcre2", "vm/mod.rs", "pcre2::vm"),
+            ("pcre2", "vm/assert.rs", "pcre2::vm::assert"),
         ] {
             let got = module_path(krate, Path::new(rel)).join("::");
             assert_eq!(
@@ -9968,7 +9968,7 @@ fn outside() {}
         );
     }
 
-    /// Verus's attribute form (expat-rs's: a contract in `verus_spec` under
+    /// Verus's attribute form (the Expat port's: a contract in `verus_spec` under
     /// a `cfg_attr`, for a port whose MSRV is below vstd's) verifies a plain
     /// function outside `verus!`, under a predicate the configuration
     /// settles (the Verus feature, a `verus_sets` feature, `not` of a

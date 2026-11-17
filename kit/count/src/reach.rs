@@ -4,7 +4,7 @@
 //!
 //! The roots are the counter's (`entry_roots`):
 //! - every function of a shipped crate that exports its symbol
-//!   (`no_mangle`, `export_name`): `pcre3_version` and the POSIX wrappers;
+//!   (`no_mangle`, `export_name`): `pcre2_version` and the POSIX wrappers;
 //! - every function a `const` or `static` hands out as a value;
 //! - every body a `width::exports!` block exports, and the
 //!   `width::FromC::from_c` conversions its `_8`, `_16` and `_32` wrappers
@@ -175,7 +175,7 @@ pub(crate) fn key(owner: &str, name: &str) -> String {
     }
 }
 
-/// The bodies the `mac!` blocks (pcre3's `width::exports!`) in `files`
+/// The bodies the `mac!` blocks (the PCRE2 port's `width::exports!`) in `files`
 /// export: each block's `fn BODY [..]` entries, with the file that holds
 /// the block, at any depth (inside an inline `mod` or a `verus!` block
 /// too). Files are parsed with `stand_ins` applied

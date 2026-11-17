@@ -1,6 +1,6 @@
-//! The compile-inputs check (`[inputs]` in the configuration; pcre3's
+//! The compile-inputs check (`[inputs]` in the configuration; the PCRE2 port's
 //! verus/theorems/CD1.md): no function reachable from the configured
-//! roots (pcre3's `Regex::new` and `serialize::encode_as`), or, with
+//! roots (the PCRE2 port's `Regex::new` and `serialize::encode_as`), or, with
 //! `lazy`, from a lazy builder (a function a `get_or_init` calls),
 //! reads an input other than its arguments unless the configured table
 //! names it with a reason; with `lazy`, nor does a `get_or_init`
@@ -1081,7 +1081,7 @@ fn row(cd1: &str, file: &Path, name: &str, input: &str) -> bool {
 
 /// The functions reachable from `roots`: each configured root (a function
 /// `name`, of `owner` when one is given, in a file whose path ends in
-/// `file`, such as pcre3's `Regex::new` in crates/pcre3/src/regex.rs),
+/// `file`, such as the PCRE2 port's `Regex::new` in crates/pcre2/src/regex.rs),
 /// and with `lazy` every function that calls `get_or_init` (a part built
 /// on first use and kept). Each reachable function's index maps to its
 /// caller on a shortest chain (`None` for a root).
@@ -1459,7 +1459,7 @@ mod tests {
     use verus_syn::{ImplItem, Item, parse_file};
 
     /// The functions and statics of `src` (an `impl Regex` holds the root;
-    /// [`reads`] places them in crates/pcre3/src/regex.rs).
+    /// [`reads`] places them in crates/pcre2/src/regex.rs).
     /// A function's owner, name, body, parameters and receiver.
     type Scanned = (String, String, Body, usize, bool);
 
@@ -1555,19 +1555,19 @@ mod tests {
         (fns, statics, types, aliases)
     }
 
-    /// pcre3's roots, which the fixtures use: `Regex::new`,
+    /// The PCRE2 port's roots, which the fixtures use: `Regex::new`,
     /// `serialize::encode_as` and the lazy builders.
-    fn pcre3_roots() -> &'static [crate::config::Root] {
+    fn pcre2_roots() -> &'static [crate::config::Root] {
         static ROOTS: std::sync::OnceLock<Vec<crate::config::Root>> = std::sync::OnceLock::new();
         ROOTS.get_or_init(|| {
             vec![
                 crate::config::Root {
-                    file: "crates/pcre3/src/regex.rs".into(),
+                    file: "crates/pcre2/src/regex.rs".into(),
                     owner: Some("Regex".into()),
                     name: "new".into(),
                 },
                 crate::config::Root {
-                    file: "crates/pcre3/src/serialize.rs".into(),
+                    file: "crates/pcre2/src/serialize.rs".into(),
                     owner: None,
                     name: "encode_as".into(),
                 },
@@ -1577,19 +1577,19 @@ mod tests {
 
     fn roots() -> Roots<'static> {
         Roots {
-            crates: vec!["pcre3", "pcre3-syntax", "pcre3-unicode"],
-            roots: pcre3_roots(),
+            crates: vec!["pcre2", "pcre2-syntax", "pcre2-unicode"],
+            roots: pcre2_roots(),
             lazy: true,
         }
     }
 
     fn reads(src: &str) -> Vec<(String, String)> {
         let (raw, statics, types, aliases) = scan(src);
-        let path = Path::new("crates/pcre3/src/regex.rs");
+        let path = Path::new("crates/pcre2/src/regex.rs");
         let fns: Vec<Func> = raw
             .iter()
             .map(|(owner, name, b, params, receiver)| Func {
-                krate: "pcre3",
+                krate: "pcre2",
                 file: path,
                 line: 0,
                 owner: owner.clone(),
@@ -1733,15 +1733,15 @@ mod tests {
             fn step(p: u8) {}";
         let (raw, statics, types, aliases) = scan(src);
         let files = [
-            Path::new("crates/pcre3/src/regex.rs"),
-            Path::new("crates/pcre3/src/vm/assert.rs"),
-            Path::new("crates/pcre3-syntax/src/parse/groups.rs"),
+            Path::new("crates/pcre2/src/regex.rs"),
+            Path::new("crates/pcre2/src/vm/assert.rs"),
+            Path::new("crates/pcre2-syntax/src/parse/groups.rs"),
         ];
         let fns: Vec<Func> = raw
             .iter()
             .zip(files)
             .map(|((owner, name, b, params, receiver), file)| Func {
-                krate: "pcre3",
+                krate: "pcre2",
                 file,
                 line: 0,
                 owner: owner.clone(),
@@ -1758,7 +1758,7 @@ mod tests {
                 .collect();
         assert_eq!(
             got,
-            vec![("crates/pcre3/src/vm/assert.rs".to_string(), "N".to_string())]
+            vec![("crates/pcre2/src/vm/assert.rs".to_string(), "N".to_string())]
         );
     }
 
@@ -2347,22 +2347,22 @@ mod tests {
 
     #[test]
     fn rows_allow_by_input_function_and_file() {
-        let row = "| `N` | `fn helper` | `crates/pcre3/src/regex.rs` | why |";
+        let row = "| `N` | `fn helper` | `crates/pcre2/src/regex.rs` | why |";
         assert!(super::row(
             row,
-            Path::new("crates/pcre3/src/regex.rs"),
+            Path::new("crates/pcre2/src/regex.rs"),
             "helper",
             "N"
         ));
         assert!(!super::row(
             row,
-            Path::new("crates/pcre3/src/engine.rs"),
+            Path::new("crates/pcre2/src/engine.rs"),
             "helper",
             "N"
         ));
         assert!(!super::row(
             row,
-            Path::new("crates/pcre3/src/regex.rs"),
+            Path::new("crates/pcre2/src/regex.rs"),
             "helper",
             "M"
         ));

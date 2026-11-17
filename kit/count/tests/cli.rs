@@ -2110,7 +2110,7 @@ fn the_badge_is_held_to_the_floor() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// chainz's `export!`, `forward!` and `twins!` shapes (one definition each,
+/// A zlib port's `export!`, `forward!` and `twins!` shapes (one definition each,
 /// as crates/zlib-capi writes them), and macros of another crate, one over
 /// three lines and one on one.
 const MACROS: &str = r#"verus! {
