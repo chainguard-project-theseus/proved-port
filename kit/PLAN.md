@@ -253,7 +253,11 @@ is deleted in that PR.
    the kit counter's `checked-*`. The FLOOR template's raise rule is one
    rule for every port: FLOOR and the badge rise in their own PR, to the
    figures the check names, never in the PR that earns them (challoc's,
-   expat-rs's and chainz's rule; pcre3 moves to it from same-PR).
+   expat-rs's and chainz's rule; pcre3 moves to it from same-PR). Its
+   two exceptions are in FLOOR's header: the port's first proof PR
+   raises FLOOR from 0.0, and a FLOOR PR may stop below the figure the
+   check names, never below the base's, for an open PR that lands that
+   share lower.
    Exit: neither port restates a header's rule
    outside the header, and each header holds the template's text.
    **Status:** the kit side is done: `kit/templates/` (FLOOR, RLIMIT,

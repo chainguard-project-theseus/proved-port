@@ -48,11 +48,13 @@ templates and their checks use.
 The FLOOR raise rule is the same in every port: FLOOR and the README
 badge rise in a pull request of their own, to the figures the check
 names, never in the pull request that earns them, so that pull requests
-landing in parallel do not conflict there. The one exception is the
+landing in parallel do not conflict there. One exception is the
 port's first proof pull request, which may raise FLOOR from 0.0 in the
 same pull request, whether it brings the counter or the counter landed
 earlier with FLOOR at 0.0 (FLOOR's header; `kit/count/README.md`,
-"Bootstrapping a port").
+"Bootstrapping a port"). A FLOOR pull request may also stop below the
+figure the check names, never below the base revision's, for an open
+pull request that lands that share lower (FLOOR's header).
 
 | template | copy to | what it holds |
 |---|---|---|

@@ -100,7 +100,9 @@ issue or PR.
   checks pass the base revision themselves.
 - **FLOOR and rlimit headroom.** The `verus` check holds the shipped
   crates to verus/FLOOR and verus/RLIMIT, and the header of each file is
-  its rule: when a figure rises, when a `lowered` or `rlimit-raised` line
+  its rule: when a figure rises and to what (the figure the check names,
+  or less, never below the base revision's, for an open pull request
+  that lands the share lower), when a `lowered` or `rlimit-raised` line
   is allowed and what it says. Read them before a change that moves a
   share or an rlimit. Never ask a maintainer to lower the floor.
 - **Entry points.** Every function a C caller reaches is verified,

@@ -42,8 +42,10 @@ with no `VERUS_BASE` it fails before it runs anything. `VERUS_BASE=none`
 proof pull request that adds the first FLOOR; no check passes it.
 FLOOR and the badge rise in a pull request of their own, to the figures
 the check names, never in the pull request that earns them, but for the
-port's first proof pull request, which may raise them from 0.0 (FLOOR's
-header).
+port's first proof pull request, which may raise them from 0.0, and
+for a FLOOR pull request that stops below the figure the check names,
+never below the base revision's, for an open pull request that lands
+that share lower (FLOOR's header).
 
 The README's badge shows FLOOR's `functions` and `lines` figures and
 links here (`verus/README.md#coverage`). With the counter's `[badge]`

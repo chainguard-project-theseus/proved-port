@@ -197,10 +197,15 @@ Rules:
   their own, to the figures the check names on main, never in the PR
   that earns them, so parallel PRs never conflict there (pcre3's
   same-PR raises once cost #689 four updates from main;
-  `references/pitfalls.md`). The one exception is the port's first
+  `references/pitfalls.md`). One exception is the port's first
   proof PR, which may raise FLOOR from 0.0 in the same PR, whether it
   brings the counter or the counter landed earlier at FLOOR 0.0
-  (`references/lifecycle.md`, phase 4).
+  (`references/lifecycle.md`, phase 4). A FLOOR PR may record a figure
+  below the one the check names, never below the base's, when an open
+  PR lands that share lower without a `lowered` line (code that
+  verifies in fewer lines); its description names that PR, and the next
+  FLOOR PR records the figure the check names then (cg-bzip2 #306,
+  #337).
 - FLOOR compares with one base, the one Checks sets
   (`CHAINGUARD_BASE_REVISION`): the PR's base on a PR, and on main the
   start of the push the run covers. Not `HEAD^`: Checks settles a burst
