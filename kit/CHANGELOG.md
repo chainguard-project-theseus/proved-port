@@ -27,6 +27,7 @@ where it reports drift.
   itself, `make verus` failed on a fresh checkout before any proof ran
   (from 0.4.1). Focus mode's `verus-partial/` is a directory cargo
   creates, so its clean was unaffected.
+- The counter's version is 0.4.4, ready for the v0.4.4 tag.
 
 ### Porting notes
 
