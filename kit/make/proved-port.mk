@@ -172,9 +172,11 @@ verus_clean_cmd = $(if $(VERUS_CLEAN),,$(verus_clean_members) )cargo clean --loc
   $(if $(VERUS_CLEAN),$(addprefix -p ,$(VERUS_CLEAN)),$$(printf ' -p %s' $$members)) \
   $(verus_profile_flags) \
   --target-dir $(VERUS_TARGET_DIR)$(if $(filter focus,$(VERUS_MODE)),/verus-partial)
+# cargo verus refuses a -j before a -p ("Args forwarded to Cargo must
+# precede args forwarded to Verus"), so -j comes last.
 verus_proofs_cmd = cargo verus $(VERUS_MODE) --locked \
-  $(if $(VERUS_JOBS),-j $(VERUS_JOBS)) \
   $(addprefix -p ,$(VERUS_CRATES)) $(VERUS_CARGO_FLAGS) \
+  $(if $(VERUS_JOBS),-j $(VERUS_JOBS)) \
   -- --time-expanded --output-json \
   $(if $(VERUS_THREADS),--num-threads $(VERUS_THREADS)) $(VERUS_FLAGS) \
   > $(VERUS_STATS)
