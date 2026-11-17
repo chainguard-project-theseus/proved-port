@@ -12,7 +12,7 @@
 # that differ from their defaults, then includes this file, and runs make
 # from its root:
 #
-#   VERUS_CRATES = pcre3-unicode pcre3-syntax pcre3 pcre3-capi
+#   VERUS_CRATES = pcre2-unicode pcre2-syntax pcre2 pcre2-capi
 #   KANI_CRATES  = $(VERUS_CRATES)
 #   PROVED_PORT_VERSION = 0.4.1
 #   PROVED_PORT_HOME ?= /usr/share/proved-port
@@ -84,7 +84,7 @@ VERUS_CRATES ?=
 # VERUS_MODE: `focus` checks VERUS_CRATES and not their dependencies;
 # `verify` (challoc) checks every package cargo selects.
 VERUS_MODE ?= focus
-# VERUS_CARGO_FLAGS: further cargo flags (expat-rs: `--features verus`;
+# VERUS_CARGO_FLAGS: further cargo flags (the Expat port: `--features verus`;
 # challoc's second quantum: `--no-default-features --features quantum8`).
 VERUS_CARGO_FLAGS ?=
 # VERUS_THREADS: Verus's --num-threads; empty leaves Verus's default (the

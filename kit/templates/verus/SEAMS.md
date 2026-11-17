@@ -30,7 +30,7 @@ contract is still trusted, now as vstd's.
   Ids are assigned once and never reused; a theorem that rests on
   another theorem's seam names its id instead of copying the row.
   Ids assigned in an older form keep it, since an id is never renamed:
-  pcre3's `S-dn1-1` (the theorem's whole id, a hyphen, then the number)
+  the PCRE2 port's `S-dn1-1` (the theorem's whole id, a hyphen, then the number)
   and `S-jit-2` (a hyphen after the family) are two. New ids take the
   form above, numbered after the family's ids in that form. The counter
   reads any id that starts `S-`.

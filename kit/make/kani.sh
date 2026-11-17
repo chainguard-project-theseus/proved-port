@@ -30,11 +30,11 @@
 #
 #   KANI_CRATES        the packages with harnesses, each run with -p;
 #                      empty runs cargo's default selection, no -p
-#   KANI_ONLY          one crate of KANI_CRATES alone (pcre3's unicode half)
+#   KANI_ONLY          one crate of KANI_CRATES alone (the PCRE2 port's unicode half)
 #   KANI_EXCLUDE       every crate of KANI_CRATES but this one (the rest)
 #   KANI_HARNESS       one harness (Kani's --harness, which matches a
 #                      substring of the full name) of the one selected
-#                      crate: chainz's foreach of KANI_ONLY and KANI_HARNESS
+#                      crate: a port's foreach of KANI_ONLY and KANI_HARNESS
 #   KANI_SHARDS        split every harness of the selected crates into
 #   KANI_SHARD         this many shards and run shard KANI_SHARD (1 to
 #                      KANI_SHARDS) of them, each by its full name

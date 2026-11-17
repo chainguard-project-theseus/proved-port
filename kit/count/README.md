@@ -6,7 +6,7 @@ verified, trusted, discharged or outside `verus!`, and holds the shipped
 crates' shares to `verus/FLOOR`. With its optional checks it also gates
 recursion, entry-point reachability (REACH), compile inputs, the C
 caller's token mints (MINTS) and rlimit headroom (RLIMIT). It is
-pcre3's `verus/count` made generic, with challoc's generated-ledger back
+The PCRE2 port's `verus/count` made generic, with challoc's generated-ledger back
 end added; `src/main.rs`'s module documentation states every rule.
 
 ## Running
@@ -106,7 +106,7 @@ narrowing as the failing run prints it, before `, so ...`, and whose
 
 ```toml
 [[narrowed]]
-change = "[inputs] roots drops Regex::new in crates/pcre3/src/regex.rs"
+change = "[inputs] roots drops Regex::new in crates/pcre2/src/regex.rs"
 reason = "Regex::new moved to builder.rs, which the new root names"
 ```
 
@@ -149,7 +149,7 @@ file or directory under `src/` is a symlink (exit 2), since the base
 comparison matches crates by path and another spelling of a directory,
 or another crate's sources reached through a link, would pass for a new
 crate.
-[configs/pcre3.toml](configs/pcre3.toml) and
+[configs/pcre2.toml](configs/pcre2.toml) and
 [configs/challoc.toml](configs/challoc.toml) are complete examples.
 
 | section | key | meaning |
@@ -313,11 +313,11 @@ neither list, every verified function under an unsettled `cfg` turns
 trusted at once, and FLOOR (and REACH, for one an entry point reaches)
 fails on that PR.
 
-- pcre3: `verus_sets = ['feature = "jit"']` and `verus_never_sets =
-  ["miri"]`, as [configs/pcre3.toml](configs/pcre3.toml) has. Without
-  them, 27 verified functions of pcre3-capi count as trusted
+- The PCRE2 port: `verus_sets = ['feature = "jit"']` and `verus_never_sets =
+  ["miri"]`, as [configs/pcre2.toml](configs/pcre2.toml) has. Without
+  them, 27 verified functions of pcre2-capi count as trusted
   (functions 91.5% to 90.8%), and REACH fails on exec.rs.
-- expat-rs and chainz: none. Neither has a verified function under an
+- The Expat port and a zlib port: none. Neither has a verified function under an
   unsettled `cfg`, and `--list` is unchanged.
 - challoc: [configs/challoc.toml](configs/challoc.toml)'s declarations,
   measured on the 11-10 snapshot `0497dc34`; they are re-measured on
@@ -334,7 +334,7 @@ An atom applies to every crate under `[crates]`, while a cargo feature
 is per crate. `feature = "jit"` in `verus_sets` asserts that the proof
 run enables `jit` in every configured crate that has a feature of that
 name, so a second crate with a non-default `jit` would be credited
-wrongly. In pcre3 only pcre3-capi has `jit`.
+wrongly. In the PCRE2 port only pcre2-capi has `jit`.
 
 ## The badge
 
@@ -386,7 +386,7 @@ the file sits, so keep the file at the root.
 
 ## Two ways to discharge a seam
 
-- **The Kani marker** (pcre3): a trusted function carries
+- **The Kani marker** (the PCRE2 port): a trusted function carries
   `#[cfg_attr(any(), discharged_by = "kani")]` and a `kani-*.md` record
   quotes it. The report is one table with a `discharged` column, and the
   checked figures add the discharged functions. The marker is read through
@@ -589,7 +589,7 @@ rustc would agree with:
 `count.toml` has no key that lets a run past these: the way forward is
 to rewrite the macro so it expands as rustc's would within the bounds
 (split a long invocation, keep one definition with the `cfg` inside its
-body). chainz, pcre3 and expat-rs come nowhere near the bounds (at most
+body). A zlib port, the PCRE2 port and the Expat port come nowhere near the bounds (at most
 41 iterations of one repetition, and an expansion two deep).
 `thread_local!` writes statics, and counts nothing.
 
@@ -637,7 +637,7 @@ defines that name, which fails the run as above.
 
 Adopting a kit release that expands macros lowers a port's shares with no
 change to the port, as functions that were in no denominator join it
-(chainz from 31.5% to 27.3% of functions, pcre3 from 91.5% to 85.6%), so
+(a zlib port from 31.5% to 27.3% of functions, the PCRE2 port from 91.5% to 85.6%), so
 the first pin move fails its FLOOR. A port holds its FLOOR by verifying
 more: it brings the macros' bodies inside `verus!` (below), verified or
 trusted at a seam, and the pin move waits until the port's figures hold
@@ -705,37 +705,40 @@ another crate's macro.
 ## Parity
 
 The parity runs below predate macro expansion: a port whose crates
-invoke their own item macros (pcre3-capi's `width::exports!` and
+invoke their own item macros (pcre2-capi's `width::exports!` and
 `fn_ptr!`) now counts their functions as well, so its table and
 `--list` differ by those rows.
 
 Run on the same commits, the kit counter's full output (standard
-output, standard error and `--list`) is byte-identical to each port's
-in-tree counter, but for one line:
+output, standard error and `--list`) was byte-identical to each port's
+in-tree counter, but for one line. The PCRE2 port's runs were on its
+tree of the time, under a configuration that
+[configs/pcre2.toml](configs/pcre2.toml) keeps as an example, with
+the crates and paths named `pcre2-*` here. The port carries its own
+`verus/count.toml`, with its own crate names.
 
 | port | commit | configuration | `--floor verus/FLOOR --base-rev HEAD^` | `--list` |
 |---|---|---|---|---|
-| pcre3 | pcre3 main `158cf87a` | `configs/pcre3.toml` | identical but the `ok compile inputs` line | identical but that line (3,919 lines) |
+| the PCRE2 port | its main at the time | `configs/pcre2.toml` | identical but the `ok compile inputs` line | identical but that line (3,919 lines) |
 | challoc | challoc main `fcde6b2` | `configs/challoc.toml` | identical | identical (1,674 lines) |
 | challoc | challoc main `39751a02` | `configs/challoc.toml` | identical (also with no flag, and `--list --floor verus/FLOOR --base-rev fcde6b2`) | identical (1,672 lines) |
 
 The kit's `ok compile inputs` line also names each root it resolved
-and where (`(roots Regex::new at crates/pcre3/src/regex.rs:274,
-encode_as at crates/pcre3/src/serialize.rs:631)`); pcre3's does not
-name them. pcre3's `--rlimit` path, with statistics written for the
+and where (`(roots Regex::new at FILE:LINE, encode_as at FILE:LINE)`);
+the PCRE2 port's does not name them. The PCRE2 port's `--rlimit` path, with statistics written for the
 purpose (every crate, every function with a `#[verifier::rlimit]`) and
 `--base-rev HEAD^`, differs in the same line alone.
 
 Where the counters still differ, on inputs neither port has today:
 
-- pcre3's counter counts the commas of generic arguments in a call's
+- The PCRE2 port's counter counts the commas of generic arguments in a call's
   arguments (`helper(make::<u8, u16>())`) as the call's, and drops the
   edge to a one-parameter `helper`; the kit leaves such a call's arity
-  unknown. pcre3's counter with the same fix gives the same output on
-  `158cf87a`.
-- pcre3's counter lets a function that keeps its body but loses a
+  unknown. The PCRE2 port's counter with the same fix gave the same output on
+  that commit.
+- The PCRE2 port's counter lets a function that keeps its body but loses a
   `#[verifier::rlimit(N)]` below the default rise to the default with
-  no `rlimit-raised` line; the kit requires one. pcre3 has no limit
+  no `rlimit-raised` line; the kit requires one. The PCRE2 port has no limit
   below the default. (challoc's counter has neither the call walk nor
   the rlimit check.)
 - The kit refuses a stand-in that would rewrite a name it classes code
@@ -744,14 +747,14 @@ Where the counters still differ, on inputs neither port has today:
   `cfg_attr` only when Verus's build is sure to meet the predicate.
   Neither port has a stand-in, root or attribute these refuse.
 - The kit counts a function under a `cfg` Verus's build might not meet
-  as trusted ("Verus's build"); pcre3's and challoc's counters take
-  every atom they do not configure to hold where Verus runs. On pcre3
-  main `b5633f1d`, pcre3-capi's `jit` and `miri` guards are the only such
+  as trusted ("Verus's build"); the PCRE2 port's and challoc's counters take
+  every atom they do not configure to hold where Verus runs. On the PCRE2 port's
+  main at the time, pcre2-capi's `jit` and `miri` guards are the only such
   `cfg`s on a verified or trusted function. With `verus_sets = ['feature
   = "jit"']` and `verus_never_sets = ["miri"]`, as
-  [configs/pcre3.toml](configs/pcre3.toml) has, `--list` is the same as
-  pcre3's counter's rule gives; without them, 27 verified functions
-  of pcre3-capi (exec.rs and tables.rs's `Libc` ctype items) count as
+  [configs/pcre2.toml](configs/pcre2.toml) has, `--list` is the same as
+  the PCRE2 port's counter's rule gives; without them, 27 verified functions
+  of pcre2-capi (exec.rs and tables.rs's `Libc` ctype items) count as
   trusted. On challoc main `0497dc34`, its `target_arch` and
   `loom` guards are the only ones: with
   [configs/challoc.toml](configs/challoc.toml)'s declarations `--list`
@@ -777,14 +780,14 @@ Where the counters still differ, on inputs neither port has today:
   fails for want of a `lowered` line. The key may stay after the rename;
   it only widens what a base's copy may name.
 - challoc's counter reads an inline `#[cfg(verus_keep_ghost)] mod { }`
-  as shipped code; the kit reads it as Verus-only, as pcre3's does, so
+  as shipped code; the kit reads it as Verus-only, as the PCRE2 port's does, so
   only its trusted functions count.
 - challoc's ledger reads only `src/FILE:LINE` entries; the kit's reads
   any `FILE.rs:LINE`, so a ledger may cover several crates.
 - The failure text for a ledger status that names a loader or kernel
   premise without its `callers:` clause, and for an unlisted compile
   input, words its reason from the configuration rather than from
-  challoc's and pcre3's file names.
+  challoc's and the PCRE2 port's file names.
 
 ## Bootstrapping a port
 
@@ -830,11 +833,11 @@ the `--floor` flag, which the counter reads at the head, and
 the key set, step 1's `--floor verus/FLOOR` reads the directory and the
 counter exits 2.
 
-On a chainz pull request's head (`eb79512`), the two-line configuration counts
-16 verified functions in zlib-core, the number chainz's own
+On a pull request head of a zlib port, the two-line configuration counts
+16 verified functions in zlib-core, the number that port's own
 `verus/FLOOR` records (`verified 16`, an older single-figure format
 the kit does not read), and names `functions 4.1`, `lines 12.8`. On
-expat-rs's U1 worktree, with `verus_features = ["verus"]`, it counts
+the Expat port's first-proof worktree, with `verus_features = ["verus"]`, it counts
 `utf8::invalid_char` (57 lines) as verified, the only one, as the
 pilot's hand count did.
 

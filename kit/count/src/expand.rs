@@ -1,5 +1,5 @@
 //! `macro_rules!` expansion, so that the functions a port's own item
-//! macros write (chainz's `export!`, pcre3's `width::exports!`) are
+//! macros write (a zlib port's `export!`, the PCRE2 port's `width::exports!`) are
 //! counted like any other ([`crate::Counter::item_macro`]).
 //!
 //! [`Rules::parse`] reads a definition's rules; [`Rules::expand`] matches

@@ -42,7 +42,7 @@ pub struct CrateStats {
 /// Reads the JSON documents `--output-json` prints, one per crate Verus
 /// checks (vstd's too, when cargo rebuilds it), into the statistics of
 /// each crate a function is named under, as Verus spells the crate
-/// (`pcre3_syntax`). A document's result line goes to the crate most of
+/// (`pcre2_syntax`). A document's result line goes to the crate most of
 /// its functions are named under. A document with no per-function
 /// breakdown (Verus run without `--time-expanded`) is an error, and so
 /// are documents that interleave ([`interleaved`]).

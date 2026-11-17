@@ -1,7 +1,7 @@
 //! The token-mint gate (verus/MINTS, `[mints]` in the configuration): a
 //! port's C API makes every C caller's argument token through one trusted
-//! function, the mint function (pcre3's `object::c_mint`), which makes a
-//! token of any kind that implements the token trait (pcre3's `CToken`).
+//! function, the mint function (the PCRE2 port's `object::c_mint`), which makes a
+//! token of any kind that implements the token trait (the PCRE2 port's `CToken`).
 //! Each kind is a premise (the C caller's contract its mint's `# Safety`
 //! states), and each function that calls the mint function is a kind's
 //! mint, verified over it. So a new kind, or a new mint, is a new premise,
@@ -691,12 +691,12 @@ mod tests {
     use super::*;
 
     const LIST: &str = "# comment\n\
-kind crates/pcre3-capi/src/object.rs CBuf S-cc3\n\
-kind crates/pcre3-capi/src/object.rs &CObj S-cc3\n\
-kind crates/pcre3-capi/src/object.rs &mut CObj S-cc3\n\
-mint crates/pcre3-capi/src/object.rs c_buffer CBuf\n\
-mint crates/pcre3-capi/src/object.rs c_object &CObj\n\
-mint crates/pcre3-capi/src/object.rs c_object_mut &mut CObj\n";
+kind crates/pcre2-capi/src/object.rs CBuf S-cc3\n\
+kind crates/pcre2-capi/src/object.rs &CObj S-cc3\n\
+kind crates/pcre2-capi/src/object.rs &mut CObj S-cc3\n\
+mint crates/pcre2-capi/src/object.rs c_buffer CBuf\n\
+mint crates/pcre2-capi/src/object.rs c_object &CObj\n\
+mint crates/pcre2-capi/src/object.rs c_object_mut &mut CObj\n";
 
     /// A clean object.rs: the trait, `c_mint`, three kinds and their mints,
     /// inside a `verus!` block as the real one is.
@@ -742,9 +742,9 @@ pub(crate) unsafe fn c_object_mut<'a, T: Object>(ptr: *mut T) -> (r: Tracked<&'a
 } // verus!
 "#;
 
-    const FILE: &str = "crates/pcre3-capi/src/object.rs";
+    const FILE: &str = "crates/pcre2-capi/src/object.rs";
 
-    /// pcre3's names, which the fixtures use.
+    /// The PCRE2 port's names, which the fixtures use.
     fn names() -> Names {
         Names {
             mint: "c_mint".into(),
@@ -892,7 +892,7 @@ pub(crate) unsafe fn c_object_mut<'a, T: Object>(ptr: *mut T) -> (r: Tracked<&'a
         fails_with(
             &src,
             LIST,
-            "mint `crates/pcre3-capi/src/object.rs c_buffer` does not call c_mint",
+            "mint `crates/pcre2-capi/src/object.rs c_buffer` does not call c_mint",
         );
     }
 
@@ -909,24 +909,24 @@ pub(crate) unsafe fn c_object_mut<'a, T: Object>(ptr: *mut T) -> (r: Tracked<&'a
         fails_with(
             CLEAN,
             &dup,
-            "mint `crates/pcre3-capi/src/object.rs c_buffer` is listed 2 times",
+            "mint `crates/pcre2-capi/src/object.rs c_buffer` is listed 2 times",
         );
         let dupk = format!("{LIST}kind {FILE} CBuf S-cc3\n");
         fails_with(
             CLEAN,
             &dupk,
-            "kind `crates/pcre3-capi/src/object.rs CBuf` is listed 2 times",
+            "kind `crates/pcre2-capi/src/object.rs CBuf` is listed 2 times",
         );
         let stale = format!("{LIST}kind {FILE} CGone S-cc3\nmint {FILE} c_gone CBuf\n");
         fails_with(
             CLEAN,
             &stale,
-            "kind `crates/pcre3-capi/src/object.rs CGone` has no `impl CToken for CGone`",
+            "kind `crates/pcre2-capi/src/object.rs CGone` has no `impl CToken for CGone`",
         );
         fails_with(
             CLEAN,
             &stale,
-            "mint `crates/pcre3-capi/src/object.rs c_gone` does not call c_mint",
+            "mint `crates/pcre2-capi/src/object.rs c_gone` does not call c_mint",
         );
     }
 
@@ -1028,7 +1028,7 @@ pub(crate) unsafe fn c_object_mut<'a, T: Object>(ptr: *mut T) -> (r: Tracked<&'a
             LIST,
             "a macro other than verus! names CToken",
         );
-        fails_with("fn (", LIST, "crates/pcre3-capi/src/object.rs:1");
+        fails_with("fn (", LIST, "crates/pcre2-capi/src/object.rs:1");
         fails_with("verus! { fn () }", LIST, "verus! block");
         fails_with("::vstd::prelude::verus! { fn () }", LIST, "verus! block");
     }
@@ -1046,7 +1046,7 @@ pub(crate) unsafe fn c_object_mut<'a, T: Object>(ptr: *mut T) -> (r: Tracked<&'a
             tables: "z/SEAMS.md".into(),
             stand_ins: Vec::new(),
         };
-        let list = LIST.replace("crates/pcre3-capi/src/object.rs", "crates/z/src/tok.rs");
+        let list = LIST.replace("crates/pcre2-capi/src/object.rs", "crates/z/src/tok.rs");
         let run = |src: &str| {
             let mut s = Scan::new(other.clone());
             scan_file("crates/z/src/tok.rs", src, &mut s);
@@ -1055,7 +1055,7 @@ pub(crate) unsafe fn c_object_mut<'a, T: Object>(ptr: *mut T) -> (r: Tracked<&'a
             errs
         };
         assert_eq!(run(&rename(CLEAN)), Vec::<String>::new());
-        // The pcre3 names mean nothing here: CLEAN defines no `make_tok`.
+        // The PCRE2 port's names mean nothing here: CLEAN defines no `make_tok`.
         let got = run(CLEAN).join("\n");
         assert!(
             got.contains("make_tok is defined 0 times") && got.contains("z/MINTS:"),
