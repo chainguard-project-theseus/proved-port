@@ -130,6 +130,10 @@
 //! module that defines the type, not the module of its `impl`
 //! ([`Counter::name_methods`]). A `#[verifier::rlimit]` on a function the
 //! statistics do not name fails the run, and every such limit is named.
+//! Statistics in which a document starts before the one before it ends
+//! fail the run too ("documents interleave", exit 2): cargo printed two
+//! crates' documents at once, which `make verus-proofs` prevents with
+//! cargo -j 1 (`VERUS_JOBS`).
 //!
 //! With `[inputs]`, it checks compile's inputs (verus/theorems/CD1.md,
 //! [`inputs`]): it fails when a function reachable from the configured

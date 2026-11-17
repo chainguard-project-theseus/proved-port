@@ -1319,6 +1319,64 @@ fn a_crate_of_verus_only_proofs_is_held_to_its_headroom() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// One crate's statistics laid out as Verus prints them, a line per
+/// top-level key between a `{` line and a `}` line: `name` using `used`
+/// of its rlimit count.
+fn pretty_stats(name: &str, used: u64) -> Vec<String> {
+    vec![
+        "{".to_owned(),
+        format!(
+            r#"  "times-ms": {{"smt":{{"smt-run-module-times":[{{"module":"m","rlimit":0,"function-breakdown":[{{"function":"{name}","rlimit":{used}}}]}}]}}}},"#
+        ),
+        r#"  "verification-results": {"success":true,"verified":1,"errors":0}"#.to_owned(),
+        "}".to_owned(),
+    ]
+}
+
+/// Two crates' statistics pass back to back and fail, exit 2, naming the
+/// interleave, when cargo's line-at-a-time re-print of two crates checked
+/// in parallel mixed them.
+#[test]
+fn interleaved_statistics_fail_the_run() {
+    let dir = crate_of(
+        "rlimit-interleave",
+        &[("lib.rs", "verus! {\nfn v() {}\n}\n")],
+    );
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}[rlimit]\npath = \"verus/RLIMIT\"\n"),
+    )
+    .expect("write");
+    fs::write(dir.join("verus/RLIMIT"), "max-share 65\n").expect("write");
+    let (a, v) = (pretty_stats("a::v", 3_000_000), pretty_stats("vstd::x", 1));
+    let mixed: Vec<String> = [&a[0], &v[0], &a[1], &v[1], &v[2], &a[2], &v[3], &a[3]]
+        .into_iter()
+        .cloned()
+        .collect();
+    let stats = dir.join("stats.json");
+    let s = stats.to_string_lossy().into_owned();
+    for (lines, want, line) in [
+        (
+            [a.clone(), v.clone()].concat(),
+            0,
+            "ok rlimit headroom: 1 functions",
+        ),
+        (
+            mixed,
+            2,
+            "stats.json: documents interleave: line 2 starts a document before the one line 1 starts ends.",
+        ),
+    ] {
+        fs::write(&stats, lines.join("\n") + "\n").expect("write");
+        let (got, out, err) = count(&dir, &["--rlimit", &s]);
+        assert!(
+            got == want && (out.contains(line) || err.contains(line)),
+            "exit {want}: got = exit {got}, {out:?}, {err:?}; wanted = exit {want}, {line:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verus's statistics for crate `a`: each function in `fns` with the
 /// rlimit count it used.
 fn stats_naming(fns: &[(&str, u64)]) -> String {
