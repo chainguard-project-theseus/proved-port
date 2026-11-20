@@ -66,7 +66,7 @@ pull request that lands that share lower (FLOOR's header).
 | `verus/MINTS` | `verus/MINTS` | the C caller's token kinds and mints, for a port that mints tokens through one trusted function |
 | `verus/README.md` | `verus/README.md` | the sections the headers cite: Coverage (the run commands, the `shipped` row, FLOOR and the badge, which links to `verus/README.md#coverage`) and Counter in prose, shaped on pcre3, expat-rs and chainz; the rest as headings |
 | `verus/SEAMS.md` | `verus/SEAMS.md` | the core-library seams table and its columns, for hand-written seams tables. A port on the counter's generated-ledger back end (`[ledger]`) keeps a SEAMS.md that defines the ledger's kinds, categories, tools and statuses, with a "Status" section, which verus/FLOOR's header cites (challoc's; kit step 3 templates it) |
-| `verus/THEOREMS.md` | `verus/THEOREMS.md` | the trusted base and the theorem index |
+| `verus/THEOREMS.md` | `verus/THEOREMS.md` | the trusted base; each theorem file's first line is its index entry |
 | `verus/theorems/TEMPLATE.md` | `verus/theorems/<ID>.md` | one theorem: statement, mutants, checks, what it does not say, seams |
 | `verus/seams/kani-TEMPLATE.md` | `verus/seams/kani-<seam id>.md` | one Kani record: contract, statement, translation, review, tests |
 | `docs/abi-changes.md` | `docs/abi-changes.md` | the `ABI-nnn` known-differences ledger |
@@ -107,8 +107,8 @@ pull request that lands that share lower (FLOOR's header).
    for a port without an exports macro, the unwinding rule's allocator
    variant for a port that returns error codes.
 5. Keep the files true from then on: a change that adds a theorem adds
-   its file and index row, a seam its row, a Kani-discharged seam its
-   record.
+   its file, headed `# <ID>. <title>`, a seam its row, a Kani-discharged
+   seam its record.
 
 The coverage counter that reads FLOOR, RLIMIT, REACH, MINTS, the seams
 tables and the Kani records is kit step 2 (`kit/PLAN.md`).

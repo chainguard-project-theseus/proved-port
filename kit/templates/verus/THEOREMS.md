@@ -23,6 +23,11 @@ there are none.}
 
 ## Index
 
-| id | statement | file |
-|---|---|---|
-| {ID} | {ONE_LINE_STATEMENT} | [theorems/{ID}.md](theorems/{ID}.md) |
+Each theorem file's first line, `# <ID>. <title>` (the skeleton's
+heading), is its index entry. This file keeps no list of its own, so a
+change that adds a theorem adds its file and leaves this file alone. To
+list every theorem with its title:
+
+```sh
+grep -m1 '^# ' verus/theorems/[A-Z]*[0-9].md
+```
