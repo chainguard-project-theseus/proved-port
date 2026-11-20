@@ -36,7 +36,7 @@ where it reports drift.
    `verus/theorems/<ID>.md` starts with `# <ID>. <title>`, and fix
    those that do not. This loop prints each file whose first line is
    not a heading:
-   `for f in verus/theorems/[A-Z]*[0-9].md; do head -n1 "$f" | grep -q '^# ' || echo "$f"; done`. Then change the port's own
+   `for f in verus/theorems/*.md; do head -n1 "$f" | grep -q '^# ' || echo "$f"; done`. Then change the port's own
    instructions (AGENTS.md, CONTRIBUTING.md, review prompts) that tell a
    change to add an index row. A port that keeps its table changes
    nothing.

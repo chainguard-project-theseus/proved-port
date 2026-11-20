@@ -29,5 +29,5 @@ change that adds a theorem adds its file and leaves this file alone. To
 list every theorem with its title:
 
 ```sh
-grep -m1 '^# ' verus/theorems/[A-Z]*[0-9].md
+grep -m1 '^# ' verus/theorems/*.md
 ```
