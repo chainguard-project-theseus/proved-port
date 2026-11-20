@@ -1,8 +1,8 @@
 # Theorems
 
-What the Verus proofs establish today, each with its statement, where it
-is proved, and what it rests on. Every theorem also rests on the common
-trusted base (below) and on the core-library seams in [SEAMS.md](SEAMS.md).
+The trusted base every Verus theorem rests on, beyond the core-library
+seams in [SEAMS.md](SEAMS.md). Each theorem's statement, where it is
+proved and its premises are in its own file under `verus/theorems/`.
 
 This file holds the trusted base. Every theorem has a file of its own,
 `verus/theorems/<ID>.md`, named after the lead id of the change that

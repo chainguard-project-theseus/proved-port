@@ -1,9 +1,8 @@
 # Seams: what the Verus proofs take on trust
 
-Every theorem in [THEOREMS.md](THEOREMS.md) and `verus/theorems/` is
-conditional: Verus checks the verified code against the contracts of the
-items it cannot see into and assumes those contracts hold. A seam is one
-such item. A seam leaves the trusted set only when Verus verifies it, or
+Every theorem in `verus/theorems/` is conditional: Verus checks the
+verified code against the contracts of the items it cannot see into and
+assumes those contracts hold. A seam is one such item. A seam leaves the trusted set only when Verus verifies it, or
 when another tool (Kani) checks its contract and a record under
 `verus/seams/` says how.
 
