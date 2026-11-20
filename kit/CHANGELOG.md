@@ -13,6 +13,34 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.5
+
+### Changes
+
+- `verus/THEOREMS.md`'s template drops its Index table (#102). Each
+  theorem file's first line, `# <ID>. <title>` (the theorem skeleton's
+  heading), is its index entry, and the Index section gives a command
+  that lists them. The table repeated those headings, nothing checked
+  that a row matched its file, and every proof change edited the one
+  shared file, so two proof changes conflicted there even when nothing
+  else overlapped. Neither the counter nor the make targets read the
+  table.
+
+### Porting notes
+
+1. Move the pin together, to 0.4.5, as 0.3.1's note 1 lists, then run
+   `make verus-headers`. A port moving from 0.4.3 or earlier applies the
+   notes of each release in between first.
+2. Optional: a port may delete its `verus/THEOREMS.md` Index table and
+   take the template's Index section. First check that each
+   `verus/theorems/<ID>.md` starts with `# <ID>. <title>`, and fix
+   those that do not. This loop prints each file whose first line is
+   not a heading:
+   `for f in verus/theorems/*.md; do head -n1 "$f" | grep -q '^# ' || echo "$f"; done`. Then change the port's own
+   instructions (AGENTS.md, CONTRIBUTING.md, review prompts) that tell a
+   change to add an index row. A port that keeps its table changes
+   nothing.
+
 ## 0.4.4
 
 ### Changes

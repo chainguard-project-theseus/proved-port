@@ -1,8 +1,8 @@
 # Theorems
 
-What the Verus proofs establish today, each with its statement, where it
-is proved, and what it rests on. Every theorem also rests on the common
-trusted base (below) and on the core-library seams in [SEAMS.md](SEAMS.md).
+The trusted base every Verus theorem rests on, beyond the core-library
+seams in [SEAMS.md](SEAMS.md). Each theorem's statement, where it is
+proved and its premises are in its own file under `verus/theorems/`.
 
 This file holds the trusted base. Every theorem has a file of its own,
 `verus/theorems/<ID>.md`, named after the lead id of the change that
@@ -23,6 +23,11 @@ there are none.}
 
 ## Index
 
-| id | statement | file |
-|---|---|---|
-| {ID} | {ONE_LINE_STATEMENT} | [theorems/{ID}.md](theorems/{ID}.md) |
+Each theorem file's first line, `# <ID>. <title>` (the skeleton's
+heading), is its index entry. This file keeps no list of its own, so a
+change that adds a theorem adds its file and leaves this file alone. To
+list every theorem with its title:
+
+```sh
+grep -m1 '^# ' verus/theorems/*.md
+```
