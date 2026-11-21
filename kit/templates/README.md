@@ -135,7 +135,7 @@ developed in private repositories.
 | `.chainguard/ci/consumers.yaml` | one instance per consumer, on request | pcre3, chainz, expat-rs |
 | `.chainguard/ci/env/default.yaml` | the empty default environment | all four |
 | `.chainguard/ci/env/dev.yaml` | the union of the checks' packages (consumers.yaml's apk-tools and wolfi-keys included), for sessions and the deps agent | pcre3, chainz, challoc#688 |
-| `.chainguard/develop.yaml` | sessions `from: .chainguard/ci/env/dev.yaml` | pcre3, chainz, challoc#688 |
+| `.chainguard/develop.yaml` | sessions `from: .chainguard/ci/env/dev.yaml`, plus `claude` (Claude Code for owner agents in sessions), which no check installs | pcre3, chainz, challoc#688 |
 | `.chainguard/deps.yaml` | the Checks deps agent: crates, toolchain (Rust, Verus with vstd, and Kani as one set), msrv (rust-version with the msrv check's toolchain), kit (the theseus-proved-port pin with `PROVED_PORT_VERSION` and the held headers), tools, the reference library, consumers | pcre3, challoc#689, chainz, expat-rs |
 | `.chainguard/reviewers.yaml` | the Checks reviewer `{PORT}`: `approve: true`, the read limits, no `diff_lines` (deprecated), and `rerun_on_checks` on the presubmit aggregate, since the reviewer reads its results | chainz and challoc |
 | `.chainguard/review-prompt.md` | the sections the four prompts share, plus the runtime-costs-of-proof check (with the coverage-first rule) and the shared-coverage-lines check, which cite AGENTS.md; the port writes its own checks. Evidence reads the presubmit results, as chainz's does; the kit rule holds the kit's pins to one release, moved as one | all four; Evidence from chainz, the kit rule from pcre3's counter rule, the check from proved-c-port's "Prove the producer, not its output" (#13) |

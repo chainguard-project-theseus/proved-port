@@ -1,5 +1,13 @@
 # Development sessions (`chainctl develop`, `make`): the environment in
 # .chainguard/ci/env/dev.yaml on a large guest (8 vCPU, 32 GiB).
+#
+# Packages: dev.yaml's (the `from:`), and claude, Claude Code for the
+# owner agents that run in development sessions. It is listed here, not
+# in dev.yaml, so that no check installs it: no check needs it. dev.yaml
+# already has apk-tools and wolfi-keys.
 version: 1
 from: .chainguard/ci/env/dev.yaml
 resources: large
+environment:
+  packages:
+    - claude

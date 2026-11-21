@@ -35,6 +35,11 @@ where it reports drift.
   shared file, so two proof changes conflicted there even when nothing
   else overlapped. Neither the counter nor the make targets read the
   table.
+- The template `.chainguard/develop.yaml` lists `claude` (Claude Code,
+  for the owner agents that run in development sessions) in its own
+  `environment.packages`, beside the `from:` dev.yaml, so no check
+  installs it (#111). A port takes it into its develop.yaml by hand;
+  nothing holds the file to the template.
 - `verus/FLOOR`'s header names the second kind of `lowered` line (#73):
   a change that deletes verified code, whole functions or lines of one,
   takes it from both the verified count and the total, and can lower a
@@ -87,6 +92,11 @@ where it reports drift.
    covers an out-of-line `mod x;` (on it, on an inline module around
    it, or atop its file), move it onto the functions, impls, traits or
    inline modules it covers.
+4. Optional: a port whose `.chainguard/develop.yaml` does not list
+   claude adds the template's `environment.packages: [claude]` block
+   beside its `from:` (#111), and the clause of the template's comment
+   that says why it is there and not in dev.yaml. A port that already
+   lists it, or runs no agents in its sessions, changes nothing.
 
 ## 0.4.4
 
