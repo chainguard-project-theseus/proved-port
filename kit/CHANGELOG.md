@@ -64,6 +64,15 @@ where it reports drift.
   `core::` when a Cargo dependency is renamed to that name. std's, and
   a bare one only a `*` or a `#[macro_use]` may bind to another (#122
   tracks it), count nothing, as before.
+- kani.sh takes `KANI_MANIFEST`, a workspace manifest it passes as
+  `--manifest-path` to `cargo fetch` and every `cargo kani` call
+  (#71), and proved-port.mk sets it from the `--manifest-path` in
+  `VERUS_CARGO_FLAGS`, so a port whose workspace is not at its root
+  (a uutils port's `crates/uutils`) sets the path once for Verus and
+  Kani.
+  kani.sh ran cargo in make's directory, where such a port has no
+  Cargo.toml, so `cargo fetch` failed even with `KANI_NONE = yes`. A
+  `KANI_MANIFEST` that names no file, or has a space, exits 2.
 - `verus/THEOREMS.md`'s template drops its Index table (#102). Each
   theorem file's first line, `# <ID>. <title>` (the theorem skeleton's
   heading), is its index entry, and the Index section gives a command
@@ -210,6 +219,12 @@ where it reports drift.
    `use std::thread_local;` is a candidate. Each such invocation now
    adds rows, and a share that falls below FLOOR needs a `lowered` line
    naming them.
+8. For #71, a port whose `VERUS_CARGO_FLAGS` names no
+   `--manifest-path` changes nothing. One that names one (a uutils port)
+   now has `make kani`, `kani-list` and `kani-regular` run cargo in that
+   workspace too, so it can drop `KANI_NONE = yes` once its harnesses
+   are there. A port whose Kani harnesses are in another workspace sets
+   `KANI_MANIFEST` to its manifest, or to empty for make's directory.
 
 ## 0.4.4
 

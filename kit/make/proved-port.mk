@@ -261,6 +261,13 @@ KANI_WEIGHTS ?=
 KANI_FAIL_PATTERN ?=
 KANI_VERSION ?=
 KANI_ARGS ?=
+# KANI_MANIFEST: the workspace manifest kani.sh points cargo at, for a
+# port whose workspace is not at its root (a uutils port's crates/uutils).
+# It defaults to the `--manifest-path` VERUS_CARGO_FLAGS gives cargo
+# verus, so one setting covers both; empty runs cargo in make's
+# directory, as before. The recipes pass it to kani.sh when set.
+KANI_MANIFEST ?= $(lastword $(patsubst --manifest-path=%,%,$(verus_manifest_flags)))
+kani_env = $(if $(strip $(KANI_MANIFEST)),KANI_MANIFEST='$(strip $(KANI_MANIFEST))' )
 export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_ARGS \
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
@@ -287,11 +294,11 @@ verus-headers: ## the kit's Verus files against the installed templates (headers
 
 kani: ## the Kani harnesses, all or a shard (kani.sh; KANI_SHARD/KANI_SHARDS; KANI_NONE=yes for none yet)
 	$(proved_port_version_check)
-	sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
+	$(kani_env)sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
 
 kani-list: ## the Kani harnesses, one CRATE NAME FILE a line
 	$(proved_port_version_check)
-	sh $(PROVED_PORT_MAKE)kani.sh --list $(KANI_ARGS)
+	$(kani_env)sh $(PROVED_PORT_MAKE)kani.sh --list $(KANI_ARGS)
 
 # KANI_IGNORING_PATTERN: what kani-regular fails on. CBMC prints
 # `warning: ignoring` when it leaves an expression unconstrained (Kani
@@ -314,7 +321,7 @@ kani-regular: ## every Kani harness one at a time in regular format with CBMC's 
 	$(proved_port_version_check)
 	$(if $(strip $(KANI_IGNORING_PATTERN)),,$(error $(kani_ignoring_empty)))
 	$(if $(findstring --verbosity,$(KANI_CBMC_ARGS)),$(error $(kani_cbmc_verbosity)))
-	KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='$(strip $(KANI_CBMC_ARGS) --verbosity 9)' KANI_FAIL_PATTERN='$(KANI_IGNORING_PATTERN)' sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
+	KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='$(strip $(KANI_CBMC_ARGS) --verbosity 9)' KANI_FAIL_PATTERN='$(KANI_IGNORING_PATTERN)' $(kani_env)sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
 
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the

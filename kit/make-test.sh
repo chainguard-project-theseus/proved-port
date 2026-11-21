@@ -392,6 +392,18 @@ expect "make -n verus-headers, another name (verus/SHARES)" "$(shows verus-heade
   "VERUS_FLOOR=verus/SHARES sh $home/make/headers.sh ."
 expect "make -n kani" "$(shows kani)" "sh $home/make/kani.sh"
 expect "make -n kani-list" "$(shows kani-list)" "sh $home/make/kani.sh --list"
+# A workspace below the root (#71, cg-uutils): VERUS_CARGO_FLAGS'
+# --manifest-path, in either form, is kani.sh's KANI_MANIFEST too, and a
+# KANI_MANIFEST of its own wins.
+expect "make -n kani takes VERUS_CARGO_FLAGS' --manifest-path" \
+  "$(shows kani VERUS_CARGO_FLAGS='--manifest-path crates/uutils/Cargo.toml')" \
+  "KANI_MANIFEST='crates/uutils/Cargo.toml' sh $home/make/kani.sh"
+expect "make -n kani-list takes --manifest-path=P" \
+  "$(shows kani-list VERUS_CARGO_FLAGS='--features verus --manifest-path=crates/uutils/Cargo.toml')" \
+  "KANI_MANIFEST='crates/uutils/Cargo.toml' sh $home/make/kani.sh --list"
+expect "make -n kani-regular takes KANI_MANIFEST over VERUS_CARGO_FLAGS" \
+  "$(shows kani-regular VERUS_CARGO_FLAGS='--manifest-path a/Cargo.toml' KANI_MANIFEST=b/Cargo.toml)" \
+  "KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='--verbosity 9' KANI_FAIL_PATTERN='warning: ignoring' KANI_MANIFEST='b/Cargo.toml' sh $home/make/kani.sh"
 expect "make -n kani-regular, challoc's kani-ignoring" "$(shows kani-regular)" \
   "KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='--verbosity 9' KANI_FAIL_PATTERN='warning: ignoring' sh $home/make/kani.sh"
 expect "make -n kani-regular keeps the port's CBMC arguments and KANI_ARGS" \
@@ -995,6 +1007,33 @@ echo "ok make kani fails a port with no harnesses that does not declare KANI_NON
 grep -qx 'alpha kani::a_q8 src/lib.rs' "$tmp/out" ||
   { cat "$tmp/out" >&2; fail "make kani-list KANI_ARGS: got = no kani::a_q8, want = the harness quantum8 gates"; }
 echo "ok make kani-list passes KANI_ARGS to the listing"
+
+# A workspace below the root (#71, cg-uutils): KANI_MANIFEST goes to
+# cargo fetch and, after -p, to each cargo kani call; make kani takes it
+# from VERUS_CARGO_FLAGS. One that names no file, or has a space, exits 2.
+mkdir -p "$port/ws"
+: > "$port/ws/Cargo.toml"
+kani KANI_CRATES=alpha KANI_MANIFEST=ws/Cargo.toml sh "$k" ||
+  { cat "$tmp/out" >&2; fail "KANI_MANIFEST: kani.sh failed"; }
+expect "kani.sh KANI_MANIFEST reaches cargo fetch" "$(grep '^fetch' "$log")" \
+  "fetch --locked --manifest-path=ws/Cargo.toml"
+expect "kani.sh KANI_MANIFEST reaches each cargo kani call" "$(cat "$tmp/calls")" \
+  "kani -p=alpha --manifest-path=ws/Cargo.toml list --format json
+kani -p=alpha --manifest-path=ws/Cargo.toml"
+kani KANI_MANIFEST=ws/Cargo.toml sh "$k" ||
+  { cat "$tmp/out" >&2; fail "KANI_MANIFEST with cargo's default selection: kani.sh failed"; }
+expect "kani.sh KANI_MANIFEST with cargo's default selection" "$(cat "$tmp/calls")" \
+  "kani --manifest-path=ws/Cargo.toml list --format json
+kani --manifest-path=ws/Cargo.toml"
+refuses "KANI_MANIFEST naming no file" 2 KANI_MANIFEST=ws/none.toml sh "$k"
+: > "$port/ws/a b.toml"
+refuses "KANI_MANIFEST with a space" 2 KANI_MANIFEST="ws/a b.toml" sh "$k"
+(cd "$port" && PATH="$bin:$PATH" make -s kani KANI_CRATES=alpha VERUS_CARGO_FLAGS='--manifest-path ws/Cargo.toml' > "$tmp/out" 2>&1) ||
+  { cat "$tmp/out" >&2; fail "make kani with VERUS_CARGO_FLAGS' --manifest-path failed"; }
+expect "make kani passes VERUS_CARGO_FLAGS' --manifest-path to kani.sh" "$(grep -v '^fetch' "$log")" \
+  "kani -p=alpha --manifest-path=ws/Cargo.toml list --format json
+kani -p=alpha --manifest-path=ws/Cargo.toml"
+rm -r "$port/ws"
 
 # --- headers.sh ----------------------------------------------------------
 templates=$home/templates
