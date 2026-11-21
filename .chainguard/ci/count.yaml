@@ -12,7 +12,7 @@
 version: 1
 
 environment:
-  packages: [rust-1.99, build-base, busybox, git, apk-tools, wolfi-keys]
+  packages: [rust-1.100, build-base, busybox, git, apk-tools, wolfi-keys]
 
 checks:
   count-test:
@@ -58,6 +58,6 @@ checks:
     timeout: 15m
     environment:
       # The file's packages, and make (GNU) for the port's targets.
-      packages: [rust-1.99, build-base, busybox, git, make]
+      packages: [rust-1.100, build-base, busybox, git, make]
     network: *crates
     cmd: [sh, kit/installed-test.sh]
