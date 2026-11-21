@@ -1,6 +1,7 @@
 # proved-port.mk: the proof targets every proved port shares. The
-# theseus-proved-port package installs it, with kani.sh, headers.sh and
-# VERUS-FILES, in /usr/share/proved-port/make/, the kit's templates in
+# theseus-proved-port package installs it, with kani.sh, headers.sh,
+# lint-unsafe.sh and VERUS-FILES, in /usr/share/proved-port/make/, the
+# kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
 # The port pins the package (theseus-proved-port~X.Y.Z) in its check and
@@ -57,6 +58,11 @@
 #   kani-regular      kani.sh one harness at a time in regular format
 #                     with CBMC's --verbosity 9, failing on
 #                     KANI_IGNORING_PATTERN (challoc's kani-ignoring).
+#   lint-unsafe       lint-unsafe.sh: every crate but UNSAFE_CRATES
+#                     forbids unsafe code, at its roots and on rustc's
+#                     command line for every target, and with
+#                     UNSAFE_WORKSPACE_LINTS = yes every member inherits
+#                     a workspace lint that denies it.
 #   verify            every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
@@ -272,7 +278,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -323,6 +329,25 @@ kani-regular: ## every Kani harness one at a time in regular format with CBMC's 
 	$(if $(findstring --verbosity,$(KANI_CBMC_ARGS)),$(error $(kani_cbmc_verbosity)))
 	KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='$(strip $(KANI_CBMC_ARGS) --verbosity 9)' KANI_FAIL_PATTERN='$(KANI_IGNORING_PATTERN)' $(kani_env)sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
 
+# --- unsafe code -----------------------------------------------------------
+# lint-unsafe.sh reads these from its environment; its header says what
+# each does. UNSAFE_CRATES names the packages allowed unsafe code (the C
+# API crate, and any other fence crate), and lint-unsafe fails while it
+# is empty. A port whose manifests have no [workspace.lints.rust] sets
+# UNSAFE_WORKSPACE_LINTS = no. UNSAFE_MANIFEST defaults to KANI_MANIFEST
+# (from VERUS_CARGO_FLAGS' --manifest-path), so one setting covers a
+# workspace that is not at the port's root.
+UNSAFE_CRATES ?=
+UNSAFE_WORKSPACE_LINTS ?= yes
+UNSAFE_MANIFEST ?= $(KANI_MANIFEST)
+UNSAFE_CHECK_FLAGS ?=
+unsafe_crates_empty = UNSAFE_CRATES is empty: the port's Makefile names the packages allowed unsafe code (the C API crate)
+
+lint-unsafe: ## every crate but UNSAFE_CRATES forbids unsafe code: roots, workspace lints, cargo check with -Funsafe_code (lint-unsafe.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(UNSAFE_CRATES)),,$(error $(unsafe_crates_empty)))
+	UNSAFE_CRATES='$(strip $(UNSAFE_CRATES))' UNSAFE_WORKSPACE_LINTS='$(strip $(UNSAFE_WORKSPACE_LINTS))' UNSAFE_MANIFEST='$(strip $(UNSAFE_MANIFEST))' UNSAFE_CHECK_FLAGS='$(strip $(UNSAFE_CHECK_FLAGS))' sh $(PROVED_PORT_MAKE)lint-unsafe.sh .
+
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
 # order `make verify` runs them, each in its own make. A package build
@@ -346,7 +371,7 @@ kani-regular: ## every Kani harness one at a time in regular format with CBMC's 
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

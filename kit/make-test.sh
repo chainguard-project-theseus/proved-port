@@ -25,6 +25,9 @@
 #     no verus/make/templates a port still has, takes only the `- The
 #     kit` item as the review prompt's kit rule, and gives the same
 #     result with --installed as with its defaults;
+#   - lint-unsafe passes the port's settings to lint-unsafe.sh, whose
+#     self-test passes with these tools (kit/lint-unsafe-test.sh runs
+#     the rest of it with cargo);
 #   - no template carries a `kit: proved-port` line.
 # No Verus or Kani runs. Run it from the repository root.
 set -eu
@@ -410,6 +413,21 @@ expect "make -n kani-regular keeps the port's CBMC arguments and KANI_ARGS" \
   "$(shows kani-regular KANI_CBMC_ARGS='--unwind 4' KANI_ARGS='--features quantum8' KANI_JOBS=4)" \
   "KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='--unwind 4 --verbosity 9' KANI_FAIL_PATTERN='warning: ignoring' sh $home/make/kani.sh --features quantum8"
 
+# lint-unsafe passes the port's settings to lint-unsafe.sh; its manifest
+# is KANI_MANIFEST's unless the port gives its own.
+expect "make -n lint-unsafe, one crate allowed unsafe" \
+  "$(shows lint-unsafe UNSAFE_CRATES=alpha-capi)" \
+  "UNSAFE_CRATES='alpha-capi' UNSAFE_WORKSPACE_LINTS='yes' UNSAFE_MANIFEST='' UNSAFE_CHECK_FLAGS='' sh $home/make/lint-unsafe.sh ."
+expect "make -n lint-unsafe, two fence crates, no workspace lints, features" \
+  "$(shows lint-unsafe UNSAFE_CRATES='xml3-capi  xml3-cmem' UNSAFE_WORKSPACE_LINTS=no UNSAFE_CHECK_FLAGS='--features x')" \
+  "UNSAFE_CRATES='xml3-capi xml3-cmem' UNSAFE_WORKSPACE_LINTS='no' UNSAFE_MANIFEST='' UNSAFE_CHECK_FLAGS='--features x' sh $home/make/lint-unsafe.sh ."
+expect "make -n lint-unsafe takes VERUS_CARGO_FLAGS' --manifest-path" \
+  "$(shows lint-unsafe UNSAFE_CRATES=uu-capi VERUS_CARGO_FLAGS='--manifest-path crates/uutils/Cargo.toml')" \
+  "UNSAFE_CRATES='uu-capi' UNSAFE_WORKSPACE_LINTS='yes' UNSAFE_MANIFEST='crates/uutils/Cargo.toml' UNSAFE_CHECK_FLAGS='' sh $home/make/lint-unsafe.sh ."
+expect "make -n lint-unsafe takes UNSAFE_MANIFEST over KANI_MANIFEST" \
+  "$(shows lint-unsafe UNSAFE_CRATES=c KANI_MANIFEST=a/Cargo.toml UNSAFE_MANIFEST=b/Cargo.toml)" \
+  "UNSAFE_CRATES='c' UNSAFE_WORKSPACE_LINTS='yes' UNSAFE_MANIFEST='b/Cargo.toml' UNSAFE_CHECK_FLAGS='' sh $home/make/lint-unsafe.sh ."
+
 # verify runs every target VERIFY_TARGETS lists, in order, each with the
 # command line's variables. Under -n make prints its loop (a line naming
 # $(MAKE), which -n runs) before the targets' commands; its $t is text.
@@ -472,6 +490,27 @@ refuses_make "make -n kani-regular with a --verbosity in KANI_CBMC_ARGS" "KANI_C
   kani-regular KANI_CBMC_ARGS='--unwind 4 --verbosity 0'
 refuses_make "make -n kani-regular with --verbosity=1 in KANI_CBMC_ARGS" "KANI_CBMC_ARGS sets --verbosity" \
   kani-regular KANI_CBMC_ARGS=--verbosity=1
+refuses_make "make -n lint-unsafe with no UNSAFE_CRATES" "UNSAFE_CRATES is empty" lint-unsafe
+refuses_make "make -n lint-unsafe with a blank UNSAFE_CRATES" "UNSAFE_CRATES is empty" lint-unsafe UNSAFE_CRATES=' '
+# The no-kit guard kit/count/README.md gives ports lists every kit
+# target, so each fails with the kit's message where the package is
+# missing: proved_port_phony and verify, in that order.
+readme_targets=$(sed -n 's/^  PROVED_PORT_TARGETS = //p' kit/count/README.md)
+mk_targets="$(sed -n 's/^proved_port_phony = //p' kit/make/proved-port.mk) verify"
+expect "kit/count/README.md's PROVED_PORT_TARGETS are proved-port.mk's targets" "$readme_targets" "$mk_targets"
+# lint-unsafe.sh's root reader is awk, and the check environments have
+# BusyBox's: its self-test passes with the tools here, needing no cargo.
+# kit/lint-unsafe-test.sh runs the rest of it with cargo.
+sh "$home/make/lint-unsafe.sh" --self-test > "$tmp/out" 2>&1 \
+  || { cat "$tmp/out" >&2; fail "lint-unsafe.sh --self-test: got = failure, want = success"; }
+if grep -v '^ok   \|^===' "$tmp/out"; then fail "lint-unsafe.sh --self-test printed a line other than ok"; fi
+echo "ok lint-unsafe.sh's self-test passes with these tools ($(grep -c '^ok' "$tmp/out") planted roots)"
+if UNSAFE_CRATES='' sh "$home/make/lint-unsafe.sh" "$port" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 2 ] || ! grep -qF 'UNSAFE_CRATES is empty' "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "lint-unsafe.sh, no UNSAFE_CRATES: got = exit $rc, want = exit 2 naming UNSAFE_CRATES"
+fi
+echo "ok lint-unsafe.sh refuses a run with no UNSAFE_CRATES (exit 2)"
 # Run for real: a port's target that fails fails verify, and the targets
 # after it do not run.
 cp "$port/Makefile" "$tmp/Makefile.verify"
@@ -566,13 +605,13 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;
       *) msg="PROVED_PORT_VERSION is 0.0.0-other, but $home/KIT records tag v$version" ;;
     esac
-    if make -s -n -C "$port" "$t" VERUS_BASE=none "$p" > "$tmp/out" 2> "$tmp/err"; then
+    if make -s -n -C "$port" "$t" VERUS_BASE=none UNSAFE_CRATES=alpha-capi "$p" > "$tmp/out" 2> "$tmp/err"; then
       fail "make -n $t $p: got = success, want = failure"
     fi
     grep -qF "$msg" "$tmp/err" \
