@@ -1,7 +1,7 @@
 # proved-port.mk: the proof targets every proved port shares. The
 # theseus-proved-port package installs it, with kani.sh, headers.sh,
-# lint-unsafe.sh and VERUS-FILES, in /usr/share/proved-port/make/, the
-# kit's templates in
+# lint-unsafe.sh, noalias.sh and VERUS-FILES, in
+# /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
 # The port pins the package (theseus-proved-port~X.Y.Z) in its check and
@@ -63,6 +63,10 @@
 #                     command line for every target, and with
 #                     UNSAFE_WORKSPACE_LINTS = yes every member inherits
 #                     a workspace lint that denies it.
+#   noalias           noalias.sh: no inherent method of NOALIAS_TYPE
+#                     takes a noalias &mut self in the release
+#                     library's LLVM IR, for each build NOALIAS_BUILDS
+#                     names (challoc's heap-noalias).
 #   verify            every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
@@ -278,7 +282,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -348,6 +352,31 @@ lint-unsafe: ## every crate but UNSAFE_CRATES forbids unsafe code: roots, worksp
 	$(if $(strip $(UNSAFE_CRATES)),,$(error $(unsafe_crates_empty)))
 	UNSAFE_CRATES='$(strip $(UNSAFE_CRATES))' UNSAFE_WORKSPACE_LINTS='$(strip $(UNSAFE_WORKSPACE_LINTS))' UNSAFE_MANIFEST='$(strip $(UNSAFE_MANIFEST))' UNSAFE_CHECK_FLAGS='$(strip $(UNSAFE_CHECK_FLAGS))' sh $(PROVED_PORT_MAKE)lint-unsafe.sh .
 
+# --- noalias ---------------------------------------------------------------
+# noalias.sh reads these from its environment; its header says what
+# each does. NOALIAS_CRATE is the library's crate name and NOALIAS_TYPE
+# the type whose `&mut self` must not be noalias, with its module path
+# (heap::Heap); noalias fails while either is empty. NOALIAS_BUILDS
+# names the builds (by default one, default), and NOALIAS_FLAGS_<name>
+# holds a build's own cargo flags, so challoc's two quanta are
+#   NOALIAS_BUILDS = q16 q8
+#   NOALIAS_FLAGS_q8 = --no-default-features --features quantum8
+# NOALIAS_CARGO_FLAGS go to every build.
+NOALIAS_CRATE ?=
+NOALIAS_TYPE ?=
+NOALIAS_BUILDS ?= default
+NOALIAS_CARGO_FLAGS ?=
+noalias_crate_empty = NOALIAS_CRATE is empty: the port's Makefile names its library's crate
+noalias_type_empty = NOALIAS_TYPE is empty: the port's Makefile names the type, with its module path (heap::Heap)
+noalias_builds_empty = NOALIAS_BUILDS is empty: the port's Makefile names its builds (by default default)
+
+noalias: ## no method of NOALIAS_TYPE takes a noalias &mut self in the release library's LLVM IR, per build in NOALIAS_BUILDS (noalias.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(NOALIAS_CRATE)),,$(error $(noalias_crate_empty)))
+	$(if $(strip $(NOALIAS_TYPE)),,$(error $(noalias_type_empty)))
+	$(if $(strip $(NOALIAS_BUILDS)),,$(error $(noalias_builds_empty)))
+	NOALIAS_CRATE='$(strip $(NOALIAS_CRATE))' NOALIAS_TYPE='$(strip $(NOALIAS_TYPE))' NOALIAS_BUILDS='$(strip $(NOALIAS_BUILDS))' $(foreach b,$(NOALIAS_BUILDS),NOALIAS_FLAGS_$(b)='$(strip $(NOALIAS_FLAGS_$(b)))' )NOALIAS_CARGO_FLAGS='$(strip $(NOALIAS_CARGO_FLAGS))' NOALIAS_TARGET_DIR='$(or $(CARGO_TARGET_DIR),target)' sh $(PROVED_PORT_MAKE)noalias.sh .
+
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
 # order `make verify` runs them, each in its own make. A package build
@@ -371,7 +400,7 @@ lint-unsafe: ## every crate but UNSAFE_CRATES forbids unsafe code: roots, worksp
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

@@ -212,10 +212,18 @@ if [ ! -f "$home/make/lint-unsafe.sh" ] || ! sh "$home/make/lint-unsafe.sh" --se
   fail "the installed lint-unsafe.sh: got = missing or a failing self-test, want = its self-test passes"
 fi
 echo "ok the installed lint-unsafe.sh passes its self-test"
+expect "make -n noalias: the package's noalias.sh" \
+  "$(shows "$installed" noalias NOALIAS_CRATE=c NOALIAS_TYPE=T)" \
+  "NOALIAS_CRATE='c' NOALIAS_TYPE='T' NOALIAS_BUILDS='default' NOALIAS_FLAGS_default='' NOALIAS_CARGO_FLAGS='' NOALIAS_TARGET_DIR='target' sh $home/make/noalias.sh ."
+if [ ! -f "$home/make/noalias.sh" ] || ! sh "$home/make/noalias.sh" --self-test > "$tmp/out"; then
+  cat "$tmp/out" >&2 || true
+  fail "the installed noalias.sh: got = missing or a failing self-test, want = its self-test passes"
+fi
+echo "ok the installed noalias.sh passes its self-test"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe verify; do
-  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias verify; do
+  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
     || { cat "$tmp/err" >&2; fail "make -n $t, PROVED_PORT_VERSION=$version (KIT's): got = failure, want = success"; }
   if make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$other" > "$tmp/out" 2> "$tmp/err"; then
     fail "make -n $t, PROVED_PORT_VERSION=$other: got = success, want = failure"

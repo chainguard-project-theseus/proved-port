@@ -13,6 +13,48 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.9
+
+### Changes
+
+- `make noalias` (#159, `noalias.sh`, installed beside kani.sh):
+  challoc's `heap-noalias` check (`ci/heap-noalias.sh`) as a kit
+  target. For each build `NOALIAS_BUILDS` names (by default one,
+  `default`, each with its own cargo flags in `NOALIAS_FLAGS_<name>`,
+  and `NOALIAS_CARGO_FLAGS` for all), it builds the release library
+  with `cargo rustc --release --lib -- --emit=llvm-ir -C
+  no-prepopulate-passes` and LTO off, in its own target directory, and
+  fails when an inherent method of `NOALIAS_TYPE` (the type, with its
+  module path, `heap::Heap`) in the crate `NOALIAS_CRATE` takes a
+  `noalias` `&mut self`, or when no method of the type with a
+  `&mut self` is found. A `noalias readonly` `&self` is listed, not
+  failed. Every run first scans challoc's saved `define` lines
+  (`noalias.sh --self-test`). Unlike challoc's script:
+  - it reads each symbol's type path through its backrefs, so the type
+    must be `NOALIAS_TYPE` exactly. challoc's pattern also took a type of
+    the same name in a module below, and missed an impl in a module that
+    is not below the type's.
+  - it handles a library that builds no cdylib or dylib, whose IR is
+    `CRATE-HASH.ll`, a release profile with several codegen units (one
+    `.ll` per unit), and a build with one or more target triples (IR
+    under `TRIPLE/release/deps`), each target scanned on its own and
+    required to pass on its own.
+  - it builds at `-C opt-level=3` whatever the profile says: rustc
+    marks parameters `noalias` only when it optimizes, so at opt-level 0
+    a run would pass on IR that shows nothing. An opt-level in
+    `RUSTFLAGS` or a config's rustflags comes after it and wins, so a
+    build in which no method's `self` is `noundef` (which rustc adds only
+    when it optimizes) fails as unoptimized.
+  - a `self` passed by value (`dead_on_return noalias`, the caller's
+    copy) is listed, not failed, as a `noalias readonly` `&self` is.
+  - a rerun in the same target directory builds the library again
+    rather than scan nothing.
+
+  It is a new target: no existing target or check
+  changes. The no-kit guard in `kit/count/README.md` lists it; a port
+  that copied the guard adds `noalias` to its `PROVED_PORT_TARGETS`
+  when it starts to use the target.
+
 ## 0.4.8
 
 ### Changes

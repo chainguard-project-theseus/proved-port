@@ -375,6 +375,11 @@ is deleted in that PR.
    calls the kit's; `ci/heap-noalias.sh` moves, with `codegen.yaml`'s
    `heap-noalias` check calling it. Exit includes the same codegen
    verdict as before on a recent shipped-source PR's base and head.
+   **Status:** the noalias check is `kit/make/noalias.sh` (`make
+   noalias`, #159), with challoc's fixtures as its self-test and
+   `noalias-test` running it with cargo over a fixture crate; challoc's
+   switch to it is to come. The codegen diff, the fast-path budget and
+   the emulator are still to come.
 8. **CI templates and the Makefile include**, once the above have
    stable interfaces. pcre3 and challoc `include` the kit's
    `proved-port.mk` for the `verus`, `kani` and `bench` recipes and
@@ -385,7 +390,7 @@ is deleted in that PR.
    the package in `/usr/share/proved-port/make/`, with the `verus` (and its
    `verus-proofs` and `verus-count` halves), `verus-count-test`,
    `verus-headers`, `kani`, `kani-list`, `kani-regular`,
-   `lint-unsafe` (#150) and `verify` (#61) targets; `bench` and
+   `lint-unsafe` (#150), `noalias` (#159) and `verify` (#61) targets; `bench` and
    `remote` are still to come. The templates are in
    `kit/templates/.chainguard/` and
    `kit/templates/.github/` (`kit/templates/README.md`, "Repository

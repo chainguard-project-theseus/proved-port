@@ -9,7 +9,8 @@
 # the deps agent's guest, which runs in this environment, install a new
 # stream and read Wolfi's index. count-installed tests kit/make as the
 # package installs it, against the counter built here. lint-unsafe-test
-# runs kit/make/lint-unsafe.sh with this toolchain's cargo.
+# and noalias-test run kit/make/lint-unsafe.sh and kit/make/noalias.sh
+# with this toolchain's cargo.
 version: 1
 
 environment:
@@ -74,3 +75,15 @@ checks:
     trigger: [presubmit, postsubmit]
     timeout: 10m
     cmd: [sh, kit/lint-unsafe-test.sh]
+
+  noalias-test:
+    description: >-
+      kit/noalias-test.sh: kit/make/noalias.sh (make noalias) over a
+      fixture library with cargo: an Unpin type's &mut self is noalias
+      and fails it, a PhantomPinned one passes, and two builds, several
+      codegen units, a rerun, a type at the crate root, a type with only
+      &self and a wrong crate name give the verdicts they must. The
+      fixture has no dependencies, so it needs no network.
+    trigger: [presubmit, postsubmit]
+    timeout: 10m
+    cmd: [sh, kit/noalias-test.sh]

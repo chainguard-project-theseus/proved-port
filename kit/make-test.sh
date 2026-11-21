@@ -28,6 +28,9 @@
 #   - lint-unsafe passes the port's settings to lint-unsafe.sh, whose
 #     self-test passes with these tools (kit/lint-unsafe-test.sh runs
 #     the rest of it with cargo);
+#   - noalias passes the port's settings and builds to noalias.sh, whose
+#     self-test passes with these tools and which refuses a missing or
+#     malformed setting (kit/noalias-test.sh runs it with cargo);
 #   - no template carries a `kit: proved-port` line.
 # No Verus or Kani runs. Run it from the repository root.
 set -eu
@@ -428,6 +431,15 @@ expect "make -n lint-unsafe takes UNSAFE_MANIFEST over KANI_MANIFEST" \
   "$(shows lint-unsafe UNSAFE_CRATES=c KANI_MANIFEST=a/Cargo.toml UNSAFE_MANIFEST=b/Cargo.toml)" \
   "UNSAFE_CRATES='c' UNSAFE_WORKSPACE_LINTS='yes' UNSAFE_MANIFEST='b/Cargo.toml' UNSAFE_CHECK_FLAGS='' sh $home/make/lint-unsafe.sh ."
 
+# noalias passes the port's settings to noalias.sh: one build by default,
+# and each build's own flags; its target directory is CARGO_TARGET_DIR's.
+expect "make -n noalias, one build" \
+  "$(shows noalias NOALIAS_CRATE=alpha NOALIAS_TYPE=heap::Heap)" \
+  "NOALIAS_CRATE='alpha' NOALIAS_TYPE='heap::Heap' NOALIAS_BUILDS='default' NOALIAS_FLAGS_default='' NOALIAS_CARGO_FLAGS='' NOALIAS_TARGET_DIR='target' sh $home/make/noalias.sh ."
+expect "make -n noalias, challoc's two quanta" \
+  "$(shows noalias NOALIAS_CRATE=challoc NOALIAS_TYPE=heap::Heap NOALIAS_BUILDS='q16  q8' NOALIAS_FLAGS_q8='--no-default-features --features quantum8' CARGO_TARGET_DIR=/t)" \
+  "NOALIAS_CRATE='challoc' NOALIAS_TYPE='heap::Heap' NOALIAS_BUILDS='q16 q8' NOALIAS_FLAGS_q16='' NOALIAS_FLAGS_q8='--no-default-features --features quantum8' NOALIAS_CARGO_FLAGS='' NOALIAS_TARGET_DIR='/t' sh $home/make/noalias.sh ."
+
 # verify runs every target VERIFY_TARGETS lists, in order, each with the
 # command line's variables. Under -n make prints its loop (a line naming
 # $(MAKE), which -n runs) before the targets' commands; its $t is text.
@@ -492,6 +504,10 @@ refuses_make "make -n kani-regular with --verbosity=1 in KANI_CBMC_ARGS" "KANI_C
   kani-regular KANI_CBMC_ARGS=--verbosity=1
 refuses_make "make -n lint-unsafe with no UNSAFE_CRATES" "UNSAFE_CRATES is empty" lint-unsafe
 refuses_make "make -n lint-unsafe with a blank UNSAFE_CRATES" "UNSAFE_CRATES is empty" lint-unsafe UNSAFE_CRATES=' '
+refuses_make "make -n noalias with no NOALIAS_CRATE" "NOALIAS_CRATE is empty" noalias NOALIAS_TYPE=Heap
+refuses_make "make -n noalias with no NOALIAS_TYPE" "NOALIAS_TYPE is empty" noalias NOALIAS_CRATE=alpha
+refuses_make "make -n noalias with a blank NOALIAS_BUILDS" "NOALIAS_BUILDS is empty" \
+  noalias NOALIAS_CRATE=alpha NOALIAS_TYPE=Heap NOALIAS_BUILDS=' '
 # The no-kit guard kit/count/README.md gives ports lists every kit
 # target, so each fails with the kit's message where the package is
 # missing: proved_port_phony and verify, in that order.
@@ -511,6 +527,23 @@ if [ "$rc" -ne 2 ] || ! grep -qF 'UNSAFE_CRATES is empty' "$tmp/out"; then
   fail "lint-unsafe.sh, no UNSAFE_CRATES: got = exit $rc, want = exit 2 naming UNSAFE_CRATES"
 fi
 echo "ok lint-unsafe.sh refuses a run with no UNSAFE_CRATES (exit 2)"
+# noalias.sh's scan is grep, sed and the shell, the check environments'
+# BusyBox ones: its self-test (challoc's fixtures) passes with the tools
+# here, needing no cargo. kit/noalias-test.sh runs it with cargo.
+sh "$home/make/noalias.sh" --self-test > "$tmp/out" 2>&1 \
+  || { cat "$tmp/out" >&2; fail "noalias.sh --self-test: got = failure, want = success"; }
+[ "$(grep -c '^self-test: ok ' "$tmp/out")" -eq 5 ] && [ "$(wc -l < "$tmp/out")" -eq 5 ] \
+  || { cat "$tmp/out" >&2; fail "noalias.sh --self-test: got = another output, want = five ok lines"; }
+echo "ok noalias.sh's self-test passes with these tools (5 fixtures)"
+for bad in "NOALIAS_CRATE=" "NOALIAS_TYPE=" "NOALIAS_TYPE=heap:Heap" "NOALIAS_TYPE=heap::" \
+  "NOALIAS_TYPE=heap::2Heap" "NOALIAS_CRATE=a.b" "NOALIAS_BUILDS=q-8"; do
+  if env NOALIAS_CRATE=alpha NOALIAS_TYPE=heap::Heap "$bad" sh "$home/make/noalias.sh" "$port" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+  if [ "$rc" -ne 2 ] || ! grep -qF "${bad%%=*}" "$tmp/out"; then
+    cat "$tmp/out" >&2
+    fail "noalias.sh, $bad: got = exit $rc, want = exit 2 naming ${bad%%=*}"
+  fi
+  echo "ok noalias.sh refuses $bad (exit 2)"
+done
 # Run for real: a port's target that fails fails verify, and the targets
 # after it do not run.
 cp "$port/Makefile" "$tmp/Makefile.verify"
@@ -605,13 +638,13 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;
       *) msg="PROVED_PORT_VERSION is 0.0.0-other, but $home/KIT records tag v$version" ;;
     esac
-    if make -s -n -C "$port" "$t" VERUS_BASE=none UNSAFE_CRATES=alpha-capi "$p" > "$tmp/out" 2> "$tmp/err"; then
+    if make -s -n -C "$port" "$t" VERUS_BASE=none UNSAFE_CRATES=alpha-capi NOALIAS_CRATE=alpha NOALIAS_TYPE=Heap "$p" > "$tmp/out" 2> "$tmp/err"; then
       fail "make -n $t $p: got = success, want = failure"
     fi
     grep -qF "$msg" "$tmp/err" \
