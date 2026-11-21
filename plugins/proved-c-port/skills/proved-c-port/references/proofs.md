@@ -191,6 +191,13 @@ fails when:
 
 Rules:
 
+- A proof PR keeps its figures in its theorem file and its body, and
+  edits no shared coverage line (a README figure or row, the design or
+  handoff docs' coverage rows): the FLOOR PR updates them from main, so
+  parallel proof PRs do not conflict there (the template AGENTS.md,
+  "Shared coverage lines"). The exceptions are FLOOR's header's: the
+  first proof PR raises FLOOR and the badge from 0.0, and a PR with a
+  `lowered` line replaces the badge to match.
 - The check passes a share above its figure and names the figure to
   record. Every port records it the same way, as the kit's FLOOR header
   states: FLOOR, and the README badge that shows it, rise in a PR of

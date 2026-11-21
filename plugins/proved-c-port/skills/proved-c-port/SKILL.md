@@ -125,7 +125,11 @@ of a one-pass native build) and only catches a bad output; a proved
 producer never makes one. Equally wrong: an allocation, copy or pass
 added only to make a property provable where a ghost or spec route
 exists. Where none exists, the cost is measured (`references/proofs.md`,
-"Writing verifiable Rust").
+"Writing verifiable Rust") and, coverage first, accepted by default: the
+PR records the bench table, a cost above about 2% on a hot path gets an
+"optimize within proof bounds" follow-up issue, and one above about 10%
+on a real workload goes to the maintainers before merge (the template
+AGENTS.md, "Coverage first for the runtime cost of a proof").
 
 ### Fast paths are proved equal, not checked
 

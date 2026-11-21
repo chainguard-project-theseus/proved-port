@@ -72,7 +72,24 @@ a change cites. The checks below are what a change must not get wrong.
   is a temporary seam with its seams table row and a `TODO(#n)` toward
   proving the producer, or an allocation, copy or pass added only to
   make a property provable where a ghost or spec route exists, is a
-  Question citing that principle.
+  Question citing that principle. Where no ghost or spec route avoids
+  it, a measured runtime cost of a proof is accepted under AGENTS.md's
+  "Coverage first" principle when the PR body gives the bench table and
+  says so: do not hold such a PR for its cost. Coverage first does not
+  cover a cost a ghost or spec route would avoid; that stays the
+  Question above.
+  A cost above about 2% on a hot path with no follow-up issue named, a
+  cost above about 10% on a real workload with no maintainer's answer,
+  or a cost claimed with no measurement, is a Question citing that
+  principle.
+- Shared coverage lines (AGENTS.md, "Shared coverage lines"). A proof
+  PR that edits a coverage figure or row outside its theorem's file and
+  its PR body (the README, `verus/README.md`, the design or handoff docs)
+  is a Question citing that rule: the FLOOR PR updates them from main.
+  FLOOR's header gives the exceptions, which are not Questions: the
+  port's first proof PR raising the figures and the badge from 0.0 (the
+  Verus proofs check above), and a PR with a `lowered` line replacing
+  the badge line to match the lowered figure.
 - {Each further check this port's design needs, in the same form: what to
   check, where the rule is written, and what is Blocking.}
 
