@@ -358,6 +358,14 @@ struct Counter {
     /// Each trusted function's crate, `FILE:LINE` and lines, for the
     /// generated ledger ([`ledger::match_ledger`]).
     trusted: Vec<(String, String, usize)>,
+    /// The `FILE:LINE` of each trusted function that would be verified
+    /// but for `exec_allows_no_decreases_clause`, and of each
+    /// trusted for another reason: a ledger's `no_decreases` seam may
+    /// stand only for a line in the first and not in the second (several
+    /// functions one macro invocation writes share its line)
+    /// ([`Counter::termination_only`], [`ledger::match_ledger`]).
+    trusted_for_termination: std::collections::BTreeSet<String>,
+    trusted_otherwise: std::collections::BTreeSet<String>,
     /// The `FILE:LINE` of each function inside `verus!` with
     /// `#[verifier::assume_unsupported_attributes]` ([`assumes_attributes`]),
     /// a seam of the linkage alone ([`ledger::match_assumed`]).
@@ -625,6 +633,8 @@ impl Counter {
             atoms,
             fn_ptr_macro,
             trusted: Vec::new(),
+            trusted_for_termination: std::collections::BTreeSet::new(),
+            trusted_otherwise: std::collections::BTreeSet::new(),
             assumed: Vec::new(),
             verus_only_ghost: false,
             macros: BTreeMap::new(),
@@ -2779,8 +2789,20 @@ impl Counter {
         // proves its loops and recursion end, Verus's check or a Kani
         // record ([`Class::Discharged`]) alike.
         let no_decreases = self.no_decreases || allows_no_decreases(attrs);
+        // Whether the attribute alone makes it trusted (only a generated
+        // ledger reads this): without it, a verified function stays
+        // verified where Verus's build is sure to compile it, or on the
+        // path below that leaves verified code out of the tally (code no
+        // shipped build compiles); on the shipped path an unsure one would
+        // be trusted all the same. A discharged one is not: it is
+        // `external_body` or calls `assume`, with the Kani marker, which a
+        // ledger does not take as discharging it, so without the attribute
+        // it is trusted for that.
+        let mut termination_only = false;
         let class = match class {
-            Some(Class::Verified | Class::Discharged) if no_decreases && !is_ghost(sig) => {
+            Some(c @ (Class::Verified | Class::Discharged)) if no_decreases && !is_ghost(sig) => {
+                termination_only =
+                    c == Class::Verified && (sure || built == Built::Verus || !self.shipped);
                 Some(Class::Trusted)
             }
             c => c,
@@ -2812,7 +2834,7 @@ impl Counter {
             // column, which Verus checks all the same.
             match class {
                 Some(class @ (Class::Trusted | Class::Discharged)) => {
-                    self.tally(class, sig.ident.to_string(), at, lines);
+                    self.tally_fn(class, sig.ident.to_string(), at, lines, termination_only);
                 }
                 None if self.verus_only_ghost => {
                     self.tallies.entry(self.krate.clone()).or_default().ghost += 1;
@@ -2836,7 +2858,7 @@ impl Counter {
         // configured macros their own way (`[reach]`'s `exports_macro`
         // and `fn_ptr_macro`).
         if self.expansion.is_some() {
-            self.tally(class, sig.ident.to_string(), at, lines);
+            self.tally_fn(class, sig.ident.to_string(), at, lines, termination_only);
             return None;
         }
         let mut calls = Vec::new();
@@ -2864,8 +2886,56 @@ impl Counter {
             receiver: arity(sig).1,
             entry,
         });
-        self.tally(class, sig.ident.to_string(), at, lines);
+        self.tally_fn(class, sig.ident.to_string(), at, lines, termination_only);
         Some(class)
+    }
+
+    /// [`Counter::tally`] for a function, recording a trusted one's line as
+    /// trusted by `exec_allows_no_decreases_clause` alone
+    /// (`termination_only`) or otherwise.
+    fn tally_fn(
+        &mut self,
+        class: Class,
+        name: String,
+        start: usize,
+        lines: usize,
+        termination_only: bool,
+    ) {
+        if class == Class::Trusted {
+            match &mut self.dry {
+                // A candidate definition's walk: why the function is
+                // trusted is a row too, so two candidates that differ only
+                // in that count differently and fail the run, rather than
+                // leave the first one's reason to decide whether a
+                // `no_decreases` ledger row stands for the function (as
+                // with `assume_unsupported_attributes`).
+                Some(rows) if termination_only => rows.push((
+                    Class::Trusted,
+                    format!("#[verifier::exec_allows_no_decreases_clause] {name}"),
+                    0,
+                )),
+                Some(_) => {}
+                None => {
+                    let loc = format!("{}:{start}", self.file.display());
+                    if termination_only {
+                        self.trusted_for_termination.insert(loc);
+                    } else {
+                        self.trusted_otherwise.insert(loc);
+                    }
+                }
+            }
+        }
+        self.tally(class, name, start, lines);
+    }
+
+    /// The `FILE:LINE` of each trusted function a ledger's `no_decreases`
+    /// seam may stand for: every trusted function at that line would be
+    /// verified but for `exec_allows_no_decreases_clause`.
+    fn termination_only(&self) -> std::collections::BTreeSet<String> {
+        self.trusted_for_termination
+            .difference(&self.trusted_otherwise)
+            .cloned()
+            .collect()
     }
 
     /// Counts function `name`, of class `class`, `lines` long and listed at
@@ -7298,7 +7368,8 @@ fn report(
     };
     let seams = ledger::read_ledger(&root.join(&l.dir), &premises)
         .unwrap_or_else(|e| usage(format!("{}: {e}", l.dir)));
-    let (checked, mut warnings, errors) = ledger::match_ledger(&c.trusted, &seams);
+    let (checked, mut warnings, errors) =
+        ledger::match_ledger(&c.trusted, &c.termination_only(), &seams);
     let (assumed_seams, w) = ledger::match_assumed(&c.assumed, &seams);
     warnings.extend(w);
     for w in &warnings {
@@ -13215,6 +13286,133 @@ fn outside() {}
             "trusted: got = {:?}, wanted = {want:?}",
             c.trusted
         );
+    }
+
+    /// The functions `exec_allows_no_decreases_clause` alone makes trusted,
+    /// whose `no_decreases` ledger row may stand as their entry
+    /// ([`ledger::match_ledger`]), are recorded at their `fn` lines: one
+    /// with the attribute and one in an `impl` with it. One that is
+    /// `external_body` as well, with a Kani record (which a ledger does
+    /// not take) or without, one that calls `assume`, and one with no
+    /// attribute are not.
+    #[test]
+    fn the_counter_records_functions_trusted_only_for_termination() {
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("src/a.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        let src = "verus! {\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            fn looping() { loop {} }\n\
+            struct S;\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            impl S {\n\
+            fn method(&self) {}\n\
+            }\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[verifier::external_body]\n\
+            fn marked() {}\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            #[verifier::external_body]\n\
+            fn body_trusted() {}\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            fn assumes() { assume(false); }\n\
+            #[verifier::external_body]\n\
+            fn plain_trusted() {}\n\
+            }\n";
+        c.items(&parse_file(src).expect("parses").items, false);
+        let trusted: Vec<&str> = c.trusted.iter().map(|(_, loc, _)| loc.as_str()).collect();
+        let want = [
+            "src/a.rs:3",
+            "src/a.rs:7",
+            "src/a.rs:12",
+            "src/a.rs:15",
+            "src/a.rs:17",
+            "src/a.rs:19",
+        ];
+        assert_eq!(
+            trusted, want,
+            "trusted: got = {trusted:?}, wanted = {want:?}"
+        );
+        let only: Vec<String> = c.termination_only().into_iter().collect();
+        let want = ["src/a.rs:3", "src/a.rs:7"];
+        assert_eq!(
+            only, want,
+            "termination_only: got = {only:?}, wanted = {want:?}"
+        );
+
+        // Under a `cfg` Verus's build might not meet, a shipped verified
+        // function is trusted without the attribute too (line 4), so it is
+        // not recorded; one with no `cfg` (line 6) is.
+        let src = "verus! {\n\
+            #[cfg(unix)]\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            fn unsure() {}\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            fn sure() {}\n\
+            }\n";
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("src/a.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        c.items(&parse_file(src).expect("parses").items, false);
+        assert_eq!(c.errors, 0, "errors: got = {}, wanted = 0", c.errors);
+        let trusted: Vec<&str> = c.trusted.iter().map(|(_, loc, _)| loc.as_str()).collect();
+        let want = ["src/a.rs:4", "src/a.rs:6"];
+        assert_eq!(
+            trusted, want,
+            "trusted: got = {trusted:?}, wanted = {want:?}"
+        );
+        let only: Vec<String> = c.termination_only().into_iter().collect();
+        let want = ["src/a.rs:6"];
+        assert_eq!(
+            only, want,
+            "termination_only, shipped: got = {only:?}, wanted = {want:?}"
+        );
+
+        // In a crate that does not ship, verified code leaves the tally
+        // whatever its `cfg`, so the attribute alone makes it trusted.
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("src/a.rs"),
+            module: vec!["k".into()],
+            shipped: false,
+            ..counter()
+        };
+        c.items(&parse_file(src).expect("parses").items, false);
+        let only: Vec<String> = c.termination_only().into_iter().collect();
+        let want = ["src/a.rs:4", "src/a.rs:6"];
+        assert_eq!(
+            only, want,
+            "termination_only, not shipped: got = {only:?}, wanted = {want:?}"
+        );
+
+        // Functions one macro invocation writes share its line: when one
+        // of them is trusted for another reason (`external_body`), the
+        // line is not termination-only, whichever is tallied first.
+        for order in [[true, false], [false, true]] {
+            let mut c = Counter {
+                krate: "k".into(),
+                file: PathBuf::from("src/a.rs"),
+                module: vec!["k".into()],
+                ..counter()
+            };
+            for (i, only) in order.into_iter().enumerate() {
+                c.tally_fn(Class::Trusted, format!("f{i}"), 15, 1, only);
+            }
+            c.tally_fn(Class::Trusted, "g".into(), 20, 1, true);
+            let only: Vec<String> = c.termination_only().into_iter().collect();
+            let want = ["src/a.rs:20"];
+            assert_eq!(
+                only, want,
+                "termination_only, {order:?} at one line: got = {only:?}, wanted = {want:?}"
+            );
+        }
     }
 
     /// Verus's attribute form (the Expat port's: a contract in `verus_spec` under

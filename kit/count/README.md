@@ -542,7 +542,20 @@ it, on an inline module around it, or atop the file that declares it),
 it fails the run (exit 1), naming the declaration: the counter
 reads each module file on its own, so it would not reach the functions
 it covers; put it on those functions, impls, traits or inline modules.
-Ghost functions and code outside `verus!` keep their classes.
+Ghost functions and code outside `verus!` keep their classes. With a
+generated ledger, a `no_decreases` seam at a function's `fn` line is
+its ledger entry when the attribute alone makes it trusted and no
+`external_body` or `axiom` seam is there, and counts it unchecked
+whatever its status. A function trusted for another reason as well
+(`external_body`, an `assume`, or a shipped function under a `cfg`
+Verus's build might not meet) still needs a seam of that reason, or
+warns, and so does every function at a macro invocation's line when one
+of the functions it writes is. Candidate definitions of a macro that
+differ only in why a function they write is trusted (the attribute
+alone, or `external_body` too) count differently and fail the run. One
+at an `impl`, trait or
+module line matches no function, so each function the attribute covers
+there needs its own entry or warns.
 
 ## Nested loops
 

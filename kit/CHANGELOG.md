@@ -13,6 +13,40 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.10
+
+### Changes
+
+- With a generated ledger (`[ledger]`), a `no_decreases` seam at the
+  `fn` line of a function that `exec_allows_no_decreases_clause` alone
+  makes trusted is that function's ledger entry when no `external_body`
+  or `axiom` seam is there (#166). A function trusted for another reason
+  as well (`external_body`, an `assume`, or a shipped function under a
+  `cfg` Verus's build might not meet) still warns without a seam of
+  that reason, as does every function at a macro invocation's line when
+  one of the functions it writes is. Candidate definitions of a macro
+  that differ only in that (the attribute alone, or `external_body` too)
+  now count differently and fail the run (exit 1), as candidates that
+  differ in `assume_unsupported_attributes` already do. Since 0.4.5
+  (#74) the
+  counter printed "trusted function at FILE:LINE has no ledger entry"
+  for each such function, though 0.4.5's porting note 3 asks for exactly
+  that row; challoc's `verus/seams.sh` writes one per function and got
+  16 warnings. The function still counts unchecked, whatever the
+  status: nothing outside Verus checks that it ends. The figures do not
+  change; only the warnings go.
+
+### Porting notes
+
+1. Move the pin. No figure, header or target changes, and the counter
+   prints fewer warnings. One run can newly fail: a macro with candidate
+   definitions under `cfg`s the counter cannot settle, where one writes
+   a function with `exec_allows_no_decreases_clause` alone and another
+   writes it `external_body` too. Before the bump, `grep -rn
+   exec_allows_no_decreases_clause --include=*.rs .` finds the
+   candidates to check; make them agree, or give the function the same
+   attributes in each.
+
 ## 0.4.9
 
 ### Changes

@@ -4246,6 +4246,108 @@ fn an_export_a_macro_writes_is_listed_at_its_invocation() {
     }
 }
 
+/// With a generated ledger, a `no_decreases` row at a function's `fn`
+/// line is its entry when the attribute alone makes it trusted (no
+/// warning); beside `external_body` it is not (the warning stays). At a
+/// macro invocation's line, the row stands for the functions there only
+/// when every one of them is trusted for the attribute alone.
+#[test]
+fn a_no_decreases_row_is_the_entry_of_a_function_trusted_for_it_alone() {
+    let ledger_of = |dir: &Path, lines: &[u32]| {
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!("{PLAIN}[ledger]\ndir = \"verus/ledger\"\n"),
+        )
+        .expect("write");
+        fs::create_dir_all(dir.join("verus/ledger")).expect("mkdir");
+        let rows: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                format!("crates/a/src/lib.rs:{l}. Kind: no_decreases. Category: termination.\nTool: none (assumption). Status: trusted.\n")
+            })
+            .collect();
+        fs::write(dir.join("verus/ledger/lib.rs.md"), rows.join("\n")).expect("write");
+    };
+    let warning = |l: u32| {
+        format!("warning: trusted function at crates/a/src/lib.rs:{l} has no ledger entry")
+    };
+    let warnings = |err: &str| -> Vec<String> {
+        err.lines()
+            .filter(|l| l.ends_with("has no ledger entry"))
+            .map(str::to_owned)
+            .collect()
+    };
+    // Functions in a verus! block, each with a row: one trusted for the
+    // attribute alone, one `external_body` too, and one `external_body`
+    // with the Kani marker too, which a ledger does not take as
+    // discharging it, so it is trusted for its body as well.
+    let lib = "verus! {\n#[verifier::exec_allows_no_decreases_clause]\nfn alone() {}\n#[verifier::exec_allows_no_decreases_clause]\n#[verifier::external_body]\nfn body() {}\n#[verifier::exec_allows_no_decreases_clause]\n#[cfg_attr(any(), discharged_by = \"kani\")]\n#[verifier::external_body]\nfn marked() {}\n}\n";
+    let dir = crate_of("no-decreases-row", &[("lib.rs", lib)]);
+    ledger_of(&dir, &[3, 6, 10]);
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0 && warnings(&err) == [warning(6), warning(10)],
+        "verus! block: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, warnings at 6 and 10"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // A macro invocation writing both: the row at its line stands for
+    // neither. Writing two attribute-only functions: it stands for both.
+    let def = |second: &str| {
+        format!(
+            "macro_rules! m {{ () => {{ verus! {{\n#[verifier::exec_allows_no_decreases_clause]\nfn a() {{}}\n#[verifier::exec_allows_no_decreases_clause]\n{second}fn b() {{}}\n}} }}; }}\nm!();\n"
+        )
+    };
+    for (second, warns) in [("#[verifier::external_body]\n", true), ("", false)] {
+        let lib = def(second);
+        // The invocation is the last line.
+        let at = u32::try_from(lib.lines().count()).expect("a short file");
+        let want = if warns {
+            vec![warning(at), warning(at)]
+        } else {
+            vec![]
+        };
+        let dir = crate_of("no-decreases-row-macro", &[("lib.rs", &lib)]);
+        ledger_of(&dir, &[at]);
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 0 && warnings(&err) == want,
+            "macro, second {second:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// Candidate definitions of a macro that differ only in why a function
+/// they write is trusted (`exec_allows_no_decreases_clause` alone, or
+/// `external_body` too) count differently, so the run fails rather than
+/// let the first candidate decide whether a `no_decreases` ledger row
+/// stands for the function. Candidates that agree pass.
+#[test]
+fn candidates_that_differ_in_why_a_function_is_trusted_fail() {
+    let only = "macro_rules! m { () => { verus! {\n#[verifier::exec_allows_no_decreases_clause]\nfn f() {}\n} }; }\n";
+    let body = "macro_rules! m { () => { verus! {\n#[verifier::exec_allows_no_decreases_clause]\n#[verifier::external_body]\nfn f() {}\n} }; }\n";
+    for (unix, other) in [(only, body), (body, only)] {
+        let lib = format!("#[cfg(unix)]\n{unix}#[cfg(not(unix))]\n{other}m!();\n");
+        let dir = crate_of("no-decreases-macro-differs", &[("lib.rs", &lib)]);
+        let (got, _, err) = count(&dir, &[]);
+        assert!(
+            got != 0 && err.contains("m! could be any of 2 definitions"),
+            "differing candidates: got = exit {got}, {err:?}; wanted = a failure naming m!"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    for same in [only, body] {
+        let lib = format!("#[cfg(unix)]\n{same}#[cfg(not(unix))]\n{same}m!();\n");
+        let dir = crate_of("no-decreases-macro-same", &[("lib.rs", &lib)]);
+        let (got, _, err) = count(&dir, &[]);
+        assert!(
+            got == 0,
+            "agreeing candidates: got = exit {got}, {err:?}; wanted = exit 0"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 /// An invocation expands the definition rustc would: one a shipped build
 /// compiles (not one under `#[cfg(test)]`, in a `#[cfg(test)]` module or
 /// `verus!` block, or in a test-only file), and one whose textual scope it is in (not one in
