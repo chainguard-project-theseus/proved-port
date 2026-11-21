@@ -1,0 +1,2 @@
+functions old 1 new 1: exact 0, reloc-only 1, padding-only 0, erratum-stub 0, changed 0
+insns old 6 new 6

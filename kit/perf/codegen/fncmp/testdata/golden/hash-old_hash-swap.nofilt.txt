@@ -1,0 +1,20 @@
+functions old 2 new 2: exact 0, reloc-only 0, padding-only 0, erratum-stub 0, changed 2
+insns old 4 new 4
+### changed: _RNvCs9z8y7x6w5v4_5crate1f (2 insns) vs baseline _RNvCs1a2b3c4d5e6_5crate1f (2 insns)
+### changed: _RNvCs9z8y7x6w5v4_5crate1g (2 insns) vs baseline _RNvCs1a2b3c4d5e6_5crate1g (2 insns)
+
+--- diff of _RNvCs9z8y7x6w5v4_5crate1f against baseline _RNvCs1a2b3c4d5e6_5crate1f, immediates masked
+   --- old
+   +++ new
+   @@ -1,2 +1,2 @@
+   -add x0, x0, x1
+   +sub x0, x0, x1
+    ret
+
+--- diff of _RNvCs9z8y7x6w5v4_5crate1g against baseline _RNvCs1a2b3c4d5e6_5crate1g, immediates masked
+   --- old
+   +++ new
+   @@ -1,2 +1,2 @@
+   -sub x0, x0, x1
+   +add x0, x0, x1
+    ret

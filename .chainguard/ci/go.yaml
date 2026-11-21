@@ -4,13 +4,15 @@
 # Wolfi go-1.NN stream, pinned by stream as count.yaml pins rust-1.NN;
 # the go-toolchain entry of .chainguard/deps.yaml moves it here and in
 # .chainguard/develop.yaml together. GOTOOLCHAIN=local keeps go from
-# fetching another toolchain a go.mod asks for. apk-tools and
+# fetching another toolchain a go.mod asks for. binutils puts c++filt
+# on PATH, so fncmp-test runs the comparer's demangled rename key, the
+# path a port's codegen checks take. apk-tools and
 # wolfi-keys let the deps agent's guest, which runs in this
 # environment, install a new stream and read Wolfi's index.
 version: 1
 
 environment:
-  packages: [go-1.27, busybox, git, apk-tools, wolfi-keys]
+  packages: [go-1.27, busybox, git, apk-tools, wolfi-keys, binutils]
 
 checks:
   go-toolchain:
@@ -32,3 +34,23 @@ checks:
         case $v in "go${s#go-}" | "go${s#go-}".*) ;; *) echo "FAIL: $v is not $s"; exit 1 ;; esac;
         grep -qx "    - $s" .chainguard/develop.yaml || { echo "FAIL: .chainguard/develop.yaml does not install $s"; exit 1; };
         echo PASS
+
+  fncmp-test:
+    description: >-
+      kit/perf/codegen/fncmp, the codegen comparer (PLAN step 7, the Go
+      port of challoc's scripts/codegen-fncmp.py): gofmt lists no file,
+      go vet passes, and go test passes (challoc's 16 fixture cases,
+      each report compared whole with the Python's, the immediate mask,
+      Python's UTF-8 replacement decoding, and difflib's ratio and
+      unified diff). FNCMP_REQUIRE_CXXFILT=1 makes a missing c++filt a
+      failure rather than a skip.
+    trigger: [presubmit, postsubmit]
+    timeout: 10m
+    cmd:
+      - sh
+      - -c
+      - >-
+        export GOTOOLCHAIN=local GOFLAGS=-mod=mod FNCMP_REQUIRE_CXXFILT=1;
+        cd kit/perf/codegen/fncmp;
+        f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
+        go vet ./... && go test -count=1 ./...
