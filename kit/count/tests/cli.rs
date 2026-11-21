@@ -1687,6 +1687,31 @@ fn a_thread_local_not_std_s_is_counted() {
             "RENAMED verus_builtin\n#[macro_use]\nextern crate verus_builtin;\nthread_local! { static W: u8 = 23; }\n",
             vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
         ),
+        // A `std` or `core` that a `use` or an `extern crate .. as` gives
+        // another crate names that crate in a named import and in a path
+        // (#137).
+        (
+            "extern crate elsewhere as core;\nuse core::thread_local;\nthread_local! { static AT: u8 = 46; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        (
+            "use elsewhere as core;\ncore::thread_local! { static AU: u8 = 47; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:2", "thread_local!")],
+        ),
+        (
+            "extern crate elsewhere as std;\nmod n {\n    std::thread_local! { static AV: u8 = 48; }\n}\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        (
+            "mod n {\n    use elsewhere as core;\n    use core::thread_local;\n    thread_local! { static AW: u8 = 49; }\n}\n",
+            vec![("Outside", "crates/a/src/lib.rs:4", "thread_local!")],
+        ),
+        // A root `use` does not rebind a path in another module from 2018
+        // on: `core` in `n` is core.
+        (
+            "use elsewhere as core;\nmod n {\n    core::thread_local! { static AX: u8 = 50; }\n    use core::thread_local;\n    thread_local! { static AY: u8 = 51; }\n}\n",
+            vec![],
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -1865,6 +1890,20 @@ fn a_thread_local_not_std_s_is_counted() {
                 "crates/a/src/lib.rs:5".to_owned(),
                 "thread_local!".to_owned(),
             )],
+        ),
+        (
+            "a root `use` alias of core, in a named import (#137)",
+            "extern crate elsewhere;\nuse elsewhere as core;\nmod n {\n    use core::thread_local;\n    thread_local! { static AZ: u8 = 52; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `use` alias of core, beside a path in another module",
+            "extern crate elsewhere;\nuse elsewhere as core;\nmod n {\n    core::thread_local! { static BA: u8 = 53; }\n}\n",
+            vec![],
         ),
         (
             "the crate, beside a child module",

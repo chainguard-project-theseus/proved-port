@@ -108,6 +108,13 @@ where it reports drift.
   such a module is read whatever its name. No port's run changes (each
   port's counter output, `--list` included, is identical before and
   after).
+- A `thread_local!` imported by name (`use core::thread_local;`) or
+  invoked by a path (`core::thread_local!`) whose first segment is
+  `std` or `core` counts as another crate's macro where a `use` or an
+  `extern crate .. as` gives another crate that name (#137): in the
+  module, or for an import in a 2015 crate at the root too. It counted
+  nothing. No port's run changes (each port's counter output, `--list`
+  included, is identical before and after).
 
 ## 0.4.5
 

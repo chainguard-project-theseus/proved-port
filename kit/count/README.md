@@ -714,7 +714,15 @@ be another macro is read as any macro of its name: the bare name where
 the crate defines a `macro_rules! thread_local` (expanded, and its
 functions counted) or where a `use` imports the name from a path that
 does not start at `std` or `core`, and a path whose first segment is
-neither (`elsewhere::thread_local!`); another crate's counts as one
+neither (`elsewhere::thread_local!`). A `std` or `core` that starts
+such an import or path is that crate's only where no Cargo dependency
+is renamed to it and neither a `use` in the module nor an `extern
+crate elsewhere as core;` gives another crate that name
+(`use elsewhere as core; core::thread_local!` counts); for the
+import, in 2015, a `use` at the crate root or a root glob but std's,
+core's or Verus's rebinds it too (a 2015 `use` path is read from the
+root), while the path is read in its own module in every edition, so
+a root `use` rebinds it only at the root. Another crate's counts as one
 function outside `verus!`, `thread_local!`. A bare one beside a `*` or
 a `#[macro_use]` is read the same way when one of them may bring
 another crate's `thread_local`: a `#[macro_use]` of a crate other than
@@ -723,7 +731,8 @@ std's (`std`, `core`, `alloc`) or Verus's (`vstd`, `verus_builtin`,
 (`vstd::prelude::*`, `verus_builtin_macros::*`), std's or core's, and
 other than one of a module of the crate that imports nothing of the
 name (by a `use` of it or by such a `*` of its own, read through each
-`*` it has). A crate's name is exempt only where no Cargo dependency is
+`*` it has). In a `*`, as in the import above, a crate's name is
+exempt only where no Cargo dependency is
 renamed to it and neither a `use` in the module, or in 2015 at the
 crate root, where the path is read from (`use elsewhere as core;`),
 nor an `extern crate elsewhere as core;` gives another crate
