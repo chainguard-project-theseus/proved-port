@@ -610,7 +610,8 @@ log=$tmp/cargo.log
 # harness is listed only with its feature), fails a run of crate
 # $STUB_FAIL and prints $STUB_SAY in each run. Its `list` prints the
 # build on stdout, as cargo kani does, and for crate $STUB_LIST_FAIL
-# fails it, a compile error on stdout and cargo's summary on stderr. As
+# fails it, a compile error on stdout and cargo's summary on stderr; for
+# crate $STUB_LIST_NONE it passes and writes no kani-list.json. As
 # Kani 0.68.0's does, a
 # separate `-p` takes every bare word after it, so `-p CRATE list` is a
 # usage error (exit 2).
@@ -637,6 +638,7 @@ case " \$* " in
       echo "error: could not compile \$crate" >&2
       exit 101
     fi
+    [ "\$crate" != "\${STUB_LIST_NONE:-}" ] || exit 0
     cp "\$json" kani-list.json; exit 0 ;;
 esac
 echo "Checking harness of \$crate"
@@ -749,6 +751,16 @@ for said in "kani: cargo kani list failed for alpha, printing:" \
     { cat "$tmp/out" >&2; fail "kani.sh, a failed listing: got = no \"$said\", want = it"; }
 done
 echo "ok kani.sh prints a failed listing's output"
+# A listing that passes but writes no kani-list.json fails, though a
+# stale one (beta's) sits in the root: it is removed before the listing,
+# so alpha is not run with beta's harnesses.
+cp "$tmp/lists/beta.json" "$port/kani-list.json"
+refuses "a listing that writes no kani-list.json, a stale one aside" 1 KANI_CRATES=alpha STUB_LIST_NONE=alpha sh "$k"
+[ ! -e "$port/kani-list.json" ] || { rm -f "$port/kani-list.json"; fail "kani.sh, a listing that writes none: the stale kani-list.json is still there"; }
+grep -qxF "kani: cargo kani list wrote no kani-list.json for alpha" "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "kani.sh, a listing that writes none: got = no message naming alpha, want = one"; }
+expect "kani.sh runs nothing after a listing that writes none" "$(cat "$tmp/calls")" "$la"
+echo "ok kani.sh refuses a listing that writes no kani-list.json"
 kani KANI_CRATES=alpha sh "$k" || { cat "$tmp/out" >&2; fail "kani.sh, a listing that passes: kani.sh failed"; }
 ! grep -q 'Compiling alpha for Kani' "$tmp/out" ||
   { cat "$tmp/out" >&2; fail "kani.sh, a listing that passes: got = its build output, want = none"; }

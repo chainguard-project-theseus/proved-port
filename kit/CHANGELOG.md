@@ -68,6 +68,12 @@ where it reports drift.
   may be one no target makes, so a file it names is unsure through it:
   counted, never verified. No port's run changes (each port's counter
   output, `--list` included, is identical before and after).
+- kani.sh removes a `kani-list.json` in the port's root before each
+  `cargo kani list` (#125), and fails (exit 1, naming the crate) when
+  a listing that passes writes none. It read whatever file sat there,
+  so a stale one from a manual `cargo kani list` would have stood for
+  a crate whose listing wrote nothing. Kani 0.68.0 writes the file on
+  every listing, so a port sees no change.
 
 ## 0.4.5
 
