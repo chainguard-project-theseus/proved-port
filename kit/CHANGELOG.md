@@ -75,6 +75,7 @@ where it reports drift.
   guard in `kit/count/README.md` lists the two; a port that copied the
   guard adds them to its `PROVED_PORT_TARGETS` when it starts to use
   them.
+- The counter's version is 0.4.11, ready for the v0.4.11 tag.
 
 ### Porting notes
 
@@ -112,6 +113,10 @@ where it reports drift.
    and `PERF_BUDGET_CARGO_FLAGS = --locked`; with them, at challoc
    053c930 and rustc 1.99.1, both builds pass and the checker's output
    is the same as challoc's script's, line for line.
+5. After notes 1 and 2, move the pin together, to 0.4.11, as 0.3.1's
+   note 1 lists, then run `make verus-headers`. A port moving from 0.4.9
+   or earlier applies the notes of each release in between first. No
+   header or existing target changes.
 
 ## 0.4.10
 
