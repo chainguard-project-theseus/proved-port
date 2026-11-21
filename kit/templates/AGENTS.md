@@ -19,8 +19,8 @@ issue or PR.
 
 - **ABI compatibility with {LIBRARY} {UPSTREAM_VERSION}.** The same
   header constants, exported names, sonames, symbol version nodes, error
-  codes and error texts. A deliberate difference needs an entry in
-  `docs/abi-changes.md` in the same PR.
+  codes and error texts. A deliberate difference needs an entry,
+  `docs/abi/ABI-<nnn>.md` (`docs/abi/README.md`), in the same PR.
 - **The C library decides what is correct.** A divergence found by the
   conformance ratchet, the differential runner or fuzz-diff is a bug, or
   it gets an `ABI-nnn` entry and a narrow known-divergence predicate

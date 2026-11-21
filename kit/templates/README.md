@@ -69,7 +69,8 @@ pull request that lands that share lower (FLOOR's header).
 | `verus/THEOREMS.md` | `verus/THEOREMS.md` | the trusted base; each theorem file's first line is its index entry |
 | `verus/theorems/TEMPLATE.md` | `verus/theorems/<ID>.md` | one theorem: statement, mutants, checks, what it does not say, seams |
 | `verus/seams/kani-TEMPLATE.md` | `verus/seams/kani-<seam id>.md` | one Kani record: contract, statement, translation, review, tests |
-| `docs/abi-changes.md` | `docs/abi-changes.md` | the `ABI-nnn` known-differences ledger |
+| `docs/abi/README.md` | `docs/abi/README.md` | the `ABI-nnn` known-differences ledger: entry format, ID rules, the check |
+| `docs/abi/ABI-001.md` | `docs/abi/ABI-<nnn>.md` | one ledger entry, a file of its own whose first line is its heading |
 | `AGENTS.md` | `AGENTS.md` | outline: non-negotiables, workflow, proofs |
 | `CONTRIBUTING.md` | `CONTRIBUTING.md` | outline: hard rules, tests, FLOOR and rlimit, sending a change |
 
@@ -91,7 +92,7 @@ pull request that lands that share lower (FLOOR's header).
    finds none:
 
    ```sh
-   grep -rnE '\{[A-Z][A-Z_]*[}:]|\{[A-Z][a-z]' README.md AGENTS.md CONTRIBUTING.md docs/abi-changes.md verus/
+   grep -rnE '\{[A-Z][A-Z_]*[}:]|\{[A-Z][a-z]' README.md AGENTS.md CONTRIBUTING.md docs/abi/ verus/
    ```
 3. Start FLOOR at the counter's first run: record the figures its
    `shipped` row names, rounded down, as the check prints them. A port
@@ -227,7 +228,7 @@ only its entry's prompt: FLOOR never goes down and gains no `lowered`
 line, the kit's pin (`theseus-proved-port~`, `PROVED_PORT_VERSION`, and
 the proved-port marketplace ref in `.claude/settings.json`) moves only
 through the kit entry, and a reference bump
-updates `docs/abi-changes.md`, the deviations lists and the
+updates the `docs/abi/` entries, the deviations lists and the
 known-differences rows in the same pull request. The kit entry moves
 every kit pin together to the newest release, with no waiting period
 (the kit is first-party), takes the kit's header text where `make

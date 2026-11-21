@@ -24,6 +24,24 @@ where it reports drift.
   passes is unchanged. A port with neither key prints what it did. The
   room is a port's own choice: one that sets the keys states its room
   in a paragraph of its FLOOR below the header.
+- The templates keep the `ABI-nnn` ledger one file per entry (#101):
+  `kit/templates/docs/abi-changes.md` is now `docs/abi/README.md` (the
+  entry format, the ID rules, and what to do when two pull requests
+  take the same ID) and `docs/abi/ABI-001.md` (the first entry). The
+  AGENTS.md, CONTRIBUTING.md, review-prompt.md, deps.yaml, fuzz.yaml and
+  conformance.yaml templates and the skill's abi-compat.md cite the new
+  paths. No counter or make target reads the ledger.
+
+### Porting notes
+
+1. The ledger layout is a port's own move, not part of the bump: a port
+   still on `docs/abi-changes.md` keeps it, and the kit entry leaves it
+   alone. A port that moves splits each `### ABI-nnn` entry into
+   `docs/abi/ABI-nnn.md`, keeps the file's preamble as
+   `docs/abi/README.md`, and changes every citation of
+   `docs/abi-changes.md` (its AGENTS.md, CONTRIBUTING.md, review prompt,
+   deps.yaml paths and prompts, and check descriptions), in a pull
+   request of its own.
 
 ## 0.4.6
 

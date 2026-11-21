@@ -244,7 +244,7 @@ updates:
     - "fuzz/diff/**"
     - "include/**"
     - "ci/abi.sh"
-    - "docs/abi-changes.md"
+    - "docs/abi/**"
   environment: dev
   merge: manual
   prompt: >-
@@ -263,8 +263,8 @@ updates:
     and the new API the release adds; and every mention of
     "{UPSTREAM_VERSION}" naming the reference in docs, check descriptions
     and comments. The known-differences rows must stay true for the new
-    release, in the same pull request: each docs/abi-changes.md ABI-nnn
-    entry (say which still hold), tests/upstream/deviations.txt and
+    release, in the same pull request: each ABI-nnn entry in docs/abi/
+    (say which still hold), tests/upstream/deviations.txt and
     tests/upstream/differential.txt (each reason cites an active ABI-nnn
     entry), and fuzz/diff's known rows. deviations.txt only loses lines: a
     block of the new tests that {PORT} fails is a regression to fix, or,
@@ -295,7 +295,7 @@ updates:
     in the body. Run each moved one with `make consumers NAME=<name>`.
     expected-failures.txt lists the tests that may fail, each with an
     allowed reason (fails with {LIBRARY} too, saying how that was shown; a
-    documented difference linking its docs/abi-changes.md entry; or a
+    documented difference linking its docs/abi/ABI-nnn.md entry; or a
     {PORT} bug linking its issue): remove lines that no longer fail, and
     add a line only with one of those reasons, shown in the body. A new
     failure that is a {PORT} bug is left for a person: keep that consumer

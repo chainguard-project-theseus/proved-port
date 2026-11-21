@@ -112,7 +112,7 @@ kit/
   abi/
     check/                   abi.sh, header-check, glibc-max, map lint
     ledger/                  ABI-nnn citation lint (the entry format is
-                             templates/docs/abi-changes.md)
+                             templates/docs/abi/README.md)
   diff/
     fuzz-diff/               generic dlopen driver shell, known-table harness, citation lint
     ratchet/                 per-block deviations ratchet
