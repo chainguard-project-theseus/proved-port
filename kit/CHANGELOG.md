@@ -32,10 +32,20 @@ where it reports drift.
   `UNSAFE_MANIFEST` (by default `KANI_MANIFEST`) and
   `UNSAFE_CHECK_FLAGS` cover a workspace below the root and features.
   It is a new target: no existing target or check changes.
+- REACH takes an export a `cfg_attr` applies as an entry point (#153):
+  `no_mangle` or `export_name`, inside `unsafe(..)` or not, under
+  `cfg_attr`s nested to any depth, where a shipped build can meet the
+  predicate (a feature, in `verus_sets` or not, a platform). Under a
+  predicate no shipped build meets (`any()`, a test atom, a Verus-only
+  feature) it is not one. Before, only an export outside any `cfg_attr`
+  was, so a `#[cfg_attr(feature = "..", unsafe(export_name = ..))]`
+  function and what only it calls were never walked. An exported symbol
+  whose ABI is not C's is an error under a `cfg_attr` too, and so is a
+  `cfg_attr` predicate on an export that the counter cannot read.
 
 ### Porting notes
 
-1. Nothing is required. A port may replace the shared part of its
+1. Nothing is required for `make lint-unsafe`. A port may replace the shared part of its
    `ci/lint-unsafe.sh` with `make lint-unsafe`: set `UNSAFE_CRATES` (and
    `UNSAFE_WORKSPACE_LINTS = no` if its manifests have no workspace
    lints) before the include, run `make lint-unsafe` from the script or
@@ -46,6 +56,16 @@ where it reports drift.
    "Adopting: the package") adds `lint-unsafe` to its
    `PROVED_PORT_TARGETS`, so the target fails with the kit's message
    where the package is missing.
+2. A port with `[reach]` whose exports sit under a `cfg_attr` now has
+   them as entry points: `verus-count` fails on each unverified function
+   they newly reach (no row goes stale, since entry points are only
+   added). List each one in REACH as a `new FILE NAME REASON` row (the
+   verus check runs with `--base-rev`, which fails on a row the base's
+   REACH lacks unless it is marked `new`), or verify it. The deps kit
+   entry leaves such a bump to a person, as its prompt says of a new
+   REACH row. Every port's run, `[reach]` or not, also fails
+   on a function a shipped build exports through a `cfg_attr` whose ABI
+   is not C's. A port with no export under a `cfg_attr` sees no change.
 
 ## 0.4.7
 

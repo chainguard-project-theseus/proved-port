@@ -785,34 +785,35 @@ fn is_c_abi(sig: &Signature) -> bool {
     })
 }
 
-/// Whether C can call the function by its name: `#[no_mangle]` or
-/// `#[export_name = ..]`, either one inside `#[unsafe(..)]` too. That, not
-/// the ABI, makes a function an entry point ([`entry_roots`]); the ABI is
-/// then [`is_c_abi`]'s to check ([`Counter::record`]).
-fn exports_symbol(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        let tokens = verus_syn::__private::ToTokens::to_token_stream(&a.meta);
-        let mut idents = Vec::new();
-        let mut stack = vec![tokens];
-        while let Some(ts) = stack.pop() {
-            for t in ts {
-                match t {
-                    TokenTree::Ident(i) => idents.push(i.to_string()),
-                    TokenTree::Group(g) if g.delimiter() == proc_macro2::Delimiter::Parenthesis => {
-                        stack.push(g.stream());
-                    }
-                    _ => {}
+/// Whether C can call the function by its name in some shipped build:
+/// `#[no_mangle]` or `#[export_name = ..]`, either one inside
+/// `#[unsafe(..)]` too, read through [`applied_attrs`], so under
+/// `cfg_attr`s nested to any depth and beside other attributes. One a
+/// `cfg_attr` applies counts when a shipped build can meet its predicates
+/// (by [`cfg_eval`]): a feature, in `verus_sets` or not, a platform, or
+/// any atom the configuration does not settle, so no function a shipped
+/// C caller may enter drops out of the walk. One whose predicates no
+/// shipped build meets (`any()`, a test atom, a Verus-only one) does not.
+/// A predicate it cannot read is an error. That, not the ABI, makes a
+/// function an entry point ([`entry_roots`]); the ABI is then
+/// [`is_c_abi`]'s to check ([`Counter::record`]).
+fn exports_symbol(attrs: &[Attribute], atoms: &Atoms) -> Result<bool, String> {
+    let names = |t: Option<&TokenTree>| matches!(t, Some(TokenTree::Ident(i)) if i == "no_mangle" || i == "export_name");
+    for (preds, toks) in applied_attrs(attrs) {
+        let exports = names(toks.first())
+            || match toks.as_slice() {
+                [TokenTree::Ident(u), TokenTree::Group(g), ..]
+                    if u == "unsafe" && g.delimiter() == proc_macro2::Delimiter::Parenthesis =>
+                {
+                    names(g.stream().into_iter().next().as_ref())
                 }
-            }
+                _ => false,
+            };
+        if exports && (preds.is_empty() || cfg_eval(&all_of(&preds), false, atoms)?.t) {
+            return Ok(true);
         }
-        match idents.first().map(String::as_str) {
-            Some("no_mangle" | "export_name") => true,
-            Some("unsafe") => idents
-                .get(1)
-                .is_some_and(|i| i == "no_mangle" || i == "export_name"),
-            _ => false,
-        }
-    })
+    }
+    Ok(false)
 }
 
 /// A signature's parameters, the receiver aside, and whether it has one.
@@ -3044,9 +3045,14 @@ impl Counter {
 
     /// Whether a function with `attrs` and `sig`, at `line`, is a C entry
     /// point ([`exports_symbol`]). An exported symbol whose ABI C cannot
-    /// call ([`is_c_abi`]) is an error.
+    /// call ([`is_c_abi`]) is an error, and so is a `cfg_attr` predicate it
+    /// cannot read, which leaves the function an entry point.
     fn entry(&mut self, attrs: &[Attribute], sig: &Signature, line: usize) -> bool {
-        let entry = exports_symbol(attrs);
+        let entry = exports_symbol(attrs, &self.atoms).unwrap_or_else(|e| {
+            eprintln!("{}:{line}: `{}`: {e}", self.file.display(), sig.ident);
+            self.errors += 1;
+            true
+        });
         if entry && !is_c_abi(sig) {
             eprintln!(
                 "{}:{line}: `{}` exports its symbol but its ABI is not C's (extern \"C\", \"C-unwind\" or bare extern)",
@@ -11872,6 +11878,85 @@ width::fn_ptr! {
                 .any(|f| f.name == "clone" && f.owner.starts_with('P'))
         );
         assert_eq!(named(&["other"]), Vec::<String>::new());
+    }
+
+    // An export a `cfg_attr` applies is an entry point when a shipped
+    // build can meet the predicate (#153): a feature
+    // in `verus_sets` (`jit`) or outside it, a platform, nested and beside
+    // other attributes, with a literal or a macro as the name. Negative:
+    // one under a predicate no shipped build meets (`any()`, `test`,
+    // `kani`, the Verus-only `feature = "verus"`, a conjunction needing
+    // two values of one key) is not, nor is a function whose other
+    // attributes only name an export (a doc comment, `inline`). An
+    // unreadable predicate is an error, and leaves the function an entry
+    // point; so is a non-C ABI under an export a shipped build applies.
+    #[test]
+    fn an_export_under_cfg_attr_is_an_entry_where_a_shipped_build_applies_it() {
+        let c = walked(
+            r#"
+#[cfg_attr(feature = "export-symbols", unsafe(export_name = prefix!(BZ2_a)))]
+pub extern "C" fn outside_sets_macro() {}
+#[cfg_attr(feature = "jit", unsafe(export_name = prefix!(BZ2_b)))]
+pub extern "C" fn in_sets_macro() {}
+#[cfg_attr(feature = "export-symbols", unsafe(export_name = "BZ2_c"))]
+pub extern "C" fn outside_sets_literal() {}
+#[cfg_attr(feature = "jit", unsafe(export_name = "BZ2_d"))]
+pub extern "C" fn in_sets_literal() {}
+#[cfg_attr(feature = "export-symbols", export_name = "BZ2_e")]
+pub extern "C" fn bare_export_name() {}
+#[cfg_attr(unix, unsafe(no_mangle))]
+pub extern "C" fn platform_no_mangle() {}
+#[cfg_attr(feature = "jit", cfg_attr(unix, inline, unsafe(no_mangle)))]
+pub extern "C" fn nested_beside() {}
+#[cfg_attr(any(), unsafe(no_mangle))]
+pub extern "C" fn never() {}
+#[cfg_attr(test, unsafe(export_name = prefix!(BZ2_f)))]
+pub extern "C" fn test_only() {}
+#[cfg_attr(kani, unsafe(no_mangle))]
+pub extern "C" fn kani_only() {}
+#[cfg_attr(feature = "verus", unsafe(no_mangle))]
+pub extern "C" fn verus_only() {}
+#[cfg_attr(feature = "jit", cfg_attr(test, unsafe(no_mangle)))]
+pub extern "C" fn nested_test() {}
+#[cfg_attr(all(target_arch = "x86_64", target_arch = "aarch64"), unsafe(no_mangle))]
+pub extern "C" fn two_arches() {}
+/// Not `#[no_mangle]`.
+#[cfg_attr(feature = "jit", inline)]
+pub extern "C" fn names_only() {}
+"#,
+        );
+        assert_eq!(c.errors, 0);
+        let mut entries: Vec<&str> = c
+            .fns
+            .iter()
+            .filter(|f| f.entry)
+            .map(|f| f.name.as_str())
+            .collect();
+        entries.sort_unstable();
+        assert_eq!(
+            entries,
+            [
+                "bare_export_name",
+                "in_sets_literal",
+                "in_sets_macro",
+                "nested_beside",
+                "outside_sets_literal",
+                "outside_sets_macro",
+                "platform_no_mangle"
+            ]
+        );
+        let bad = walked(
+            "#[cfg_attr(feature = \"jit\", unsafe(no_mangle))]\nfn rust_abi() {}\n\
+             #[cfg_attr(test, unsafe(no_mangle))]\nfn test_rust_abi() {}\n\
+             #[cfg_attr(nonsense(x), unsafe(no_mangle))]\nextern \"C\" fn unreadable() {}\n",
+        );
+        assert_eq!(bad.errors, 2);
+        assert!(bad.fns.iter().any(|f| f.name == "unreadable" && f.entry));
+        assert!(
+            bad.fns
+                .iter()
+                .any(|f| f.name == "test_rust_abi" && !f.entry)
+        );
     }
 
     // A function a `static` or `const` passes by name, bare or by path, is

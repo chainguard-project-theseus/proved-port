@@ -5,6 +5,9 @@
 //! The roots are the counter's (`entry_roots`):
 //! - every function of a shipped crate that exports its symbol
 //!   (`no_mangle`, `export_name`): `pcre2_version` and the POSIX wrappers;
+//!   one a `cfg_attr` applies counts where a shipped build can meet its
+//!   predicate (`exports_symbol`), as
+//!   `cfg_attr(feature = "export-symbols", unsafe(export_name = ..))`;
 //! - every function a `const` or `static` hands out as a value;
 //! - every body a `width::exports!` block exports, and the
 //!   `width::FromC::from_c` conversions its `_8`, `_16` and `_32` wrappers

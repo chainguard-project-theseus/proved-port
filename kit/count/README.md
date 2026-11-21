@@ -243,7 +243,11 @@ root's, the whole crate). `cfg_attr`s apply as rustc expands them,
 nested to any depth (`cfg_attr(P, cfg_attr(R, ..))` applies under
 `all(P, R)`) and each attribute of `cfg_attr(P, a, b)` under `P`, for
 `cfg`s, `#[path]`s and Verus's attribute form alike: `#[cfg_attr(P,
-cfg(Q))]` counts as the `cfg` `any(not(P), Q)`. Every `cfg` a function is under, its own and those
+cfg(Q))]` counts as the `cfg` `any(not(P), Q)`. A `no_mangle` or
+`export_name` under `cfg_attr(P, ..)` makes the function a C entry
+point for REACH where a shipped build can meet `P` (a feature, in
+`verus_sets` or not), and not where none can (`any()`, `test`, a
+Verus-only feature). Every `cfg` a function is under, its own and those
 around it, is read as one conjunction. A file declared more than once
 (`#[cfg(target_os = "linux")] #[path = "unix.rs"] mod sys;` beside the
 same for macos) is built where any declaration holds, under either
