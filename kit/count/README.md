@@ -80,6 +80,8 @@ configuration does not compare;
 a `test_cfgs`, `test_features`
 or `verus_features` name added; a `verus_sets` or `verus_never_sets`
 atom added (compared as atoms, so respacing one is not a change); a
+`[[runs]]` run added, removed or renamed, an atom added to a run, or
+`[[runs]]` replacing the shorthand (#21); a
 `stand_ins` pair added; or a crate
 whose own Cargo.toml gains `publish = false`, where the base read it
 with its Cargo.toml deciding whether it ships (a `dir` crate, or a
@@ -190,6 +192,7 @@ not a source and is passed over.
 | | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords that the counter does not handle itself (a Verus keyword naming a field, a parameter or a `let` binding outside `verus!`, such as `exec: u8` or `let tracked = ..`, needs none: it is read as a raw identifier); one that would rewrite a name the counter classes code by (`external_body`, `assume_unsupported_attributes`, `exec_allows_no_decreases_clause`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, `unsafe`, a test cfg, a configured macro or mint, ...) is refused |
 | | `verus_only_ghost` | count the ghost functions of Verus-only code in the ghost column |
 | `[floor]` | `path`, `checked`, `renamed_from`, `room_functions`, `room_lines` | the FLOOR file (default `verus/FLOOR`); the prefix of the two verified-or-discharged figures (default `checked`); an older prefix the base revision's copy may still give them under, for the change that renames them (challoc's `combined`); room for unverified code a raise leaves (#100, default 0 each): the `raise FLOOR to` figure the run prints is the share with that many more unverified functions and lines in its denominators, and a share within that room prints no raise. Neither changes whether the run passes. The room is a port's own choice (#100 keeps it per port): the template FLOOR header keeps its rule, so a port that sets the keys states its room in a paragraph of its FLOOR below the header |
+| `[[runs]]` | `name`, `sets`, `never_sets` | each proof run and the atoms it is sure to set and never sets (#21), in place of `verus_sets` and `verus_never_sets`: "Verus's build", below |
 | `[rlimit]` | `path` | the RLIMIT file (default `verus/RLIMIT`) |
 | `[kani]` | `records` | the directory of `kani-*.md` records that cover the `discharged_by = "kani"` marker |
 | `[seams]` | `tables`, `theorems` | the seams tables, and a directory whose every `*.md` holds one |
@@ -312,10 +315,49 @@ with a `[[narrowed]]` line. A feature in `verus_sets` still ships: one
 that only Verus's build enables belongs in `verus_features`, which takes
 its items out of the shipped tally.
 
-A port that runs Verus on several hosts names each run's atoms (challoc,
-which runs it on x86_64 and natively on aarch64: `verus_sets =
-['target_arch = "x86_64"', 'target_arch = "aarch64"']`), since a
-function under either is checked by the run that sets it.
+A port that runs Verus on several hosts declares each run (#21) as a
+`[[runs]]` table, with the atoms that run is sure to set (`sets`) and
+never sets (`never_sets`), written as `verus_sets` writes them; the two
+`[crates]` lists are then left out, as they are one run's shorthand:
+
+```toml
+[[runs]]
+name = "verus"
+sets = ['target_arch = "x86_64"']
+never_sets = ["loom"]
+
+[[runs]]
+name = "verus-arm64"
+sets = ['target_arch = "aarch64"']
+never_sets = ["loom"]
+```
+
+An item is classed in each run as sure, never or unsure, under that
+run's atoms alone; a run that sets one value of a single-valued key
+(below) never sets its other values. It is verified where it is sure in
+at least one run and unsure in none; trusted where some run might ship
+it without compiling it for Verus, or no run compiles it but a shipped
+build may; and left out where no build compiles it. So on challoc's two
+runs, `not(target_arch = "x86_64")` is verified (never in the x86_64
+run, sure in the aarch64 one), and `all(target_arch = "x86_64",
+any(target_arch = "aarch64", unix))` is trusted (the x86_64 run compiles
+it only under `unix`, which it does not settle). An item in a module is
+sure only if each run that may compile the module is sure to compile
+the item there. A run with no name, a name given twice, an entry that is
+not one atom or is settled already, a run that sets two values of one
+single-valued key (a run is one target), or `[[runs]]` beside
+`verus_sets` or `verus_never_sets`, fails the run (exit 2). Under
+`--base-rev`, a run added, removed or renamed (a run removed may be the
+one where an item was unsure), an atom added to a run, or `[[runs]]`
+replacing the shorthand (even with the same atoms, since a run's set
+value of a single-valued key rules out its other values), is a
+narrowing; the base's shorthand is its one run, `verus`.
+
+Without `[[runs]]`, a port that runs Verus on several hosts names every
+run's atoms in the shorthand (challoc, which runs it on x86_64 and
+natively on aarch64: `verus_sets = ['target_arch = "x86_64"',
+'target_arch = "aarch64"']`), since a function under either is checked
+by the run that sets it, and the rules below apply.
 
 A predicate that needs two values of one key rustc gives each target
 one value of (`target_arch`, `target_os`, `target_env`, `target_abi`,
@@ -346,8 +388,8 @@ declared), `#[cfg(target_os = "macos")] mod mac { #[cfg(target_arch =
 "macos"))`; so is a function under `all(target_arch = "x86_64",
 any(target_arch = "aarch64", unix))`. `not(target_arch = "x86_64")`
 stays unsure too: the function counts as trusted though the aarch64 run
-checks it. A model of each run's atoms would credit these where a run
-checks them; the counter has none yet.
+checks it. Declaring the runs (`[[runs]]`, above) credits these where a
+run checks them.
 Since each atom is read on its own, a file declared under `feature =
 "std"` and again under `not(feature = "std")`, which every build
 compiles, stays unsure too, unless the configuration settles `std`.
@@ -577,7 +619,12 @@ platform or any other atom the configuration does not settle
 (`target_os = "windows"`, or `all(feature = "verus", unix)`) may leave
 the attribute off where Verus runs, and the function unchecked, so it
 counts as trusted, as a function under a `cfg` Verus might not meet
-does. A predicate Verus's build never meets (`any()`, `test`, a
+does. With `[[runs]]`, the attribute is sure only when every run that
+may compile the function is sure to apply it: on challoc's two runs, an
+unguarded function under `cfg_attr(not(target_arch = "x86_64"),
+verus_verify)` is trusted, since the x86_64 run compiles it without the
+attribute, while the same function under `#[cfg(target_arch =
+"aarch64")]` is verified. A predicate Verus's build never meets (`any()`, `test`, a
 `verus_never_sets` atom) never applies the attribute, so the function is
 outside.
 

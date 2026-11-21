@@ -31,6 +31,16 @@ where it reports drift.
   AGENTS.md, CONTRIBUTING.md, review-prompt.md, deps.yaml, fuzz.yaml and
   conformance.yaml templates and the skill's abi-compat.md cite the new
   paths. No counter or make target reads the ledger.
+- `verus/count.toml` takes `[[runs]]` (#21): each proof run's `name`,
+  and the atoms it is sure to set (`sets`) and never sets
+  (`never_sets`). An item is classed in each run and verified where it
+  is sure in some run and unsure in none, so a port that runs Verus on
+  several hosts is counted run by run. `[crates] verus_sets` and
+  `verus_never_sets` stay as one run's shorthand and cannot sit beside
+  `[[runs]]`. A port with no `[[runs]]` counts as it did. Under
+  `--base-rev`, a run added, removed or renamed, an atom added to a
+  run, or `[[runs]]` replacing the shorthand, is a narrowing. A run may set only one value of each
+  single-valued key (`target_arch`, `target_os`, ...).
 
 ### Porting notes
 
@@ -42,6 +52,13 @@ where it reports drift.
    `docs/abi-changes.md` (its AGENTS.md, CONTRIBUTING.md, review prompt,
    deps.yaml paths and prompts, and check descriptions), in a pull
    request of its own.
+2. A port that runs Verus on several hosts (challoc: x86_64 and
+   aarch64) may declare each run as `[[runs]]` in place of the
+   shorthand, in its own pull request with a `[[narrowed]]` line for
+   `[[runs]] replaces the [crates] verus_sets shorthand` and one per
+   run added or removed (the shorthand's run is `verus`, so a head
+   with no run of that name also removes it). Items only one run compiles, such as one
+   under `not(target_arch = "x86_64")`, may then count as verified.
 
 ## 0.4.6
 

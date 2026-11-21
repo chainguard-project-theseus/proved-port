@@ -48,6 +48,25 @@ pub(crate) struct Config {
     /// with its reason ([`Config::explain`]).
     #[serde(default)]
     pub(crate) narrowed: Vec<Narrowed>,
+    /// Each proof run and the atoms it is sure to set or never sets (#21):
+    /// a port that runs Verus on several hosts declares one per host, and
+    /// an item is classed in each run and the classes combined. Without
+    /// it, `[crates] verus_sets` and `verus_never_sets` are one run's.
+    #[serde(default)]
+    pub(crate) runs: Vec<Run>,
+}
+
+/// One proof run (`[[runs]]`, #21): its name, and the `cfg` atoms its
+/// Verus build is sure to set and never sets, written as `[crates]
+/// verus_sets` writes them.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Run {
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) sets: Vec<String>,
+    #[serde(default)]
+    pub(crate) never_sets: Vec<String>,
 }
 
 /// The crates the counter reads.
@@ -392,9 +411,11 @@ impl Config {
             .chain(self.crates.test_features.iter().cloned())
             .chain(self.crates.verus_features.iter().cloned())
             .chain(
-                self.verus_set_atoms()
+                // Every proof run's atoms: the `[[runs]]` tables, or the
+                // shorthand's one run (#21).
+                self.proof_runs()
                     .into_iter()
-                    .chain(self.verus_never_atoms())
+                    .flat_map(|(_, sets, never)| sets.into_iter().chain(never))
                     .flat_map(|a| {
                         a.split('=')
                             .map(|p| p.trim_matches('"').to_owned())
@@ -437,7 +458,93 @@ impl Config {
                 seen.push((a, what));
             }
         }
+        self.check_runs()
+    }
+
+    /// Fails on a `[[runs]]` table beside `[crates] verus_sets` or
+    /// `verus_never_sets` (the shorthand is one run's, so the two cannot
+    /// both say what the proof runs set), on a run with no name or a name
+    /// given twice, and on a run's entry that is not one `cfg` atom, that
+    /// the configuration already settles, or that the run names twice.
+    fn check_runs(&self) -> Result<(), String> {
+        if self.runs.is_empty() {
+            return Ok(());
+        }
+        if !self.crates.verus_sets.is_empty() || !self.crates.verus_never_sets.is_empty() {
+            return Err("[[runs]] and [crates] verus_sets or verus_never_sets both name the proof runs' atoms: move the shorthand's atoms into each [[runs]] table".into());
+        }
+        let settled: Vec<(String, &str)> = self
+            .test_atoms()
+            .into_iter()
+            .map(|a| (a, "a test atom"))
+            .chain(self.verus_atoms().into_iter().map(|a| (a, "a Verus atom")))
+            .collect();
+        let mut names: Vec<&str> = Vec::new();
+        for r in &self.runs {
+            let name = r.name.trim();
+            if name.is_empty() {
+                return Err("a [[runs]] table needs a name".into());
+            }
+            if names.contains(&name) {
+                return Err(format!("[[runs]] names the run {name:?} twice"));
+            }
+            names.push(name);
+            let mut seen = settled.clone();
+            for (key, list, what) in [
+                ("sets", &r.sets, "in its sets"),
+                ("never_sets", &r.never_sets, "in its never_sets"),
+            ] {
+                for n in list {
+                    let a = atom(n).ok_or_else(|| {
+                        format!(
+                            "run {name:?} {key} entry {n:?} is not one cfg atom: give a name (`miri`) or `name = \"value\"` (`feature = \"jit\"`)"
+                        )
+                    })?;
+                    if let Some((_, was)) = seen.iter().find(|(s, _)| *s == a) {
+                        return Err(format!("run {name:?} {key} entry {n:?} is already {was}"));
+                    }
+                    // A run is one target: it sets one value of a key
+                    // rustc gives each target one value of.
+                    if key == "sets"
+                        && let Some((k, _)) = a.split_once('=')
+                        && crate::SINGLE_VALUED.contains(&k)
+                        && r.sets
+                            .iter()
+                            .filter_map(|s| atom(s))
+                            .any(|s| s != a && s.split_once('=').is_some_and(|(sk, _)| sk == k))
+                    {
+                        return Err(format!(
+                            "run {name:?} sets two values of {k}, which a target has one of: declare a run per target"
+                        ));
+                    }
+                    seen.push((a, what));
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// Each proof run's name and atoms (`sets`, `never`), as `cfg_eval`
+    /// compares them: the `[[runs]]` tables, or, without any, one run
+    /// named `verus` holding `[crates] verus_sets` and `verus_never_sets`.
+    pub(crate) fn proof_runs(&self) -> Vec<(String, Vec<String>, Vec<String>)> {
+        if self.runs.is_empty() {
+            return vec![(
+                "verus".to_owned(),
+                self.verus_set_atoms(),
+                self.verus_never_atoms(),
+            )];
+        }
+        self.runs
+            .iter()
+            .map(|r| {
+                (
+                    r.name.trim().to_owned(),
+                    r.sets.iter().filter_map(|n| atom(n)).collect(),
+                    r.never_sets.iter().filter_map(|n| atom(n)).collect(),
+                )
+            })
+            .collect()
     }
 
     /// The `cfg` atoms that only Verus's build meets, as `cfg_eval`
@@ -671,6 +778,50 @@ impl Config {
                     format!("[crates] {key} adds {n:?}"),
                     "so the counter takes Verus's build to settle it, and the functions it guards may count as verified",
                 );
+            }
+        }
+        // Per run (#21), once either side declares [[runs]]: a run added
+        // or renamed, or an atom added to a run, is a narrowing. The base's
+        // shorthand is its one run, `verus`.
+        if !self.runs.is_empty() || !base.runs.is_empty() {
+            let there = base.proof_runs();
+            let here = self.proof_runs();
+            // Declared runs read a set value of a single-valued key as
+            // ruling out its other values, which the shorthand does not, so
+            // adopting them is a narrowing even with the same atoms.
+            if base.runs.is_empty() && !self.runs.is_empty() {
+                push(
+                    "[[runs]] replaces the [crates] verus_sets shorthand".to_owned(),
+                    "so a run's set value of a single-valued key rules out its other values, and the functions under those may count as verified",
+                );
+            }
+            // A run removed may be the one where an item was unsure, so
+            // its other runs then verify it.
+            for (name, _, _) in there
+                .iter()
+                .filter(|(n, _, _)| here.iter().all(|(h, _, _)| h != n))
+            {
+                push(
+                    format!("[[runs]] removes the run {name:?}"),
+                    "so the functions only it left unsure may count as verified",
+                );
+            }
+            for (name, sets, never) in here {
+                let Some((_, bs, bn)) = there.iter().find(|(n, _, _)| *n == name) else {
+                    push(
+                        format!("[[runs]] adds the run {name:?}"),
+                        "so the functions only it settles may count as verified",
+                    );
+                    continue;
+                };
+                for (key, here, was) in [("sets", &sets, bs), ("never_sets", &never, bn)] {
+                    for a in here.iter().filter(|a| !was.contains(a)) {
+                        push(
+                            format!("run {name:?} {key} adds {a:?}"),
+                            "so the counter takes that run to settle it, and the functions it guards may count as verified",
+                        );
+                    }
+                }
             }
         }
         for (section, here, there) in [
@@ -1194,6 +1345,18 @@ mod tests {
                 "verus_sets = ['target_os = \"linux\"']\n",
                 "linux",
             ),
+            // A `[[runs]]` table's atoms are read as the shorthand's are.
+            (
+                r#"["\"jit\"", "\"jix\""]"#,
+                "[[runs]]\nname = \"verus\"\nsets = ['feature = \"jix\"']\nnever_sets = ['feature = \"jit\"']\n",
+                "jit",
+            ),
+            (
+                r#"["(loom)", "(looz)"]"#,
+                "[[runs]]\nname = \"a\"\nsets = ['target_arch = \"x86_64\"']\n\
+                 [[runs]]\nname = \"b\"\nnever_sets = [\"loom\"]\n",
+                "loom",
+            ),
             (
                 r#"["c_mint(", "c_minx("]"#,
                 "[mints]\npath = \"m\"\nmint = \"c_mint\"\ntoken_trait = \"CToken\"\nhome = \"h\"\n",
@@ -1259,6 +1422,155 @@ home = "crates/pcre2-capi/src/object.rs"
     /// `verus_features` name, a `verus_sets` or `verus_never_sets` atom,
     /// or a `stand_ins` pair, each names what it turned off. Removing or
     /// respacing a `verus_sets` or `verus_never_sets` atom is not.
+    /// `[[runs]]` (#21): two runs read, each with its own atoms, and the
+    /// shorthand is their one run, `verus`. Negative: a run beside the
+    /// shorthand, without a name, named twice, with an entry that is not
+    /// one atom, settled already, or named twice in it, is refused.
+    #[test]
+    fn proof_runs_read_and_bad_runs_fail() {
+        const RUNS: &str = "[crates]\ndir = \"c\"\n\
+            [[runs]]\nname = \"verus\"\nsets = ['target_arch = \"x86_64\"']\nnever_sets = [\"loom\"]\n\
+            [[runs]]\nname = \"verus-arm64\"\nsets = ['target_arch = \"aarch64\"']\n";
+        let c = Config::parse(RUNS).expect("parses");
+        assert_eq!(
+            c.proof_runs(),
+            vec![
+                (
+                    "verus".to_owned(),
+                    vec!["target_arch=\"x86_64\"".to_owned()],
+                    vec!["loom".to_owned()],
+                ),
+                (
+                    "verus-arm64".to_owned(),
+                    vec!["target_arch=\"aarch64\"".to_owned()],
+                    vec![],
+                ),
+            ]
+        );
+        let short = Config::parse("[crates]\ndir = \"c\"\nverus_never_sets = [\"miri\"]\n")
+            .expect("parses");
+        assert_eq!(
+            short.proof_runs(),
+            vec![("verus".to_owned(), vec![], vec!["miri".to_owned()])]
+        );
+        for (text, want) in [
+            (
+                "[crates]\ndir = \"c\"\nverus_sets = [\"unix\"]\n[[runs]]\nname = \"a\"\n",
+                "both name the proof runs' atoms",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \" \"\n",
+                "needs a name",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\n[[runs]]\nname = \"a\"\n",
+                "names the run \"a\" twice",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nsets = [\"all(unix)\"]\n",
+                "is not one cfg atom",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nnever_sets = [\"test\"]\n",
+                "is already a test atom",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nsets = [\"verus_keep_ghost\"]\n",
+                "is already a Verus atom",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nsets = [\"unix\"]\nnever_sets = [\"unix\"]\n",
+                "is already in its sets",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nsetz = [\"unix\"]\n",
+                "unknown field",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nsets = ['target_arch = \"x86_64\"', 'target_arch = \"aarch64\"']\n",
+                "sets two values of target_arch",
+            ),
+        ] {
+            let got = Config::parse(text).map(|_| ()).unwrap_err();
+            assert!(got.contains(want), "{text:?}: got = {got}, want = {want}");
+        }
+        // Two runs may each set an atom: it is one run's, not both's.
+        Config::parse(
+            "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nsets = [\"unix\"]\n[[runs]]\nname = \"b\"\nsets = [\"unix\"]\n",
+        )
+        .expect("parses");
+    }
+
+    /// Under `--base-rev`, a run added, removed or renamed, an atom added
+    /// to a run, or `[[runs]]` replacing the shorthand, is a narrowing
+    /// (#21); the shorthand is the base's one run, `verus`. Removing an
+    /// atom is not.
+    #[test]
+    fn a_run_added_or_widened_is_a_narrowing() {
+        const BASE: &str = "[crates]\ndir = \"c\"\n\
+            [[runs]]\nname = \"verus\"\nsets = ['target_arch = \"x86_64\"']\nnever_sets = [\"loom\"]\n";
+        let shown = |head: &str, base: &str| {
+            Config::parse(head)
+                .expect("parses")
+                .narrowed_from(&Config::parse(base).expect("parses"))
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(shown(BASE, BASE), "");
+        assert_eq!(
+            shown(
+                &BASE.replace("sets = ['target_arch = \"x86_64\"']\n", ""),
+                BASE
+            ),
+            ""
+        );
+        for (head, base, want) in [
+            (
+                format!("{BASE}[[runs]]\nname = \"verus-arm64\"\n"),
+                BASE.to_owned(),
+                "[[runs]] adds the run \"verus-arm64\"",
+            ),
+            (
+                BASE.replace("name = \"verus\"", "name = \"verus-x86\""),
+                BASE.to_owned(),
+                "[[runs]] adds the run \"verus-x86\"",
+            ),
+            (
+                BASE.replace("[\"loom\"]", "[\"loom\", \"miri\"]"),
+                BASE.to_owned(),
+                "run \"verus\" never_sets adds \"miri\"",
+            ),
+            (
+                BASE.to_owned(),
+                format!("{BASE}[[runs]]\nname = \"verus-arm64\"\n"),
+                "[[runs]] removes the run \"verus-arm64\"",
+            ),
+            (
+                "[crates]\ndir = \"c\"\nverus_never_sets = [\"loom\"]\n".to_owned(),
+                format!("{BASE}[[runs]]\nname = \"verus-arm64\"\n"),
+                "[[runs]] removes the run \"verus-arm64\"",
+            ),
+            (
+                BASE.to_owned(),
+                "[crates]\ndir = \"c\"\nverus_never_sets = [\"loom\"]\n".to_owned(),
+                "run \"verus\" sets adds \"target_arch=\\\"x86_64\\\"\"",
+            ),
+            // The shorthand's atoms moved into one run of its name: the
+            // run's single-valued inference is new.
+            (
+                BASE.to_owned(),
+                "[crates]\ndir = \"c\"\nverus_sets = ['target_arch = \"x86_64\"']\nverus_never_sets = [\"loom\"]\n"
+                    .to_owned(),
+                "[[runs]] replaces the [crates] verus_sets shorthand",
+            ),
+        ] {
+            let got = shown(&head, &base);
+            assert!(got.contains(want), "{head:?}: got = {got}, want = {want}");
+        }
+    }
+
     #[test]
     fn a_gate_removed_or_narrowed_since_the_base_fails() {
         let shown = |n: &[Narrowing]| n.iter().map(ToString::to_string).collect::<Vec<_>>();
