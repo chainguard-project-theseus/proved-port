@@ -54,10 +54,18 @@ where it reports drift.
   its own `[lints.clippy]` when it does not inherit them), so the clippy
   check holds them, or to keep its own SAFETY: check as a later step. A
   template change moves no port.
+- The counter's version is 0.4.8, ready for the v0.4.8 tag.
 
 ### Porting notes
 
-1. Nothing is required for `make lint-unsafe`. A port may replace the shared part of its
+1. Move the pin together, to 0.4.8, as 0.3.1's note 1 lists, then run
+   `make verus-headers`. A port moving from 0.4.6 or earlier applies the
+   notes of each release in between first. Note 3 is the one change a
+   bump can see: a port with an export under a `cfg_attr` may gain REACH
+   rows. The counter built at 0.4.7 and at this release gave identical
+   output (standard output, standard error, exit code, `--list`
+   included) on the eleven ports the v0.4.8 release pull request names.
+2. Nothing is required for `make lint-unsafe`. A port may replace the shared part of its
    `ci/lint-unsafe.sh` with `make lint-unsafe`: set `UNSAFE_CRATES` (and
    `UNSAFE_WORKSPACE_LINTS = no` if its manifests have no workspace
    lints) before the include, run `make lint-unsafe` from the script or
@@ -73,7 +81,7 @@ where it reports drift.
    `make lint-unsafe`. Its `SAFETY:` comment check stays such a step
    unless its C API crate already denies clippy's
    `undocumented_unsafe_blocks` (kit/templates/README.md says where).
-2. A port with `[reach]` whose exports sit under a `cfg_attr` now has
+3. A port with `[reach]` whose exports sit under a `cfg_attr` now has
    them as entry points: `verus-count` fails on each unverified function
    they newly reach (no row goes stale, since entry points are only
    added). List each one in REACH as a `new FILE NAME REASON` row (the
