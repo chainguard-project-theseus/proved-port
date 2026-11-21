@@ -416,6 +416,12 @@ struct MacroDef {
     /// build ([`Built::Unsure`]), so that it may not shadow an earlier
     /// definition of its name.
     unsure: bool,
+    /// The `cfg` predicates on it and around it. [`Built::Shipped`] says
+    /// only that a shipped build can compile it and Verus's surely does (a
+    /// `verus_sets` atom), so in shipped code it shadows an earlier
+    /// definition only where a shipped build compiling the invocation
+    /// surely compiles it ([`shipped_may_skip`]).
+    guards: Vec<String>,
     /// The module whose end ends its textual scope: the module it is in,
     /// or for one in a `#[macro_use]` module (inline, or a file declared
     /// `#[macro_use] mod name;`), the module that one is in.
@@ -3298,6 +3304,7 @@ impl Counter {
                                 (true, false) => Built::Unsure,
                                 (true, true) => Built::Shipped,
                             },
+                            guards: self.guards.clone(),
                             scope: self.module.clone(),
                         },
                         &self.atoms,
@@ -3434,6 +3441,7 @@ impl Counter {
                 scope,
                 module,
                 built: class(i),
+                guards: classes[i].1.clone(),
             };
             macro_defs(
                 &file.items,
@@ -4163,7 +4171,12 @@ impl Counter {
         let before: Vec<&MacroDef> = before.into_iter().map(|(_, d)| d).collect();
         // When every one is under such a `cfg`, a build may compile none of
         // them, and then the definitions below are rustc's: they join.
-        let textual: Vec<&MacroDef> = match before.iter().position(|d| !d.unsure) {
+        // In shipped code, one a shipped build may skip does not end them
+        // either, though Verus's build is sure to compile it.
+        let shadows = |d: &&MacroDef| {
+            !d.unsure && !(self.shipped && shipped_may_skip(&d.guards, &self.guards, &self.atoms))
+        };
+        let textual: Vec<&MacroDef> = match before.iter().position(shadows) {
             Some(i) => return Ok(before[..=i].to_vec()),
             None => before,
         };
@@ -4742,6 +4755,9 @@ struct DefsAt<'a> {
     file: &'a Path,
     module: Vec<String>,
     built: Built,
+    /// The `cfg` predicates of the file and the items around (as
+    /// [`Counter::guards`] holds them).
+    guards: Vec<String>,
     scope: Vec<String>,
 }
 
@@ -5186,6 +5202,20 @@ fn use_paths(tree: &verus_syn::UseTree, prefix: &mut Vec<String>, out: &mut Vec<
     }
 }
 
+/// Whether a shipped build that compiles code under the `cfg` predicates
+/// `at` may leave out an item under `guards`: the conjunction of those of
+/// `guards` that `at` does not hold can be false there. One the counter
+/// cannot read may be.
+fn shipped_may_skip(guards: &[String], at: &[String], atoms: &Atoms) -> bool {
+    let own: Vec<&str> = guards
+        .iter()
+        .filter(|g| !at.contains(g))
+        .map(String::as_str)
+        .collect();
+    !own.is_empty()
+        && !cfg_eval(&format!("all({})", own.join(",")), false, atoms).is_ok_and(|c| !c.f)
+}
+
 /// The definition `m`, a `macro_rules!` item, at `at`.
 fn macro_def(m: &verus_syn::ItemMacro, at: &DefsAt, atoms: &Atoms, emitted: bool) -> MacroDef {
     let built = narrower(
@@ -5210,6 +5240,7 @@ fn macro_def(m: &verus_syn::ItemMacro, at: &DefsAt, atoms: &Atoms, emitted: bool
         },
         built,
         unsure: built == Built::Unsure,
+        guards: [&at.guards[..], &cfg_predicates(&m.attrs)].concat(),
         scope: at.scope.clone(),
         exported: has_attr(&m.attrs, "macro_export"),
         rules: expand::Rules::parse(m.mac.tokens.clone()),
@@ -5240,6 +5271,7 @@ fn macro_defs(
             attrs_built(attrs, atoms).unwrap_or(Built::Shipped),
         )
     };
+    let guards = |attrs: &[Attribute]| [&at.guards[..], &cfg_predicates(attrs)].concat();
     for item in items {
         match item {
             Item::Macro(m) if m.mac.path.is_ident("macro_rules") => {
@@ -5265,6 +5297,7 @@ fn macro_defs(
                         file: at.file,
                         module: at.module.clone(),
                         built: built(&m.attrs),
+                        guards: guards(&m.attrs),
                         scope: at.scope.clone(),
                     };
                     macro_defs(&f.items, &inner_at, atoms, (out, uses));
@@ -5283,6 +5316,7 @@ fn macro_defs(
                         file: at.file,
                         module,
                         built: built(&m.attrs),
+                        guards: guards(&m.attrs),
                         scope,
                     };
                     macro_defs(inner, &inner_at, atoms, (out, uses));
