@@ -129,6 +129,14 @@ pub(crate) struct Floor {
     /// test takes `checked` alone.
     #[serde(default)]
     pub(crate) renamed_from: Option<String>,
+    /// Room for unverified code a raise leaves (#100): the `raise FLOOR
+    /// to` figure the run prints is the share with this many more
+    /// unverified functions, and `room_lines` more unverified lines. It
+    /// changes no pass or failure. Default 0: the share itself.
+    #[serde(default)]
+    pub(crate) room_functions: usize,
+    #[serde(default)]
+    pub(crate) room_lines: usize,
     /// Whether the configuration has a `[floor]` table: a base revision
     /// whose copy has one must hold the FLOOR file it names.
     #[serde(skip_deserializing, default = "present")]
@@ -141,6 +149,8 @@ impl Default for Floor {
             path: default_floor(),
             checked: default_checked(),
             renamed_from: None,
+            room_functions: 0,
+            room_lines: 0,
             declared: false,
         }
     }

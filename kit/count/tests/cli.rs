@@ -4015,6 +4015,72 @@ fn a_nested_loop_needs_a_work_bound_row() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// `[floor] room_functions` and `room_lines` (#100): the figure a raise
+/// records leaves that room for unverified code, or no raise where the
+/// room's share is not above the floor; the pass is the share's alone.
+#[test]
+fn a_floor_raise_leaves_the_configured_room() {
+    // Three verified functions of one line each, one outside `verus!`.
+    let lib = "use vstd::prelude::*;\nverus! {\npub fn a() {}\npub fn b() {}\npub fn c() {}\n}\npub fn o() {}\n";
+    let dir = crate_of("floor-room", &[("lib.rs", lib)]);
+    fs::write(
+        dir.join("verus/FLOOR"),
+        "functions 50.0\nlines 50.0\nchecked-functions 50.0\nchecked-lines 50.0\n",
+    )
+    .expect("write");
+    fs::create_dir_all(dir.join("verus/ledger")).expect("mkdir");
+    fs::write(dir.join("verus/ledger/lib.rs.md"), "").expect("write");
+    let run = |room: &str| {
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!("{PLAIN}[floor]\npath = \"verus/FLOOR\"\n{room}"),
+        )
+        .expect("write");
+        let floor = dir.join("verus/FLOOR");
+        count(&dir, &["--floor", &floor.to_string_lossy(), "--no-base"])
+    };
+    // No room: the share itself, 3 of 4.
+    let (got, out, err) = run("");
+    assert!(
+        got == 0 && out.contains("raise verus/FLOOR to `functions 75.0`"),
+        "no room: got = exit {got}, {out:?}, {err:?}"
+    );
+    // Room for 1 function: 3 of 5.
+    let (got, out, err) = run("room_functions = 1\n");
+    assert!(
+        got == 0 && out.contains("raise verus/FLOOR to `functions 60.0`"),
+        "room 1: got = exit {got}, {out:?}, {err:?}"
+    );
+    // Room for 4: 3 of 8, not above 50.0: no raise, and still a pass.
+    let (got, out, err) = run("room_functions = 4\nroom_lines = 0\n");
+    assert!(
+        got == 0
+            && out.contains("functions verified 75.0%, above the floor's 50.0% but within [floor]'s room for unverified code (37.5%): no raise")
+            && !out.contains("raise verus/FLOOR to `functions"),
+        "room 4: got = exit {got}, {out:?}, {err:?}"
+    );
+    // `room_lines` from the configuration: the lines are one each, so 3 of
+    // 5 lines.
+    let (got, out, err) = run("room_lines = 1\n");
+    assert!(
+        got == 0
+            && out.contains("raise verus/FLOOR to `lines 60.0`")
+            && out.contains("raise verus/FLOOR to `functions 75.0`"),
+        "room_lines 1: got = exit {got}, {out:?}, {err:?}"
+    );
+    // A port with `[ledger]` reports through the ledger's tables: the room
+    // holds there too.
+    let (got, out, err) =
+        run("room_functions = 1\nroom_lines = 1\n[ledger]\ndir = \"verus/ledger\"\n");
+    assert!(
+        got == 0
+            && out.contains("raise verus/FLOOR to `functions 60.0`")
+            && out.contains("raise verus/FLOOR to `lines 60.0`"),
+        "ledger: got = exit {got}, {out:?}, {err:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A crate `a` with `files` (path under `src/` and text) and `PLAIN`.
 fn crate_of(name: &str, files: &[(&str, &str)]) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("verus-count-cli-{name}-{}", std::process::id()));

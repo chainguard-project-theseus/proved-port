@@ -13,6 +13,18 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.7
+
+### Changes
+
+- `[floor]` takes `room_functions` and `room_lines` (#100, default 0
+  each): the `raise FLOOR to` figure a run prints is then the share
+  with that many more unverified functions and lines, and a share above
+  the floor but within that room prints no raise. Whether the run
+  passes is unchanged. A port with neither key prints what it did. The
+  room is a port's own choice: one that sets the keys states its room
+  in a paragraph of its FLOOR below the header.
+
 ## 0.4.6
 
 ### Changes
