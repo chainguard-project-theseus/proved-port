@@ -60,6 +60,13 @@
 //! not fails the run (exit 1), each such crate named ([`opted_in`]):
 //! nothing would check the functions the tally credits as verified.
 //!
+//! A module declaration whose file the source walk does not read (a
+//! `#[path]` to a file not named `*.rs` or outside the crate's `src/`,
+//! under either reading of where the declaring file's modules live)
+//! fails the run (exit 1), each named ([`unread_module_files`]), unless
+//! only tests build it: rustc compiles its functions, so leaving them
+//! out would raise the verified share.
+//!
 //! A function an item macro writes counts too ([`Counter::item_macro`]):
 //! an invocation of a `macro_rules!` the crate defines is expanded
 //! ([`expand`]), and each function in the expansion counts as outside
@@ -1254,6 +1261,79 @@ fn declared_module_files(
             });
         }
     }
+}
+
+/// An error for each module file a declaration in `mods` names that the
+/// source walk did not read (`walked`, canonical): a `#[path]` to a file
+/// not named `*.rs`, or to one outside the crate's `src/`, or a link the
+/// walk does not follow to one. rustc compiles its functions, so leaving
+/// them out of the counts would raise the verified share. A file only
+/// tests build is left out of the counts anyway, so it may sit anywhere.
+/// The declarations under the other reading of where a file's modules
+/// live (`alternate`: a main.rs or lib.rs that is a module declares them
+/// under `stem/`) count too, as a target may compile them.
+///
+/// The exemption reads reachability, not composed guards. A shipped build
+/// may compile an entry point (a crate root, or a file no declaration of
+/// either reading names, which may be a target the counter does not
+/// know), and any file a declaration names from such a file when that
+/// declaration is not test-only on its own (by its guards and the
+/// declaring file's inner `cfg`s). Such a declaration fails when the walk
+/// did not read its file. Each step is judged alone, so guards that keep
+/// a path out of shipped builds only together give a false failure,
+/// never a pass. The file's own inner `cfg`s are not read, as the walk
+/// did not read the file: one whose `#![cfg(test)]` alone keeps it out of
+/// shipped builds fails too.
+fn unread_module_files(walked: &[PathBuf], mods: &ModFiles, atoms: &Atoms) -> Vec<String> {
+    let both: Vec<&Declared> = mods.declared.iter().chain(&mods.alternate).collect();
+    let inner = |f: &Path| -> Vec<String> {
+        mods.inner
+            .iter()
+            .filter(|(i, _)| i == f)
+            .flat_map(|(_, g)| g.iter().cloned())
+            .collect()
+    };
+    // Whether a declaration is test-only on its own.
+    let test_only = |d: &Declared| {
+        let g = [d.guards.clone(), inner(&d.from)].concat();
+        guarded_built(&g, atoms).is_ok_and(|b| b == Built::Test)
+    };
+    let mut shipped: Vec<PathBuf> = mods.roots.clone();
+    for d in &both {
+        if !both.iter().any(|e| e.file == d.from) && !shipped.contains(&d.from) {
+            shipped.push(d.from.clone());
+        }
+    }
+    loop {
+        let more: Vec<PathBuf> = both
+            .iter()
+            .filter(|d| shipped.contains(&d.from) && !shipped.contains(&d.file) && !test_only(d))
+            .map(|d| d.file.clone())
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        for f in more {
+            if !shipped.contains(&f) {
+                shipped.push(f);
+            }
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    for d in &both {
+        if walked.contains(&d.file) || !shipped.contains(&d.from) || test_only(d) {
+            continue;
+        }
+        let e = format!(
+            "{}: a module declaration names {}, which the counter does not read (it reads the `*.rs` files under the crate's src/); name the file `*.rs` under src/, or put the module under a test-only `cfg`",
+            d.from.display(),
+            d.file.display()
+        );
+        if !out.contains(&e) {
+            out.push(e);
+        }
+    }
+    out
 }
 
 /// The places a module with `attrs` may be: each path its path attributes
@@ -3364,6 +3444,11 @@ impl Counter {
         }
         let mut bad = Vec::new();
         let mods = module_files(&ok, crate_roots(k), &self.atoms, &mut bad);
+        bad.extend(unread_module_files(
+            &read.iter().map(|(f, _)| canonical(f)).collect::<Vec<_>>(),
+            &mods,
+            &self.atoms,
+        ));
         for e in &bad {
             eprintln!("{e}");
         }
