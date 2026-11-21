@@ -7188,55 +7188,103 @@ enum Ends {
     /// `<!--` at the start of a line (after up to 3 spaces) opens an HTML
     /// block, which only its `-->` ends.
     Closer,
-    /// After a list marker, an HTML block in the item, whose content
-    /// starts at this column: a non-blank line indented less ends the
-    /// item (an HTML block has no lazy continuation).
-    Item(usize),
-    /// After `>`, an HTML block in a block quote: a line that does not
-    /// start with `>` ends the quote.
-    Quote,
+    /// After container markers (list markers and `>`, nested in any
+    /// order), an HTML block in them, whose content starts at column
+    /// `col`: a line with fewer `>` markers than the `quote` quotes among
+    /// them ends the innermost ([`quote_depth`]), and a non-blank line
+    /// indented less than `col` ends a list item among them (`item`), as
+    /// an HTML block has no lazy continuation. An ordered marker that
+    /// does not start at 1 cannot interrupt a paragraph, so the line may
+    /// continue the one before it and the `<!--` be inline (`para`): the
+    /// comment then ends where either reading ends it.
+    Container {
+        col: usize,
+        quote: usize,
+        item: bool,
+        para: bool,
+    },
     /// Anywhere else, an inline comment: a blank line or a line that
-    /// starts a block ends its paragraph.
-    Paragraph,
+    /// starts a block ends its paragraph. The paragraph's text starts at
+    /// column `col`, and its container's content starts there or before,
+    /// so a block start indented up to `col + 3` columns ends it (more
+    /// than CommonMark's 3 past the content column when the text is
+    /// indented past it: a false failure, never a pass).
+    Paragraph { col: usize },
 }
 
 impl Ends {
     /// The container of a `<!--` that `before` precedes on its line.
     fn of(before: &str) -> Ends {
-        let rest = before.trim_start_matches(' ');
-        if before.len() - rest.len() > 3 {
-            return Ends::Paragraph;
+        let (cols, at) = lead(before);
+        if cols > 3 {
+            return Ends::Paragraph { col: cols };
         }
+        let mut rest = &before[at..];
         if rest.is_empty() {
             return Ends::Closer;
         }
-        if list_marker(rest).is_some_and(|n| rest[n..].trim().is_empty()) {
-            return Ends::Item(before.len());
+        let (mut quote, mut item, mut para) = (0, false, false);
+        loop {
+            rest = rest.trim_start_matches([' ', '\t']);
+            if let Some(r) = rest.strip_prefix('>') {
+                quote += 1;
+                rest = r;
+            } else if let Some(n) = list_marker(rest) {
+                item = true;
+                let digits = &rest[..n - 2];
+                para |= !digits.is_empty() && digits.parse::<u32>() != Ok(1);
+                rest = &rest[n..];
+            } else {
+                break;
+            }
         }
-        if rest.starts_with('>') && rest.chars().all(|c| c == '>' || c == ' ') {
-            return Ends::Quote;
+        if rest.is_empty() {
+            Ends::Container {
+                col: columns(before),
+                quote,
+                item,
+                para,
+            }
+        } else {
+            Ends::Paragraph {
+                col: columns(&before[..before.len() - rest.len()]),
+            }
         }
-        Ends::Paragraph
     }
 
     /// Whether `line`, after the opener's, ends the container.
     fn ends_at(self, line: &str) -> bool {
         let blank = line.trim().is_empty();
-        let rest = line.trim_start_matches(' ');
-        let indent = line.len() - rest.len();
+        let (indent, at) = lead(line);
+        let rest = &line[at..];
         match self {
             Ends::Closer => false,
-            Ends::Item(k) => !blank && indent < k,
-            Ends::Quote => !(indent <= 3 && rest.starts_with('>')),
-            Ends::Paragraph => {
+            Ends::Container {
+                col,
+                quote,
+                item,
+                para,
+            } => {
+                quote_depth(line) < quote
+                    || (item && !blank && indent < col)
+                    || (para && Ends::Paragraph { col }.ends_at(line))
+            }
+            Ends::Paragraph { col } => {
                 blank
-                    || (indent <= 3
+                    || (indent <= col + 3
                         && (rest.starts_with('#')
                             || rest.starts_with('>')
-                            || fence(line).is_some()
+                            || fence(rest).is_some()
                             || list_marker(rest).is_some_and(|n| n < rest.len())
+                            // An HTML block start: `<` and a tag name, `</`,
+                            // `<?`, or `<!` (a declaration, CDATA or a
+                            // comment), each of which can end a paragraph.
+                            || rest
+                                .strip_prefix('<')
+                                .and_then(|r| r.chars().next())
+                                .is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, '/' | '?' | '!'))
                             || ['-', '*', '_', '='].iter().any(|c| {
-                                rest.chars().all(|x| x == *c || x == ' ')
+                                rest.chars().all(|x| x == *c || x == ' ' || x == '\t')
                                     && rest.chars().filter(|x| x == c).count() >= 3
                             })))
             }
@@ -7244,8 +7292,87 @@ impl Ends {
     }
 }
 
+/// Whether what precedes a `<!--` on its line, `before`, puts it in an
+/// indented code block: 4 or more columns of indent at the line's start,
+/// or after a `>` and its one optional space, or after a list marker and
+/// its space, so the `<!--` is code text, not a comment.
+///
+/// Columns count from the line's start, so a tab reaches the next
+/// multiple of 4 from where it sits, and the optional space after a `>`
+/// or a marker takes one column of a tab, leaving the rest as indent
+/// (CommonMark's tab rule, `>\t\tfoo`).
+fn in_code(before: &str) -> bool {
+    let mut rest = before;
+    // The column `rest` starts at, and the columns of a tab already
+    // reached that count as indent (a tab the optional space took one
+    // column of).
+    let (mut col, mut spare) = (0, 0);
+    loop {
+        let at = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+        let end = columns_from(col, &rest[..at]);
+        if spare + end - col >= 4 {
+            return true;
+        }
+        (col, spare) = (end, 0);
+        rest = &rest[at..];
+        let n = if rest.starts_with('>') {
+            1
+        } else if let Some(n) = list_marker(rest) {
+            n - 1
+        } else {
+            return false;
+        };
+        col += n;
+        rest = &rest[n..];
+        if let Some(r) = rest.strip_prefix(' ') {
+            (col, rest) = (col + 1, r);
+        } else if let Some(r) = rest.strip_prefix('\t') {
+            let w = 4 - col % 4;
+            (col, spare, rest) = (col + w, w - 1, r);
+        }
+    }
+}
+
+/// The column `text` ends at when it starts at column `col`, a tab
+/// reaching the next multiple of 4.
+fn columns_from(col: usize, text: &str) -> usize {
+    text.chars()
+        .fold(col, |c, x| if x == '\t' { c + 4 - c % 4 } else { c + 1 })
+}
+
+/// How many block quotes `line` continues: its `>` markers, each after
+/// up to 3 columns of indent.
+fn quote_depth(line: &str) -> usize {
+    let mut rest = line;
+    let mut depth = 0;
+    loop {
+        let (cols, at) = lead(rest);
+        match rest[at..].strip_prefix('>') {
+            Some(r) if cols <= 3 => {
+                depth += 1;
+                rest = r;
+            }
+            _ => return depth,
+        }
+    }
+}
+
+/// The columns `text` spans, a tab reaching the next multiple of 4, as
+/// CommonMark counts indentation.
+fn columns(text: &str) -> usize {
+    columns_from(0, text)
+}
+
+/// The leading spaces and tabs of `line`: the columns they span and their
+/// length in bytes.
+fn lead(line: &str) -> (usize, usize) {
+    let at = line.len() - line.trim_start_matches([' ', '\t']).len();
+    (columns(&line[..at]), at)
+}
+
 /// The length of the list marker `rest` starts with (`-`, `*`, `+`, or
-/// up to 9 digits and `.` or `)`), followed by a space, if it has one.
+/// up to 9 digits and `.` or `)`), followed by a space or a tab, if it
+/// has one.
 fn list_marker(rest: &str) -> Option<usize> {
     let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
     let n = match rest.as_bytes().first()? {
@@ -7257,7 +7384,7 @@ fn list_marker(rest: &str) -> Option<usize> {
         }
         _ => return None,
     };
-    rest[n..].starts_with(' ').then_some(n + 1)
+    rest[n..].starts_with([' ', '\t']).then_some(n + 1)
 }
 
 /// One pass of [`rendered_lines`], strict or `lenient`, with the openers
@@ -7265,7 +7392,8 @@ fn list_marker(rest: &str) -> Option<usize> {
 /// and the opener (line index, byte offset) of the fence or comment still
 /// open at the end of `text`, if one is.
 fn rendered_scan<'t>(text: &'t str, ignored: &[(usize, usize)], lenient: bool) -> Scan<'t> {
-    let indent = |l: &str| l.len() - l.trim_start_matches(' ').len();
+    // Indentation in columns, a tab to the next multiple of 4.
+    let indent = |l: &str| lead(l).0;
     // An open fence: its character, length, indent and line index.
     let mut open: Option<(char, usize, usize, usize)> = None;
     // An open comment: its opener (line index, byte offset), and what ends
@@ -7310,14 +7438,15 @@ fn rendered_scan<'t>(text: &'t str, ignored: &[(usize, usize)], lenient: bool) -
             Vec::new()
         };
         // The lenient reading also takes as text a `<!--` that renders as
-        // text: in a backtick code span, escaped (`\<!--`), or on a line
-        // indented 4 or more spaces (an indented code block).
+        // text: in a backtick code span, escaped (`\<!--`), or in an
+        // indented code block, at the line's start or inside a quote or a
+        // list item ([`in_code`]).
         let text_at = |pos: usize| {
             ignored.contains(&(i, pos))
                 || (lenient
                     && (spans.iter().any(|(s, e)| *s < pos && pos < *e)
                         || line[..pos].ends_with('\\')
-                        || indent(line) >= 4))
+                        || in_code(&line[..pos])))
         };
         let mut shown = String::new();
         let mut at = 0;
@@ -8480,6 +8609,17 @@ mod tests {
             format!("<!-- {alt} -->"),
             // An HTML block at the start of a line crosses blank lines.
             format!("<!--\n\n{alt}\n-->"),
+            // A list item's fence holds a tab-indented line: a tab is 4
+            // columns, past the fence's 2, so the line stays in it.
+            format!("- x\n\n  ```\n\t{alt}\n  ```"),
+            // A comment in a nested quote whose lines keep both `>`.
+            format!("> > <!--\n> > {alt}\n> > -->"),
+            // A `1.` item, which may interrupt the paragraph, holds an
+            // HTML block across a blank line.
+            format!("1. <!--\n\n   {alt}\n   -->"),
+            // A nested item's paragraph: a quote 4 columns past its
+            // content column continues it, so the comment stays open.
+            format!("- a\n  - Text <!-- x\n        > {alt}\n    -->"),
         ] {
             assert_eq!(
                 badge_report(
@@ -8699,6 +8839,169 @@ mod tests {
             (
                 readme(&format!(
                     "{want}\nText <!-- x\n# ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // Each other line that ends a paragraph (#120): a block quote,
+            // a thematic break, a fence, an ordered list item, and an HTML
+            // block start (the centered `<p><img>` badge).
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n> ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n***\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n~~~\n~~~\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 7)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n1. ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n<p align=\"center\"><img alt=\"Verus\" src=\"https://img.shields.io/badge/Verus-99%25-green\"></p>\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // An HTML block in an ordered item, in an item's quote, and in
+            // an item a tab separates from its marker; `<!--` after a tab,
+            // an indented code block.
+            (
+                readme(&format!(
+                    "{want}\n1. <!--\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // `2.` cannot interrupt a paragraph, so `2. <!-- x` may
+            // continue the badge's paragraph, its `<!--` inline: the
+            // comment ends where a paragraph would, at a quote line or a
+            // blank line, though the item's rule would keep it open.
+            (
+                readme(&format!(
+                    "{want}\n2. <!-- x\n   > ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n   -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n2. <!-- x\n\n   ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n   -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            // A paragraph in a nested item: a quote at the item's content
+            // column (4), past 3 from the line's start, interrupts it.
+            (
+                readme(&format!(
+                    "{want}\n- a\n  - Text <!-- x\n    > ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n    -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n- a\n  2. <!-- x\n     > ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n     -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            // The same with a fence at the nested item's content column:
+            // `fence` is read on the line after its indent.
+            (
+                readme(&format!(
+                    "{want}\n- a\n  - Text <!-- x\n    ~~~\n    ~~~\n    ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n    -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 8)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n- > <!--\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n-\t<!--\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // The same with the badge and `-->` indented 2: a tab after
+            // the marker puts the item's content at column 4, so a line
+            // indented 2 ends the item (counting bytes, it would not).
+            (
+                readme(&format!(
+                    "{want}\n-\t<!--\n  ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n  -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n\n\t<!-- example\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n<!-- x -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            // The same closed by a bare `-->`, which ends no paragraph, so
+            // only reading the tab-indented `<!--` as code shows the badge.
+            (
+                readme(&format!(
+                    "{want}\n\n\t<!-- example\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            // More HTML block starts that end a paragraph (`<?`, `<!`, a
+            // closing tag), a thematic break of tab-separated `_`, and an
+            // indented code block inside a quote.
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n<?x?>\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n<!DOCTYPE html>\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n</div><img alt=\"Verus\" src=\"https://img.shields.io/badge/Verus-99%25-green\">\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n_\t_\t_\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n>     <!--\n> ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n> -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // The same with a tab after `>`: the optional space takes one
+            // of its 3 columns, so 2 spaces more make 4; and a comment in
+            // a nested quote, which a line with one `>` ends.
+            (
+                readme(&format!(
+                    "{want}\n>\t  <!--\n> ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n> -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n> > <!--\n> ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n> > -->"
                 )),
                 "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
             ),

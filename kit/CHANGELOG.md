@@ -79,6 +79,22 @@ where it reports drift.
   crates of a base `[crates] dir` are listed from the whole tree
   (`ls-tree --full-tree`), so a crate the head deletes there is a
   narrowing below the top level too.
+- The badge gate's lenient reading also ends a comment whose paragraph
+  an HTML block start ends (`<` and a letter, `</`, `<?`, `<!`: the
+  `<p align="center"><img ...>` badge), one in nested containers
+  (`- > <!--`), one in a nested quote at a line with fewer `>`
+  (`> > <!--`, then `> text`), one after an ordered marker other than
+  `1.` also where a paragraph would end it (`2. <!--` cannot interrupt
+  a paragraph, so it may continue one), one whose paragraph a block
+  start ends up to 3 columns past where the paragraph's text starts
+  (`  - Text <!--`, then `    > badge` at the nested item's content
+  column), and reads indentation as CommonMark does: a tab counts to the next multiple of 4 columns from where it
+  sits, separates a list marker, gives one column to the space after a
+  `>` and keeps the rest as indent, and a `<!--` 4 columns into a line,
+  a quote or an item is indented code (#120). Each of these READMEs hid a stale second badge and now fails.
+  The tag rule is wider than CommonMark's (a plain tag such as `<img`
+  cannot end a paragraph), so an old badge on such a line inside a
+  mid-line comment now counts too; see the porting note.
 - The badge gate counts more second badges (#22): an HTML `<img`
   badge from any host (not only shields.io), and a badge that renders
   in either of two readings of the file. The strict reading hides a
@@ -150,6 +166,19 @@ where it reports drift.
    whose FLOOR predates its configuration adds the configuration in a
    change that runs the verus check with `VERUS_BASE=none`, as the
    change that adds the first FLOOR does.
+6. For #22 and #120, run `make verus` after the bump. A README that
+   now fails as "N Verus badges" names the line. If it is a stale badge
+   that renders, delete it. If it is an old badge kept inside an HTML
+   comment that opens mid-line (`Text <!--`), on a line that starts
+   with an HTML tag (`<img ...>`) or a tab, put the comment on lines of
+   its own (`<!--` at the start of a line, `-->` after the badge) or
+   delete the old badge. The same holds for a comment that opens after
+   an ordered marker other than `1.` (`2. <!--`, the second item of a
+   list), which may continue a paragraph, so it now ends at a blank
+   line or a line that starts a block: put `<!--` on a line of its own
+   at the item's content column (`   <!--`), or delete the old badge. A
+   README with one rendered badge and none of these comments changes
+   nothing.
 
 ## 0.4.4
 

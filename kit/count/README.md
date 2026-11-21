@@ -387,9 +387,23 @@ the end of the file. The lenient reading takes that opener as text,
 takes as text a `<!--` that renders as text (inside a backtick code
 span, escaped as `\<!--`, on a line indented 4 or more spaces, or one
 whose container ends before its `-->`: an inline comment's paragraph
-at a blank line or a line that starts a block, a list item at a line
-indented less, a block quote at a line without `>`; a `<!--` at the
-start of a line opens an HTML block, which crosses blank lines), and
+at a blank line or a line that starts a block, indented up to 3
+columns past where the paragraph's text starts (a heading, a quote, a
+fence, a list item, a thematic break, or a line starting `<` and a
+letter, `</`, `<?` or `<!`, such as `<p align="center">`; the last is
+wider than CommonMark, whose plain tags cannot end a paragraph, so an
+old badge on such a line inside a mid-line comment counts), a list item
+at a line indented less, a block
+quote at a line with fewer `>` than its depth (`> > <!--` ends at
+`> text`), nested ones (`- > <!--`) at either, and an item whose
+ordered marker does not start at 1 (`2. <!--`, which cannot interrupt a
+paragraph, so may continue one) also where a paragraph would end; a
+`<!--` at the start of a line opens an HTML block, which crosses blank
+lines; a tab counts to the next multiple of 4 columns from where it
+sits, and separates a list marker as a space does; the optional space
+after a `>` or a marker takes one column of a tab, the rest counting as
+indent; a `<!--` 4 or more columns past a `>` and its optional space,
+or past a list marker's content, is indented code), and
 ends a fence
 indented by some spaces at the first non-blank line indented less (a
 list item's fence ends with the item). A line that holds a badge in
