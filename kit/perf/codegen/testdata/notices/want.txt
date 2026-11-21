@@ -1,0 +1,3 @@
+::notice title=codegen x86_64 q16::functions old 6 new 5: exact 0, reloc-only 0, padding-only 1, erratum-stub 0, changed 6
+::notice title=codegen x86_64 q16::changed (6): challoc::config::get (88 -> 114); <challoc::Issue as core::fmt::Display>::fmt (new, 31); challoc::fresh (18 -> 20; baseline _RNvCs3OqXV10JfZq_7challoc5stale); _RNvMs0_NtCsNEWhash_7challoc4same (8 -> 9); find_100%25 (removed, 40); <challoc::A as challoc::B>::find2 (removed, 7)
+::notice title=codegen x86_64 q8::.text identical: byte-identical machine code

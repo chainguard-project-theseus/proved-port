@@ -220,10 +220,23 @@ if [ ! -f "$home/make/noalias.sh" ] || ! sh "$home/make/noalias.sh" --self-test 
   fail "the installed noalias.sh: got = missing or a failing self-test, want = its self-test passes"
 fi
 echo "ok the installed noalias.sh passes its self-test"
+expect "make -n codegen: the package's codegen.sh" \
+  "$(shows "$installed" codegen CODEGEN_LIB=libc.so)" \
+  "CODEGEN_LIB='libc.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='fncmp' CODEGEN_BASE='' sh $home/make/codegen.sh base"
+# codegen.sh refuses a run with no CODEGEN_LIB before it builds anything.
+if [ ! -f "$home/make/codegen.sh" ]; then
+  fail "the installed codegen.sh: got = missing, want = installed"
+fi
+if sh "$home/make/codegen.sh" capture "$tmp/codegen" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 2 ] || ! grep -qF 'CODEGEN_LIB is empty' "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed codegen.sh, no CODEGEN_LIB: got = exit $rc, want = exit 2 naming CODEGEN_LIB"
+fi
+echo "ok the installed codegen.sh refuses a run with no CODEGEN_LIB"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias verify; do
-  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare verify; do
+  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
     || { cat "$tmp/err" >&2; fail "make -n $t, PROVED_PORT_VERSION=$version (KIT's): got = failure, want = success"; }
   if make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$other" > "$tmp/out" 2> "$tmp/err"; then
     fail "make -n $t, PROVED_PORT_VERSION=$other: got = success, want = failure"
