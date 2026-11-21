@@ -79,6 +79,20 @@ checks:
         f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
         go vet ./... && go test -count=1 ./...
 
+  box-test:
+    description: >-
+      kit/box-test.sh: kit/perf/box (PLAN step 6, the bench box's run
+      skeleton), with stand-in perf and taskset scripts and no box:
+      rounds.sh's -n order against a hand-worked rotation, its raw lines
+      (exact first-match counts, empty and not-counted counts, output
+      flattening and -w, ARM and ROUND, -g, -c), a failing command's
+      line and exit, its refusals, the lines through stats relabel and
+      check, and md5.sh's bracket, missing-file line and refusals
+      through stats md5. It builds stats with this file's go.
+    trigger: [presubmit, postsubmit]
+    timeout: 10m
+    cmd: [sh, kit/box-test.sh]
+
   codegen-test:
     description: >-
       kit/codegen-test.sh: kit/make/codegen.sh (make codegen,

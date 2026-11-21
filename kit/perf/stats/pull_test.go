@@ -201,7 +201,7 @@ func TestMD5HandWorked(t *testing.T) {
 	h := func(c byte) string { return strings.Repeat(string(c), 32) }
 	a := write(t, "a.log", "== before\n"+h('a')+"  /x/one file\n"+h('b')+"\t/x/two\n"+h('c')+"  /x/same\n")
 	// The tab-separated /x/two in a.log is the same file as here.
-	b := write(t, "b.log", h('d')+" /x/one file\n"+h('9')+"  /x/two\n"+h('c')+" /x/same\n"+
+	b := write(t, "b.log", "== after\n"+h('d')+" /x/one file\n"+h('9')+"  /x/two\n"+h('c')+" /x/same\n"+
 		// Not md5sum lines: 31 digits, upper case, no separator, no file.
 		strings.Repeat("e", 31)+"  /x/same\n"+strings.ToUpper(h('f'))+"  /x/same\n"+h('3')+"/x/same\n"+h('e')+"  \n")
 	code, out, errs := runStats(t, "md5", a, b)
@@ -209,9 +209,12 @@ func TestMD5HandWorked(t *testing.T) {
 	if code != 1 || out != want || errs != "stats md5: 2 findings\n" {
 		t.Errorf("exit %d, stderr %q, out:\n%s\nwant:\n%s", code, errs, out, want)
 	}
-	// One log may hold every md5; they print sorted.
+	// One log may hold both sides and every md5; they print sorted.
 	var c, sorted []string
-	for _, d := range "7fa0c3e9b1" {
+	for i, d := range "7fa0c3e9b1" {
+		if i%5 == 0 {
+			c = append(c, "== side "+strconv.Itoa(i))
+		}
 		c = append(c, h(byte(d))+"  f")
 	}
 	for _, d := range "01379abcef" {
@@ -221,15 +224,50 @@ func TestMD5HandWorked(t *testing.T) {
 	if want := "f\t" + strings.Join(sorted, " ") + "\n"; code != 1 || out != want {
 		t.Errorf("one log: exit %d, out %q, want %q", code, out, want)
 	}
-	code, out, errs = runStats(t, "md5", a)
+	// The same side twice is a pair with no change; so are two pairs
+	// whose files differ between pairs (port A's sub-phase brackets).
+	code, out, errs = runStats(t, "md5", a, a)
 	if code != 0 || out != "" || errs != "" {
 		t.Errorf("no change: exit %d, out %q, stderr %q", code, out, errs)
+	}
+	two := write(t, "two.log", "== b1\n"+h('1')+"  p\n== a1\n"+h('1')+"  p\n## other\n== b2\n"+h('2')+"  q\n"+h('3')+"  r\n== a2\n"+h('3')+"  r\n"+h('2')+"  q\n")
+	code, out, errs = runStats(t, "md5", two)
+	if code != 0 || out != "" || errs != "" {
+		t.Errorf("two pairs: exit %d, out %q, stderr %q", code, out, errs)
 	}
 }
 
 func TestMD5Refused(t *testing.T) {
-	good := write(t, "good.log", strings.Repeat("a", 32)+"  f\n")
-	for _, l := range []string{"done\n", strings.Repeat("a", 32) + "  \n" + strings.Repeat("b", 32) + "\t\n"} {
+	h := func(c byte) string { return strings.Repeat(string(c), 32) }
+	good := write(t, "good.log", "== before\n"+h('a')+"  f\n")
+	// The bracket checks, each exit 1 with no output.
+	for _, c := range []struct{ name, log, want string }{
+		{"before side only", "== before\n" + h('a') + "  f\n" + h('b') + "  g\n", `1 "== LABEL" sides; want before-and-after pairs`},
+		{"three sides", "== b\n" + h('a') + "  f\n== a\n" + h('a') + "  f\n== b2\n" + h('a') + "  f\n", `3 "== LABEL" sides`},
+		{"file only before", "== before\n" + h('a') + "  f\n" + h('b') + "  g\n== after\n" + h('a') + "  f\n",
+			`side "after" (LOG:4) has no md5 of g, which side "before" (LOG:1) has`},
+		{"file only after", "== before\n" + h('a') + "  f\n== after\n" + h('a') + "  f\n" + h('c') + "  h\n",
+			`side "before" (LOG:1) has no md5 of h, which side "after" (LOG:3) has`},
+		{"empty after side", "== before\n" + h('a') + "  f\n== after\n", `side "after" (LOG:3) has no md5 of f`},
+		{"five files only before, all named in order", "== before\n" + h('a') + "  f\n" + h('1') + "  q5\n" + h('2') + "  q3\n" + h('3') + "  q1\n" + h('4') + "  q4\n" + h('5') + "  q2\n== after\n" + h('a') + "  f\n",
+			`side "after" (LOG:8) has no md5 of q1, q2, q3, q4, q5, which`},
+		{"second pair short", "== b1\n" + h('a') + "  f\n== a1\n" + h('a') + "  f\n== b2\n" + h('a') + "  f\n" + h('b') + "  g\n== a2\n" + h('a') + "  f\n",
+			`side "a2" (LOG:8) has no md5 of g, which side "b2" (LOG:5) has`},
+		{"md5 before any side", h('a') + "  f\n== before\n== after\n", `LOG:1: an md5sum line before any "== LABEL" side line`},
+		{"escaped name", "== before\n\\" + h('a') + "  f\\\\x\n== after\n", `LOG:2: an escaped file name (md5sum's leading backslash) is not read`},
+	} {
+		p := write(t, "x.log", c.log)
+		code, out, errs := runStats(t, "md5", p)
+		if want := strings.ReplaceAll(c.want, "LOG", p); code != 1 || out != "" || !strings.Contains(errs, want) {
+			t.Errorf("%s: exit %d, out %q, stderr %q, want %q", c.name, code, out, errs, want)
+		}
+	}
+	// The sides pair across logs in argument order.
+	code, _, errs := runStats(t, "md5", good, good, good)
+	if code != 1 || !strings.Contains(errs, `3 "== LABEL" sides`) {
+		t.Errorf("three logs of one side: exit %d, stderr %q", code, errs)
+	}
+	for _, l := range []string{"== after\ndone\n", "== after\n" + h('a') + "  \n" + h('b') + "\t\n"} {
 		code, _, errs := runStats(t, "md5", good, write(t, "empty.log", l))
 		if code != 1 || !strings.Contains(errs, "empty.log: no md5sum line") {
 			t.Errorf("log without md5 (%q): exit %d, stderr %q", l, code, errs)
@@ -239,9 +277,9 @@ func TestMD5Refused(t *testing.T) {
 	// unchanged digests, so no file has two md5s: refused, naming the
 	// line.
 	for _, l := range []string{
-		"md5sum: /box/x.so: No such file or directory\n",
-		strings.Repeat("a", 32) + "  f\nmd5sum: /box/x.so: No such file or directory\n",
-		strings.Repeat("a", 32) + "  f\nmd5sum: can't open '/box/x.so': No such file or directory\n",
+		"== after\nmd5sum: /box/x.so: No such file or directory\n",
+		"== after\n" + h('a') + "  f\nmd5sum: /box/x.so: No such file or directory\n",
+		"== after\n" + h('a') + "  f\nmd5sum: can't open '/box/x.so': No such file or directory\n",
 	} {
 		code, out, errs := runStats(t, "md5", good, write(t, "err.log", l))
 		n := strings.Count(l, "\n")
@@ -249,7 +287,7 @@ func TestMD5Refused(t *testing.T) {
 			t.Errorf("md5sum error line (%q): exit %d, out %q, stderr %q", l, code, out, errs)
 		}
 	}
-	code, _, errs := runStats(t, "md5")
+	code, _, errs = runStats(t, "md5")
 	if code != 2 || !strings.Contains(errs, "want at least one log") {
 		t.Errorf("no log: exit %d, stderr %q", code, errs)
 	}
