@@ -321,9 +321,13 @@ is deleted in that PR.
      lint-unsafe`, #150): crate roots, workspace lints and a
      command-line forbid for every member but `UNSAFE_CRATES`
      (`lint-unsafe-test` runs it with cargo); the `assume_new` seam list
-     and other port-specific rules stay in each port's script. Still to
-     come in this step: the pcre3 and challoc PRs that switch to the
-     package's counter, and the ports' switches to `make lint-unsafe`.
+     and other port-specific rules stay in each port's script. The
+     templates' `source-rules` check runs it (#152), so a new port
+     starts on it. pcre3 and challoc have switched: each runs
+     the package's counter through the package's `proved-port.mk` and
+     carries no counter of its own (challoc's main
+     at `09edeb9`). Still
+     to come in this step: the ports' switches to `make lint-unsafe`.
 3. **Seam ledger generator** (Go rewrite of challoc's `verus/seams.sh`,
    with `verus/seams-mutants.sh` as its tests). challoc: the Makefile's
    `sh verus/seams.sh --check` runs the kit generator; the generated
@@ -377,7 +381,8 @@ is deleted in that PR.
    **Status:** `kit/make/proved-port.mk` is the include, installed by
    the package in `/usr/share/proved-port/make/`, with the `verus` (and its
    `verus-proofs` and `verus-count` halves), `verus-count-test`,
-   `verus-headers`, `kani` and `kani-list` targets; `bench` and
+   `verus-headers`, `kani`, `kani-list`, `kani-regular`,
+   `lint-unsafe` (#150) and `verify` (#61) targets; `bench` and
    `remote` are still to come. The templates are in
    `kit/templates/.chainguard/` and
    `kit/templates/.github/` (`kit/templates/README.md`, "Repository
@@ -389,4 +394,7 @@ is deleted in that PR.
    passes `chainctl checks validate`. One setting is not a file: the
    default branch requires `Chainguard Checks (presubmit)` pinned to the
    `chainguard` check app, through the organization's repository
-   rulesets (`kit/templates/README.md`, "The required check"). Still to come: the Makefile include and the lint.
+   rulesets (`kit/templates/README.md`, "The required check"). pcre3 and challoc include the
+   package's `proved-port.mk` (step 2). Still to come: the `bench` and
+   `remote` targets above, and the lint that a port's checks call the
+   kit's targets.
