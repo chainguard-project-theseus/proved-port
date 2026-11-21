@@ -409,8 +409,8 @@ fails on that PR.
 - The Expat port and a zlib port: none. Neither has a verified function under an
   unsettled `cfg`, and `--list` is unchanged.
 - challoc: [configs/challoc.toml](configs/challoc.toml)'s declarations,
-  measured on the 11-10 snapshot `0497dc34`; they are re-measured on
-  challoc's own pin move.
+  read from challoc main `09edeb9`: `verus_sets` names both
+  architectures, and `loom` is a test cfg, not a never-set atom.
 
 A function that stays trusted under honest declarations is verified
 more: bring its proof under a `cfg` the proof run settles. Where a
@@ -979,6 +979,11 @@ the crates and paths named `pcre2-*` here. The port carries its own
 | challoc | challoc main `fcde6b2` | `configs/challoc.toml` | identical | identical (1,674 lines) |
 | challoc | challoc main `39751a02` | `configs/challoc.toml` | identical (also with no flag, and `--list --floor verus/FLOOR --base-rev fcde6b2`) | identical (1,672 lines) |
 
+challoc's rows ran under the copy of `configs/challoc.toml` of their
+time. The copy here is read from challoc main `09edeb9`, where the
+kit's `--list` under it is byte-identical to one under challoc's own
+`verus/count.toml` (1,894 lines).
+
 The kit's `ok compile inputs` line also names each root it resolved
 and where (`(roots Regex::new at FILE:LINE, encode_as at FILE:LINE)`);
 the PCRE2 port's does not name them. The PCRE2 port's `--rlimit` path, with statistics written for the
@@ -1012,8 +1017,8 @@ Where the counters still differ, on inputs neither port has today:
   the PCRE2 port's counter's rule gives; without them, 27 verified functions
   of pcre2-capi (exec.rs and tables.rs's `Libc` ctype items) count as
   trusted. On challoc main `0497dc34`, its `target_arch` and
-  `loom` guards are the only ones: with
-  [configs/challoc.toml](configs/challoc.toml)'s declarations `--list`
+  `loom` guards are the only ones: with the declarations of that time
+  (`verus_sets` both architectures, `verus_never_sets = ["loom"]`) `--list`
   is the same as challoc's counter's rule gives, and without them 7
   verified functions count as trusted.
 - With `--base-rev`, the kit also compares `verus/count.toml` with the
