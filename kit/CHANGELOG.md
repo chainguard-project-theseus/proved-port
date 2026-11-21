@@ -36,6 +36,22 @@ where it reports drift.
   more code first" stays the first step, and the proved-c-port skill
   (SKILL.md, references/proofs.md) says the same. The counter reads
   `lowered` lines as before.
+- The template AGENTS.md and review prompt record two rules ports had
+  each been adding by hand (#75). "Coverage first for the runtime cost
+  of a proof": where no ghost or spec route avoids it, a measured cost
+  is accepted by default and recorded with its bench table, a cost
+  above about 2% on a hot path gets an "optimize within proof bounds"
+  follow-up issue, and one above about 10% on a real workload goes to
+  the maintainers; the review prompt holds such a PR only when that
+  record is missing. "Shared coverage lines": a proof PR keeps its
+  figures in its theorem file and body, and the FLOOR PR updates the
+  README, `verus/README.md` and design or handoff coverage lines from
+  main, with FLOOR's header's two exceptions (the first proof PR's raise
+  from 0.0, and the badge a `lowered` line moves). The skill (SKILL.md,
+  references/proofs.md) says the same. These are starting-point
+  templates nothing holds, so a port takes the text into its own
+  AGENTS.md and `.chainguard/review-prompt.md` by hand, or keeps the
+  rules it already wrote.
 
 ### Porting notes
 
