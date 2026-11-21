@@ -5247,3 +5247,36 @@ fn verus_atoms_must_be_atoms_and_settled_once() {
     }
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A file's inner `#![verifier::exec_allows_no_decreases_clause]` makes
+/// its exec functions trusted. In a file that declares a module out of
+/// line, whose file the counter reads on its own, it fails the run (exit
+/// 1), naming the file.
+#[test]
+fn a_file_without_decreases_is_trusted() {
+    let dir = repository("no-decreases");
+    let lib = dir.join("crates/a/src/lib.rs");
+    fs::write(
+        &lib,
+        "#![verifier::exec_allows_no_decreases_clause]\nverus! { fn f() {} fn g() {} }\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0 && out.contains("\nshipped\t0\t2\t0\t0\t"),
+        "a leaf file: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, 0 verified and 2 trusted"
+    );
+    fs::write(
+        &lib,
+        "#![verifier::exec_allows_no_decreases_clause]\nmod m;\nverus! { fn f() {} }\n",
+    )
+    .expect("write");
+    fs::write(dir.join("crates/a/src/m.rs"), "verus! { fn h() {} }\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    let want = "crates/a/src/lib.rs:2: #[verifier::exec_allows_no_decreases_clause] covers `mod m;`, a module the counter reads file by file";
+    assert!(
+        got == 1 && err.contains(want),
+        "a file declaring mod m;: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

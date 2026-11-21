@@ -104,8 +104,12 @@ pub(crate) const UNSUPPORTED_ATTRIBUTE: &str = "unsupported-attribute";
 
 /// The other kinds a generator writes: items that are not functions, or
 /// that sit elsewhere than a trusted function's `fn` line (a
-/// `no_decreases` function counts as verified; an `assume_new` seam is the
-/// line of the call, inside a function that counts as trusted).
+/// `no_decreases` seam is where `exec_allows_no_decreases_clause` is
+/// written, which may be an `impl` or module; every exec function it
+/// covers counts as trusted, and with no function seam at its `fn` line
+/// the run warns and counts it unchecked, which it is, since nothing
+/// checks that it ends; an `assume_new` seam is the line of the call,
+/// inside a function that counts as trusted).
 const OTHER_KINDS: &[&str] = &[
     "external_body type",
     "external_body const",

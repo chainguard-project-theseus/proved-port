@@ -17,6 +17,16 @@ where it reports drift.
 
 ### Changes
 
+- The counter classes an exec function that
+  `#[verifier::exec_allows_no_decreases_clause]` covers as trusted, not
+  verified (#74): one that carries it, or one in an `impl`, trait,
+  inline module or file that does. Verus checks such a function's loops
+  and recursion with no `decreases`, so nothing proves it terminates,
+  and the counter credited it as verified. Where it covers an
+  out-of-line `mod x;` (on it, on an inline module around it, or atop
+  the file that declares it), the attribute fails the run (exit 1),
+  since the counter reads each module file on its own. No stand-in may rewrite the name, and the template AGENTS.md's
+  escape-hatch grep lists it.
 - `verus/THEOREMS.md`'s template drops its Index table (#102). Each
   theorem file's first line, `# <ID>. <title>` (the theorem skeleton's
   heading), is its index entry, and the Index section gives a command
@@ -67,6 +77,16 @@ where it reports drift.
    instructions (AGENTS.md, CONTRIBUTING.md, review prompts) that tell a
    change to add an index row. A port that keeps its table changes
    nothing.
+3. Before the bump, run `grep -rn exec_allows_no_decreases_clause
+   --include=*.rs .`. A port with no hit changes nothing for #74. For
+   each hit, prove termination instead (give each loop and recursive
+   call its `decreases` and delete the attribute), or take the functions
+   it covers as trusted: each needs a seams row of kind `no_decreases`
+   (the SEAMS.md template's kind list has it), and a share that falls
+   below FLOOR needs a `lowered` line naming them. Where the attribute
+   covers an out-of-line `mod x;` (on it, on an inline module around
+   it, or atop its file), move it onto the functions, impls, traits or
+   inline modules it covers.
 
 ## 0.4.4
 

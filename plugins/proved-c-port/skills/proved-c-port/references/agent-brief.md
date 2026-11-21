@@ -31,8 +31,10 @@ HARD RULES
   untracked docs. No scratch git experiments in shared clones.
 - No new assume, admit, Tracked::assume_new, assume_specification,
   external_body, external_fn_specification, external_type_specification,
-  external_trait_specification, #[verifier::external], axiom fn, or
-  weaker contract to make a proof pass. A seam needs a ledger row and, where
+  external_trait_specification, #[verifier::external], axiom fn,
+  #[verifier::assume_unsupported_attributes],
+  #[verifier::exec_allows_no_decreases_clause], or weaker contract to
+  make a proof pass. A seam needs a ledger row and, where
   Kani can check it, a harness and a record in the same change.
 - Prove the producer, not its output: a property of code or data the
   library produces goes in the producer's ensures. A checker over the

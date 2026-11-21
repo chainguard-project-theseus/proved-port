@@ -97,10 +97,12 @@ Wrong: adding a trusted seam to make a proof pass. The spellings are
 `assume`, `admit`, `Tracked::assume_new`, `assume_specification`,
 `external_body`, `external_fn_specification`,
 `external_type_specification`, `external_trait_specification`,
-`#[verifier::external]`, `axiom fn` and
+`#[verifier::external]`, `axiom fn`,
 `#[verifier::assume_unsupported_attributes]` (the linkage of a
 `no_mangle`, `export_name` or `link_section` item; the body stays
-verified).
+verified) and `#[verifier::exec_allows_no_decreases_clause]` (no proof
+that the exec functions it covers terminate; the counter classes them
+trusted).
 
 ### Prove the producer, not its output
 
@@ -204,7 +206,7 @@ Before calling a phase done, check:
   in the rule above: every new hit has a seam row and a reason.
 
   ```
-  grep -rnE 'assume\(|admit\(|assume_new|assume_specification|assume_unsupported_attributes|external_body|external_(fn|type|trait)_specification|verifier::external\]|axiom fn' --include=*.rs
+  grep -rnE 'assume\(|admit\(|assume_new|assume_specification|assume_unsupported_attributes|exec_allows_no_decreases_clause|external_body|external_(fn|type|trait)_specification|verifier::external\]|axiom fn' --include=*.rs
   ```
 - A FLOOR raise replaces the README's Verus badge in the same PR
   (`references/proofs.md`, "The FLOOR ratchet").

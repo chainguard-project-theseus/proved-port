@@ -12,7 +12,12 @@
 //! is not `#[verifier::external_body]`,
 //! `#[verifier::external]` or `verus_verify(external_body)`, and its body
 //! calls none of `assume`, `admit` and `Tracked::assume_new` (which mints
-//! a ghost token on trust); *trusted* when it sits inside
+//! a ghost token on trust), and no `#[verifier::exec_allows_no_decreases_clause]`
+//! covers it (on it, or on the `impl`, trait or module around it: Verus
+//! then proves none of its loops or recursion ends; covering an
+//! out-of-line `mod x;`, on it or on a module or file around it, it
+//! fails the run);
+//! *trusted* when it sits inside
 //! `verus!` but is one of those; and *outside* when it is not inside
 //! `verus!` at all. A trusted function marked
 //! `#[cfg_attr(any(), discharged_by = "kani")]` is *discharged* instead:
@@ -287,6 +292,12 @@ struct Counter {
     /// or `verus!` block whose `cfg` it might not meet
     /// ([`Built::Unsure`]), whose verified functions count as trusted.
     sure: bool,
+    /// Whether the code [`Counter::items`] is walking is under
+    /// `#[verifier::exec_allows_no_decreases_clause]` ([`allows_no_decreases`]):
+    /// a module, `impl` or trait that carries it, or a file whose inner
+    /// attributes do. Verus proves no termination for its exec functions,
+    /// whose verified ones count as trusted.
+    no_decreases: bool,
     /// The `cfg` predicates of the code [`Counter::items`] is walking: its
     /// file's ([`module_guards`]) and those of each module, `impl`, trait
     /// and `verus!` block around it. An item is built where they and its
@@ -477,6 +488,7 @@ impl Counter {
             verus_fns: BTreeMap::new(),
             shipped: true,
             sure: true,
+            no_decreases: false,
             guards: Vec::new(),
             fn_ptrs: FnPtrs::default(),
             addressed: Vec::new(),
@@ -2133,6 +2145,27 @@ fn assumes_attributes(attrs: &[Attribute]) -> bool {
         .any(|(_, toks)| names(toks.into_iter().collect()))
 }
 
+/// Whether `attrs` hold `#[verifier::exec_allows_no_decreases_clause]`,
+/// read through [`applied_attrs`]: Verus then checks the exec functions
+/// it covers with no `decreases` on their loops or recursion, so proves
+/// none of them terminates. It fails closed as [`assumes_attributes`]
+/// does: the name counts anywhere in an attribute's tokens outside a
+/// literal, so in any path and in
+/// `#[verifier(exec_allows_no_decreases_clause)]`, and one a `cfg_attr`
+/// applies counts whatever its predicate.
+fn allows_no_decreases(attrs: &[Attribute]) -> bool {
+    fn names(toks: TokenStream) -> bool {
+        toks.into_iter().any(|t| match t {
+            TokenTree::Ident(i) => i == "exec_allows_no_decreases_clause",
+            TokenTree::Group(g) => names(g.stream()),
+            _ => false,
+        })
+    }
+    applied_attrs(attrs)
+        .into_iter()
+        .any(|(_, toks)| names(toks.into_iter().collect()))
+}
+
 /// Whether `attrs` hold Verus's attribute form, which marks a plain Rust
 /// function outside `verus!` for verification: `#[verus_verify]` or
 /// `#[verus_spec(..)]` (by any path), alone or as an attribute a
@@ -2365,17 +2398,23 @@ impl Counter {
     /// Enters code (a module, `impl`, trait or `verus!` block) with `attrs`
     /// whose `cfg` classes it `built`, other than test-only: returns what
     /// [`Counter::leave`] restores.
-    fn enter(&mut self, built: Built, attrs: &[Attribute]) -> (bool, bool, usize) {
-        let was = (self.shipped, self.sure, self.guards.len());
+    fn enter(&mut self, built: Built, attrs: &[Attribute]) -> (bool, bool, bool, usize) {
+        let was = (
+            self.shipped,
+            self.sure,
+            self.no_decreases,
+            self.guards.len(),
+        );
         self.shipped &= matches!(built, Built::Shipped | Built::Unsure);
         self.sure &= built != Built::Unsure;
+        self.no_decreases |= allows_no_decreases(attrs);
         self.guards.extend(cfg_predicates(attrs));
         was
     }
 
     /// Leaves the code [`Counter::enter`] entered.
-    fn leave(&mut self, (shipped, sure, guards): (bool, bool, usize)) {
-        (self.shipped, self.sure) = (shipped, sure);
+    fn leave(&mut self, (shipped, sure, no_decreases, guards): (bool, bool, bool, usize)) {
+        (self.shipped, self.sure, self.no_decreases) = (shipped, sure, no_decreases);
         self.guards.truncate(guards);
     }
 
@@ -2448,6 +2487,17 @@ impl Counter {
             }
         }
         let class = classify(in_verus, sig, attrs, body.as_ref());
+        // An exec function Verus lets go without a `decreases` (on it, or
+        // on the module, `impl` or trait around it) is trusted: nothing
+        // proves its loops and recursion end, Verus's check or a Kani
+        // record ([`Class::Discharged`]) alike.
+        let no_decreases = self.no_decreases || allows_no_decreases(attrs);
+        let class = match class {
+            Some(Class::Verified | Class::Discharged) if no_decreases && !is_ghost(sig) => {
+                Some(Class::Trusted)
+            }
+            c => c,
+        };
         let (at, lines) = match &self.expansion {
             Some(line) => (*line, expansion_lines(sig, body.as_ref(), close)),
             None => (start, end.saturating_sub(start) + 1),
@@ -3075,6 +3125,21 @@ impl Counter {
                         self.scope = outer;
                         self.module.pop();
                         self.leave(was);
+                    } else if built != Built::Test
+                        && m.content.is_none()
+                        && (self.no_decreases || allows_no_decreases(&m.attrs))
+                    {
+                        // The attribute covers the module, on it or on a
+                        // module or file around it, but the module's file,
+                        // and every file under it, is walked on its own,
+                        // so it would not reach the functions it covers.
+                        eprintln!(
+                            "{}:{}: #[verifier::exec_allows_no_decreases_clause] covers `mod {};`, a module the counter reads file by file: put it on the functions, impls, traits or inline modules it covers",
+                            self.file.display(),
+                            m.mod_token.span.start().line,
+                            m.ident
+                        );
+                        self.errors += 1;
                     }
                 }
                 Item::Static(s) if self.item_ships(&s.attrs) => {
@@ -3443,8 +3508,17 @@ impl Counter {
             }
             self.module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
             self.scope = self.file.display().to_string();
+            self.no_decreases = false;
             match p {
-                Some(Ok(file)) => self.items(&file.items, false),
+                Some(Ok(file)) => {
+                    // A file's inner `#![verifier::exec_allows_no_decreases_clause]`
+                    // covers its own functions; a `mod x;` under it fails
+                    // the run ([`Counter::items`]), since `x`'s file is
+                    // walked on its own.
+                    self.no_decreases = allows_no_decreases(&file.attrs);
+                    self.items(&file.items, false);
+                    self.no_decreases = false;
+                }
                 Some(Err(e)) => {
                     eprintln!("{}:{}: {e}", self.file.display(), e.span().start().line);
                     self.errors += 1;
@@ -9165,6 +9239,118 @@ fn uncalled() {
         ] {
             let got = assumes_attributes(&attrs(src));
             assert_eq!(got, want, "assumes {src}: got = {got}, wanted = {want}");
+        }
+        for (src, want) in [
+            ("#[verifier::exec_allows_no_decreases_clause]", true),
+            ("#[verifier(exec_allows_no_decreases_clause)]", true),
+            (
+                "#[cfg_attr(windows, verifier::exec_allows_no_decreases_clause)]",
+                true,
+            ),
+            ("#[verifier::loop_isolation(false)]", false),
+            ("/// Not `exec_allows_no_decreases_clause`.", false),
+            (
+                "#[doc = \"verifier::exec_allows_no_decreases_clause\"]",
+                false,
+            ),
+        ] {
+            let got = allows_no_decreases(&attrs(src));
+            assert_eq!(
+                got, want,
+                "no decreases {src}: got = {got}, wanted = {want}"
+            );
+        }
+    }
+
+    /// `exec_allows_no_decreases_clause` lets Verus check exec functions
+    /// with no `decreases`, so nothing proves they terminate: each exec
+    /// function it covers (on the function, or on the `impl`, trait or
+    /// inline module around it, outer or inner) is trusted, not verified.
+    /// A function beside them keeps its class, as do ghost functions,
+    /// and code outside `verus!`. On an out-of-line `mod x;`, whose file
+    /// the counter walks on its own, it fails the run.
+    #[test]
+    fn no_decreases_functions_are_trusted() {
+        let c = walked(
+            "verus! {\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            fn on_fn(n: u32) { loop {} }\n\
+            fn beside() {}\n\
+            struct S;\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            impl S { fn on_impl(&self) {} fn on_impl2(&self) {} }\n\
+            impl S { fn plain_impl(&self) {} }\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            trait T { fn on_trait(&self) {} }\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            mod outer { fn on_mod() {} }\n\
+            mod inner { #![verifier::exec_allows_no_decreases_clause] fn on_inner() {} }\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            proof fn ghostly() {}\n\
+            fn after() {}\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[verifier::external_body]\n\
+            fn marked() {}\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[verifier::external_body]\n\
+            fn marked_no_decreases() {}\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            mod marked_mod {\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[verifier::external_body]\n\
+            fn marked_in_mod() {}\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[verifier::external_body]\n\
+            proof fn marked_proof() {}\n\
+            #[cfg(verus_keep_ghost)]\n\
+            fn verus_only() {}\n\
+            #[cfg(verus_keep_ghost)]\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[verifier::external_body]\n\
+            fn verus_only_marked() {}\n\
+            }\n\
+            #[cfg(verus_keep_ghost)]\n\
+            fn verus_only_plain() {}\n\
+            }\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            fn not_verus() {}\n",
+        );
+        assert_eq!(c.errors, 0, "errors: got = {}, wanted = 0", c.errors);
+        let t = &c.tallies["k"];
+        // Trusted: the six above, the two marked exec functions it covers,
+        // which a Kani record does not discharge, and the two Verus-only
+        // exec functions it covers, which a shipped proof could rest on.
+        // Discharged: `marked`, and `marked_proof`, a ghost function the
+        // attribute leaves alone. `verus_only_plain` stays out of the
+        // tally, as a verified Verus-only function does.
+        assert_eq!(
+            t.fns,
+            [3, 10, 1, 2],
+            "verified, trusted, outside, discharged: got = {:?}, wanted = [3, 10, 1, 2]",
+            t.fns
+        );
+        assert_eq!(t.ghost, 1, "ghost: got = {}, wanted = 1", t.ghost);
+        // `mod elsewhere;` under the attribute, on it or on an inline
+        // module around it (outer or inner), is one error each; with no
+        // attribute, none.
+        for (src, want) in [
+            (
+                "#[verifier::exec_allows_no_decreases_clause]\nmod elsewhere;\n",
+                1,
+            ),
+            (
+                "#[verifier::exec_allows_no_decreases_clause]\nmod outer { mod elsewhere; }\n",
+                1,
+            ),
+            (
+                "mod outer { #![verifier::exec_allows_no_decreases_clause] mod elsewhere; }\n",
+                1,
+            ),
+            ("mod outer { mod elsewhere; }\nmod elsewhere2;\n", 0),
+        ] {
+            let got = walked(src).errors;
+            assert_eq!(got, want, "{src:?}: got = {got} errors, wanted = {want}");
         }
     }
 

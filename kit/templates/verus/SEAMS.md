@@ -41,7 +41,10 @@ contract is still trusted, now as vstd's.
   `#[verifier::assume_unsupported_attributes]`: Verus takes its
   `no_mangle`, `export_name` or `link_section` on trust, the symbol or
   section, while it still checks the body; always `trusted`, with the
-  ABI tests as grounds), or a token minted on trust
+  ABI tests as grounds), `no_decreases` (the exec functions
+  `#[verifier::exec_allows_no_decreases_clause]` covers: Verus checks
+  their bodies but proves none of their loops or recursion ends, and
+  the counter classes them trusted), or a token minted on trust
   (`Tracked::assume_new`).
 - **category**: `core library`, `std library`, `permanent (the C
   caller's contract)`, `operating system`, `machine model`, a
