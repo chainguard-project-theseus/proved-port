@@ -155,6 +155,7 @@ where it reports drift.
   templates nothing holds, so a port takes the text into its own
   AGENTS.md and `.chainguard/review-prompt.md` by hand, or keeps the
   rules it already wrote.
+- The counter's version is 0.4.5, ready for the v0.4.5 tag.
 
 ### Porting notes
 
