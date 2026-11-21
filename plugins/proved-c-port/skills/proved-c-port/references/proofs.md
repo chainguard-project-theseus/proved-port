@@ -203,7 +203,10 @@ Rules:
   first proof PR raises FLOOR and the badge from 0.0, and a PR with a
   `lowered` line replaces the badge to match.
 - The check passes a share above its figure and names the figure to
-  record. Every port records it the same way, as the kit's FLOOR header
+  record: the share, or, for a port whose count.toml `[floor]` sets
+  `room_functions`/`room_lines` (its own FLOOR paragraph below the
+  header says so), the share with that room for unverified code, and
+  none while the share is within it. Every port records it the same way, as the kit's FLOOR header
   states: FLOOR, and the README badge that shows it, rise in a PR of
   their own, to the figures the check names on main, never in the PR
   that earns them, so parallel PRs never conflict there (pcre3's

@@ -118,7 +118,11 @@
 //! row's verified share of functions or of lines, or its verified and
 //! discharged share, is below the figure FILE records (verus/FLOOR), and
 //! names the figure to record when the share has risen past it; FILE must
-//! be the configuration's `[floor] path`. `--base-rev REV` also fails a
+//! be the configuration's `[floor] path`. With `[floor] room_functions`
+//! or `room_lines` (#100), the figure named is the share with that many
+//! more unverified functions and lines in its denominators, and no figure
+//! is named while the share is within that room; the pass or failure is
+//! the share's alone. `--base-rev REV` also fails a
 //! figure FILE sets below the figure in REV's FLOOR (at REV's `[floor]
 //! path`) without a new `lowered` line for it, and fails when REV does
 //! not resolve. With `[floor] renamed_from`, REV's copy may give the
@@ -6391,7 +6395,7 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let shipped = report(&root, &cfg, &c, &unshipped, &tests);
+    let (shipped, room) = report(&root, &cfg, &c, &unshipped, &tests);
     let mut failed = false;
     if let Some(f) = floor {
         let fig = Figures::new(&cfg.floor.checked, &cfg.floor.path);
@@ -6428,7 +6432,7 @@ fn main() {
         if let Some(name) = fig.missing(&head.floor) {
             usage(format!("{}: want a {name} figure", f.display()));
         }
-        let (mut ok, report) = fig.check(&shipped, &head.floor);
+        let (mut ok, report) = fig.check_with_room(&shipped, &head.floor, &room);
         print!("{report}");
         if let Some(b) = &cfg.badge {
             ok &= check_badge(&root, &b.path, &cfg.floor.path, &head.floor);
@@ -7126,7 +7130,8 @@ fn report(
     c: &Counter,
     unshipped: &[String],
     tests: &std::collections::BTreeSet<String>,
-) -> Floor {
+) -> (Floor, Floor) {
+    let room = (cfg.floor.room_functions, cfg.floor.room_lines);
     let mut total = Tally::default();
     let mut shipped = Tally::default();
     for (k, t) in &c.tallies {
@@ -7146,7 +7151,10 @@ fn report(
         print_row("shipped", &shipped);
         print_assumed(&c.assumed, c.assumed.len());
         fail_on_errors(c.errors);
-        return shares(&shipped, (0, 0));
+        return (
+            shares(&shipped, (0, 0), (0, 0)),
+            shares(&shipped, (0, 0), room),
+        );
     };
     let several = c.tallies.len() > 1;
     println!(
@@ -7203,7 +7211,10 @@ fn report(
         }
         std::process::exit(1);
     }
-    shares(&shipped, shipped_checked.discharged)
+    (
+        shares(&shipped, shipped_checked.discharged, (0, 0)),
+        shares(&shipped, shipped_checked.discharged, room),
+    )
 }
 
 /// The trust summary's linkage seams, after the tables, when there are
@@ -7443,9 +7454,12 @@ fn base_limits(
 /// The figures of `t`, as verus/FLOOR records them: the verified share of
 /// functions and of lines, then the verified and discharged share of each,
 /// with `ledger` the functions and lines the generated ledger discharges
-/// besides the Kani marker's.
-fn shares(t: &Tally, ledger: (usize, usize)) -> Floor {
-    let (fns, lines) = (t.fns.iter().sum(), t.lines.iter().sum());
+/// besides the Kani marker's, and `room` that many more unverified
+/// functions and lines (`[floor] room_functions` and `room_lines`, #100)
+/// in each denominator.
+fn shares(t: &Tally, ledger: (usize, usize), room: (usize, usize)) -> Floor {
+    let (fns, lines): (usize, usize) = (t.fns.iter().sum(), t.lines.iter().sum());
+    let (fns, lines) = (fns + room.0, lines + room.1);
     let (v, d) = (Class::Verified as usize, Class::Discharged as usize);
     Floor([
         Some(tenths(t.fns[v], fns)),
@@ -7790,7 +7804,17 @@ impl Figures {
     /// Whether `got` meets `want`, with one line per figure `want` gives
     /// saying so. A figure above its floor names the value to record, so the
     /// floor only rises.
+    #[cfg(test)]
     fn check(&self, got: &Floor, want: &Floor) -> (bool, String) {
+        self.check_with_room(got, want, got)
+    }
+
+    /// [`Figures::check`], where the figure a raise records is `room`'s
+    /// (the share with `[floor]`'s room for unverified code, #100) rather
+    /// than `got`'s: a share above its floor names `room`'s figure to
+    /// record where that is above the floor, and no raise where it is not.
+    /// Whether the run passes is `got`'s alone.
+    fn check_with_room(&self, got: &Floor, want: &Floor, room: &Floor) -> (bool, String) {
         let file = &self.file;
         let mut ok = true;
         let mut report = String::new();
@@ -7798,6 +7822,7 @@ impl Figures {
             let (Some(g), Some(w)) = (got.0[k], want.0[k]) else {
                 continue;
             };
+            let r = room.0[k].unwrap_or(g);
             let what = MEANING[k];
             if g < w {
                 ok = false;
@@ -7806,12 +7831,19 @@ impl Figures {
                     shown(g),
                     shown(w)
                 );
-            } else if g > w {
+            } else if g > w && r > w {
                 report += &format!(
                     "ok coverage floor: {name} {what} {}%, above the floor's {}%; raise {file} to `{name} {}`\n",
                     shown(g),
                     shown(w),
-                    shown(g)
+                    shown(r)
+                );
+            } else if g > w {
+                report += &format!(
+                    "ok coverage floor: {name} {what} {}%, above the floor's {}% but within [floor]'s room for unverified code ({}%): no raise\n",
+                    shown(g),
+                    shown(w),
+                    shown(r)
                 );
             } else {
                 report += &format!(
@@ -12555,6 +12587,44 @@ fn uncalled() {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// With `[floor]`'s room (#100), a share above the floor names the
+    /// room's figure to record, or no raise where the room's figure is not
+    /// above the floor; the pass or failure is the share's alone.
+    #[test]
+    fn a_rise_leaves_the_floor_s_room() {
+        let fig = Figures::default();
+        let want = Floor([Some(500), Some(500), Some(500), Some(500)]);
+        let got = Floor([Some(600), Some(600), Some(600), Some(490)]);
+        let room = Floor([Some(550), Some(500), Some(450), Some(400)]);
+        let (ok, report) = fig.check_with_room(&got, &want, &room);
+        assert!(!ok, "{report}");
+        assert!(
+            report.contains("functions verified 60.0%, above the floor's 50.0%; raise verus/FLOOR to `functions 55.0`"),
+            "{report}"
+        );
+        for name in [
+            "lines verified 60.0%",
+            "checked-functions verified or discharged 60.0%",
+        ] {
+            assert!(
+                report.contains(&format!(
+                    "ok coverage floor: {name}, above the floor's 50.0% but within [floor]'s room"
+                )),
+                "{name}: {report}"
+            );
+        }
+        assert!(
+            report.contains("FAIL coverage floor: checked-lines verified or discharged 49.0%, below the floor's 50.0%"),
+            "{report}"
+        );
+        // With no room, the figure to record is the share itself.
+        let (_, report) = fig.check(&got, &want);
+        assert!(
+            report.contains("raise verus/FLOOR to `functions 60.0`"),
+            "{report}"
+        );
+    }
+
     #[test]
     fn the_floor_fails_below_and_names_a_rise() {
         let want = Floor([Some(84), Some(105), Some(200), Some(300)]);
@@ -12933,8 +13003,14 @@ verus! {
         t.lines[Class::Verified as usize] = 60;
         t.lines[Class::Trusted as usize] = 40;
         assert_eq!(
-            shares(&t, (2, 30)),
+            shares(&t, (2, 30), (0, 0)),
             Floor([Some(600), Some(600), Some(800), Some(900)])
+        );
+        // With room for 25 more unverified functions and 250 more lines
+        // (#100): 6/35, 60/350, 8/35 and 90/350, rounded down.
+        assert_eq!(
+            shares(&t, (2, 30), (25, 250)),
+            Floor([Some(171), Some(171), Some(228), Some(257)])
         );
     }
 
