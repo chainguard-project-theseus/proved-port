@@ -25,6 +25,17 @@ where it reports drift.
   shared file, so two proof changes conflicted there even when nothing
   else overlapped. Neither the counter nor the make targets read the
   table.
+- `verus/FLOOR`'s header names the second kind of `lowered` line (#73):
+  a change that deletes verified code, whole functions or lines of one,
+  takes it from both the verified count and the total, and can lower a
+  share with no code becoming trusted or outside. Its REASON names the
+  functions removed or shortened, says that nothing became trusted or
+  outside, and gives the counts. The header described only the
+  trusted-or-outside kind, so a reviewer told to hold `lowered` lines to
+  the header could refuse a deletion's line. "Close the gap by verifying
+  more code first" stays the first step, and the proved-c-port skill
+  (SKILL.md, references/proofs.md) says the same. The counter reads
+  `lowered` lines as before.
 
 ### Porting notes
 
