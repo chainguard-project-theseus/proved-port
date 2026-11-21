@@ -60,8 +60,8 @@ unknown option or a second ROOT fails the run (exit 2), so a misspelt
 an error. A check whose section is left out does not run, and prints
 nothing. So with `--base-rev REV` the run fails (exit 1) when the
 configuration turns off or narrows a gate `REV`'s copy runs: a
-`[recursion]`, `[reach]`, `[inputs]`, `[mints]` or `[badge]` section
-removed; a `[badge]` `path` moved to another file; a
+`[recursion]`, `[loops]`, `[reach]`, `[inputs]`, `[mints]` or `[badge]`
+section removed; a `[badge]` `path` moved to another file; a
 `[reach]` `exports_macro`, `fn_ptr_macro` or `conversion` removed or
 renamed; an `[inputs]` crate or root removed or `lazy` turned off; a
 `[crates]` `dir` removed or changed, a member removed, moved to another
@@ -194,6 +194,7 @@ not a source and is passed over.
 | `[kani]` | `records` | the directory of `kani-*.md` records that cover the `discharged_by = "kani"` marker |
 | `[seams]` | `tables`, `theorems` | the seams tables, and a directory whose every `*.md` holds one |
 | `[recursion]` | `table` | turns the recursion check on; the table that names verified recursion |
+| `[loops]` | `table` | turns the nested-loop check on ("Nested loops"); the work-bound theorem's table that names each function that nests loops |
 | `[reach]` | `path`, `exports_macro`, `fn_ptr_macro`, `conversion` | turns REACH on; the port's exports macro, function-pointer macro and argument conversion, each optional |
 | `[inputs]` | `table`, `crates`, `roots`, `lazy`, `describe` | turns the compile-inputs check on; a root that matches no function of `crates` fails it |
 | `[mints]` | `path`, `mint`, `token_trait`, `home` | turns the token-mint gate on |
@@ -497,6 +498,44 @@ reads each module file on its own, so it would not reach the functions
 it covers; put it on those functions, impls, traits or inline modules.
 Ghost functions and code outside `verus!` keep their classes.
 
+## Nested loops
+
+A `decreases` measure bounds each exec loop's iterations, but not the
+product of nested ones: an inner loop with its own `decreases`
+verifies, and the work becomes quadratic. With `[loops] table = FILE`
+(#76), the run fails (exit 1) on each function of a shipped crate (any
+class: verified, trusted, discharged or outside `verus!`) that nests a
+loop (`loop`, `while` or `for`) inside another, or calls, from inside a
+loop's body or header, a function that loops, itself or through what it
+calls, unless FILE's table has a row that names its file in backquotes
+and quotes `fn NAME`, as `[recursion]`'s RN1 table does. That row is
+the work-bound theorem's: it states the bound on the product (a ghost
+work counter spanning both loops, or why the inner one is constant).
+
+Calls are read as the recursion check reads them: by name within the
+function's file, a plain call `g(..)` as the file's free function `g`,
+and `self.g(..)` or `Self::g(..)` as its owner's method. A call across
+files, or through another receiver or path, a call of a closure not
+bound by `let` in the function (one passed in, or stored in a field),
+a function a `macro_rules!` expansion writes (the check reads only the
+code outside expansions, as the other walks do), and a loop inside std
+(an iterator adapter's) are not seen, and the theorem covers them. The body is parsed (Verus's syntax included) and
+read by its structure: a loop's header may hold any expression (an
+`unsafe` block, a `match`); a `while`'s condition runs each iteration
+and counts as inside the loop, a `for`'s iterator runs once and does
+not, but a closure in the iterator (`.map(|b| ..)`) runs per item and
+counts as inside it. A nested item (a function, an `impl`) is its own
+and is left out. A closure's loops count as the body's, and a name a
+`let` binds (with a type too) whose initializer loops, itself, through
+a call of a function that loops, or through another such name, makes a
+call of the name a call that loops, whatever wraps a closure there
+(`Box::new(|..| ..)`, `&`, parentheses). A macro invocation
+in a body is tokens whose expansion the check does not read: one that
+holds `loop`, `while` or `for` counts as a loop at its line, and names
+its function, whatever it nests. So does a body that does not parse,
+and a function that calls such a body's function from inside a loop
+(each fails closed until the table names it).
+
 ## Linkage attributes Verus takes on trust
 
 Verus refuses `no_mangle`, `export_name` and `link_section` inside
@@ -640,7 +679,8 @@ An expansion is read under its invocation's `cfg`s, as code a
 module holds is: one under a `cfg` Verus's build might not meet
 (`#[cfg(unix)] vone!(v1);`) ships its functions trusted, never
 verified, and a definition under such a `cfg` is a candidate, never
-dropped. The walks (REACH, recursion, compile inputs, mints) read only the
+dropped. The walks (REACH, recursion, nested loops, compile inputs,
+mints) read only the
 code outside expansions, with `[reach]`'s `exports_macro` and
 `fn_ptr_macro` as before. REACH scans every shipped file for the
 exports macro's blocks, found by their tokens (the name, plain or raw,
