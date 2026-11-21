@@ -72,6 +72,15 @@
 #                      call's output goes to target/kani/<crate>.log and
 #                      only the per-harness lines are printed, with the
 #                      log's tail on a failure.
+#   KANI_MANIFEST      the workspace's Cargo.toml, for a port whose
+#                      workspace is not at its root (a uutils port:
+#                      crates/uutils/Cargo.toml): `--manifest-path` on
+#                      `cargo fetch` and every `cargo kani` call, after
+#                      -p; a file that does not exist, or a path with a
+#                      space, exits 2. kani.sh
+#                      still runs in the port's root, so target/kani and
+#                      kani-list.json are there. proved-port.mk sets it
+#                      from VERUS_CARGO_FLAGS' --manifest-path
 #   KANI_VERSION       the release `cargo kani --version` must name
 #   KANI_NONE          `yes`: the port has no harnesses yet, and a run
 #                      passes only while that holds (above); any other
@@ -106,6 +115,14 @@ jobs=${KANI_JOBS:-}
 format=${KANI_FORMAT:-}
 pattern=${KANI_FAIL_PATTERN:-}
 none=${KANI_NONE:-}
+manifest=${KANI_MANIFEST:-}
+
+case "$manifest" in
+  *[[:space:]]*) usage "KANI_MANIFEST is one path with no spaces, not $manifest" ;;
+esac
+if [ -n "$manifest" ] && [ ! -f "$manifest" ]; then
+  usage "KANI_MANIFEST: no file $manifest"
+fi
 
 case "$none" in
   '') ;;
@@ -166,7 +183,13 @@ if [ -n "${KANI_VERSION:-}" ]; then
 fi
 
 mkdir -p "$out"
-cargo fetch --locked
+cargo fetch --locked ${manifest:+"--manifest-path=$manifest"}
+
+# mflag: the --manifest-path flag, none without KANI_MANIFEST, as one
+# word, so it goes where a word list does.
+mflag() {
+  [ -z "$manifest" ] || echo "--manifest-path=$manifest"
+}
 
 # pflag CRATE: the -p flag for CRATE, none for `-`, as one word: cargo
 # kani's -p takes every bare word after it, so `-p CRATE list` would
@@ -198,7 +221,7 @@ harnesses() {
   # own stderr, so a crate that does not compile under Kani says why.
   said=$out/list-$(fname "$lc").out
   # shellcheck disable=SC2046,SC2086
-  if ! cargo kani $(pflag "$lc") ${KANI_FLAGS:-} "$@" list ${KANI_LIST_FLAGS:-} --format json > "$said"; then
+  if ! cargo kani $(pflag "$lc") $(mflag) ${KANI_FLAGS:-} "$@" list ${KANI_LIST_FLAGS:-} --format json > "$said"; then
     echo "kani: cargo kani list failed for $(fname "$lc"), printing:" >&2
     cat "$said" >&2
     exit 1
@@ -326,7 +349,7 @@ run() {
   ran=$((ran + 1))
   # The flags are words with no spaces; split them into arguments.
   # shellcheck disable=SC2046,SC2086
-  set -- $(pflag "$crate") ${KANI_FLAGS:-} ${jobs:+-j "$jobs"} ${format:+--output-format "$format"} $picks "$@"
+  set -- $(pflag "$crate") $(mflag) ${KANI_FLAGS:-} ${jobs:+-j "$jobs"} ${format:+--output-format "$format"} $picks "$@"
   # The CBMC arguments go last: --cbmc-args takes every word after it.
   # shellcheck disable=SC2086
   [ -z "${KANI_CBMC_ARGS:-}" ] || set -- "$@" --cbmc-args $KANI_CBMC_ARGS
