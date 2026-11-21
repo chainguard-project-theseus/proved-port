@@ -77,7 +77,11 @@
 //! one the crate defines that does not expand fails the run. The
 //! exceptions are std's item macros that write no function
 //! (`compile_error!`, `thread_local!`), by `::std::` or bare where
-//! nothing may rebind the name. A bare `thread_local!` that a `*` or a
+//! nothing may rebind the name. A `thread_local!` imported by name or
+//! invoked by a path from `std` or `core` is std's only where no `use`
+//! in the module (for the import in 2015, at the root too) or `extern
+//! crate .. as` gives another crate that name ([`Counter::use_rebinds`]).
+//! A bare `thread_local!` that a `*` or a
 //! `#[macro_use]` may rebind is std's only where each such source is
 //! shown not to bring another ([`Counter::other_thread_local`]): a glob
 //! of Verus's prelude, of std or core, or of a module of the crate that
@@ -4892,7 +4896,9 @@ impl Counter {
     /// where the crate defines a macro of that name, or where a `use` of
     /// this module imports the name from a path that does not start at
     /// `std` or `core`; or a path whose first segment is neither
-    /// (`elsewhere::thread_local!`, `crate::thread_local!`). A bare one
+    /// (`elsewhere::thread_local!`, `crate::thread_local!`). A `std` or
+    /// `core` first segment that a `use` or an `extern crate .. as` gives
+    /// another crate is neither (#137; [`Counter::use_rebinds`]). A bare one
     /// only a `*` or a `#[macro_use]` may bind to another counts too
     /// (#122), unless each such source is shown not to bring one
     /// ([`Counter::foreign_glob`]): a `#[macro_use]` of a crate other than
@@ -4903,10 +4909,10 @@ impl Counter {
         let segs = segments(path);
         if segs.len() == 1 && path.leading_colon.is_none() {
             self.macros.contains_key("thread_local")
-                || self
-                    .imported("thread_local", false)
-                    .iter()
-                    .any(|p| !self.std_crate(p.first()))
+                || self.imported("thread_local", false).iter().any(|p| {
+                    !self.std_crate(p.first())
+                        || p.first().is_some_and(|f| self.use_rebinds(&self.module, f))
+                })
                 || self
                     .macro_use
                     .iter()
@@ -4914,8 +4920,16 @@ impl Counter {
                 || self.foreign_glob(&self.module, &mut Vec::new())
         } else {
             // A first segment that is a module of this crate (`mod core`)
-            // shadows the extern prelude's `std` or `core`.
-            !self.std_crate(segs.first()) || self.local(&segs)
+            // shadows the extern prelude's `std` or `core`, and so does a
+            // `use` here or an `extern crate .. as` that gives another
+            // crate that name (#137). The path is read in this module's
+            // scope in every edition, so a root `use` rebinds it only at
+            // the root.
+            !self.std_crate(segs.first())
+                || self.local(&segs)
+                || segs
+                    .first()
+                    .is_some_and(|f| self.binds(&self.module, f) || self.extern_alias(f))
         }
     }
 
@@ -4960,6 +4974,18 @@ impl Counter {
                     || !((one_of(&b.path, &VERUS_GLOBS) && !self.renamed(&b.path[0]))
                         || self.std_crate(b.path.first())))
         })
+    }
+
+    /// Whether a `use` path's first segment `f`, in module `m`, may name a
+    /// crate other than the one of that name: a `use` here (`use
+    /// elsewhere as std;`) or an `extern crate .. as` gives another crate
+    /// that name, or, in 2015 (where the path is read from the crate
+    /// root), a root `use` does or a root glob not shown to be std's,
+    /// core's or Verus's may (it may bring a module of that name).
+    fn use_rebinds(&self, m: &[String], f: &str) -> bool {
+        self.binds(m, f)
+            || (self.edition < 2018 && (self.binds(&m[..1], f) || self.glob_may_bring_any(&m[..1])))
+            || self.extern_alias(f)
     }
 
     /// Whether an `extern crate path as name;` a shipped build or Verus's
@@ -5015,19 +5041,10 @@ impl Counter {
                 .filter(|l| self.modules.contains(l))
             };
             let local = lookup(p);
-            // A `use` here (`use elsewhere as std;`) or an `extern crate
-            // .. as` that gives another crate the first segment's name may
-            // be what the path names, beside a module of that name under
-            // `cfg`s: then each may bring the name.
-            // In 2015 the path is read from the crate root, so a root `use`
-            // rebinds it too, and so may any root glob not shown to be
-            // std's, core's or Verus's (it may bring a module of that name).
-            let rebound = p.first().is_some_and(|f| {
-                self.binds(m, f)
-                    || (self.edition < 2018
-                        && (self.binds(&m[..1], f) || self.glob_may_bring_any(&m[..1])))
-                    || self.extern_alias(f)
-            });
+            // A rebound first segment may be what the path names, beside a
+            // module of that name under `cfg`s: then each may bring the
+            // name.
+            let rebound = p.first().is_some_and(|f| self.use_rebinds(m, f));
             if let Some(local) = local {
                 let brings = rebound
                     || self.binds(&local, "thread_local")
