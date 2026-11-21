@@ -7,8 +7,8 @@
 # release the Kani records name, both as verus.yaml pins them and both
 # built against {RUST_STREAM}, so the stream moves with them;
 # theseus-proved-port is the kit (the counter, the make targets and the
-# templates `make verus-headers` reads), pinned as verus.yaml pins it and
-# to the Makefile's PROVED_PORT_VERSION; shellcheck
+# templates `make verus-headers` reads), pinned as verus.yaml and
+# lint.yaml pin it and to the Makefile's PROVED_PORT_VERSION; shellcheck
 # is lint.yaml's pin; clang and compiler-rt are fuzz.yaml's; bash, curl,
 # ca-certificates-bundle, apk-tools and wolfi-keys are consumers.yaml's,
 # whose harness installs each consumer's packages with apk; libgcc is

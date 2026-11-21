@@ -1125,7 +1125,8 @@ takes the kit. It installs:
 A port takes it this way:
 
 - It pins the package, `theseus-proved-port~X.Y.Z`, in the packages of
-  every check that runs a kit target (`.chainguard/ci/verus.yaml`) and
+  every check that runs a kit target (`.chainguard/ci/verus.yaml`, and
+  lint.yaml's `source-rules`, which runs `make lint-unsafe`) and
   in the environment development sessions and the deps agent install
   (`.chainguard/develop.yaml`, or the file its `from:` names).
 - Its Makefile sets its variables, then names the same release and

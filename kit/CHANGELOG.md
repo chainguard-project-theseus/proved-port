@@ -42,6 +42,18 @@ where it reports drift.
   function and what only it calls were never walked. An exported symbol
   whose ABI is not C's is an error under a `cfg_attr` too, and so is a
   `cfg_attr` predicate on an export that the counter cannot read.
+- The templates' `source-rules` check (lint.yaml) runs `make lint-unsafe`
+  in place of a `ci/lint-unsafe.sh` the kit never templated (#152). Its
+  environment gains the rust stream, build-base, make and
+  `theseus-proved-port~` (pinned as verus.yaml pins it), and the
+  crates.io egress the clippy check has; review-prompt.md and the
+  templates README cite the target, and the README shows the Makefile's
+  `UNSAFE_CRATES = {CAPI_CRATE}`. The step checks no SAFETY: comments:
+  the README tells a port to set clippy's `undocumented_unsafe_blocks`
+  to deny where the C API crate's lints come from (the workspace's, or
+  its own `[lints.clippy]` when it does not inherit them), so the clippy
+  check holds them, or to keep its own SAFETY: check as a later step. A
+  template change moves no port.
 
 ### Porting notes
 
@@ -55,7 +67,12 @@ where it reports drift.
    A port whose Makefile has the no-kit guard (kit/count/README.md,
    "Adopting: the package") adds `lint-unsafe` to its
    `PROVED_PORT_TARGETS`, so the target fails with the kit's message
-   where the package is missing.
+   where the package is missing. A port that takes the template's
+   `source-rules` check as it is also adds the template's environment
+   and `network` to the check, and keeps its own rules as a step after
+   `make lint-unsafe`. Its `SAFETY:` comment check stays such a step
+   unless its C API crate already denies clippy's
+   `undocumented_unsafe_blocks` (kit/templates/README.md says where).
 2. A port with `[reach]` whose exports sit under a `cfg_attr` now has
    them as entry points: `verus-count` fails on each unverified function
    they newly reach (no row goes stale, since entry points are only

@@ -128,7 +128,7 @@ developed in private repositories.
 
 | template | what it holds | shaped on |
 |---|---|---|
-| `.chainguard/ci/lint.yaml` | rustfmt, clippy, the source rules (`ci/lint-unsafe.sh`, `ci/header-check.sh`), shellcheck from the packaged `shellcheck~` | pcre3, expat-rs; shellcheck as chainz |
+| `.chainguard/ci/lint.yaml` | rustfmt, clippy, the source rules (`make lint-unsafe`, `ci/header-check.sh`), shellcheck from the packaged `shellcheck~` | pcre3, expat-rs; shellcheck as chainz |
 | `.chainguard/ci/test.yaml` | cargo test and `ci/abi.sh` on amd64 and arm64; msrv on the `rust-version` toolchain | pcre3, expat-rs, chainz |
 | `.chainguard/ci/verus.yaml` | `verus` and `kani` against the pull request's base; `verus-main` and `kani-main` on main, `verus-main` against the start of the push; one architecture (large-arm64, 60 and 30 minutes) by default, with a commented `verus-amd64` for proved code that differs by target | pcre3, challoc, expat-rs; `verus-amd64` as challoc's `verus-arm64` |
 | `.chainguard/ci/fuzz.yaml` | `fuzz`, `fuzz-diff` and `fuzz-abi` on request, each fuzzer after its self-test; `known-citations` on every pull request | pcre3, expat-rs |
@@ -216,6 +216,28 @@ VERIFY_TARGETS = verus verus-q8 notcopy-control kani-boolcmp kani kani-q8 kani-r
 
 A check that adds verification adds its target to the list in the same
 pull request.
+
+lint.yaml's `source-rules` check runs `make lint-unsafe`, which fails
+until the Makefile names the packages allowed unsafe code. A port sets
+them before the include, and `UNSAFE_WORKSPACE_LINTS = no` too if its
+root manifest has no `[workspace.lints.rust]` denying `unsafe_code`:
+
+```make
+UNSAFE_CRATES = {CAPI_CRATE}
+```
+
+`make lint-unsafe` does not check `SAFETY:` comments. The clippy check
+(`-D warnings`) holds them once `{CAPI_CRATE}` has clippy's
+`undocumented_unsafe_blocks` on. It is a restriction lint, off by
+default. So a port turns it on where `{CAPI_CRATE}`'s lints come from:
+`undocumented_unsafe_blocks = "deny"` under `[workspace.lints.clippy]`
+if `{CAPI_CRATE}` inherits the workspace lints (`[lints] workspace =
+true`, possible with `unsafe_code = "deny"`), or under its own
+`[lints.clippy]` if it does not (needed with `unsafe_code = "forbid"`,
+which `lint-unsafe.sh`'s header covers). A port that keeps its own
+`SAFETY:` check, or any other rule of its own (a budget of unsafe
+blocks), adds it as a script under `ci/` and a step of `source-rules`
+after `make lint-unsafe`.
 
 Where the ports differ, a template takes the shape most of them share,
 and its comments say what a port may change: a second architecture for
