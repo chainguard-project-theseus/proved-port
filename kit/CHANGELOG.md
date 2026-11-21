@@ -52,6 +52,18 @@ where it reports drift.
   utility's directory and some `locales` directories of `.ftl` files,
   could not count its `coreutils` and `uu_stdbuf` crates. A crate
   whose directory or `src/` is a link fails as before.
+- The counter reads a `thread_local!` shown to be another macro than
+  std's as any macro of its name (#68). It skipped every macro of the
+  name, so a crate's own `macro_rules! thread_local` that writes
+  functions, or another crate's `thread_local!`, added no row and its
+  functions left the denominator. Now the crate's own is expanded and
+  its functions counted, and another crate's (by a path such as
+  `elsewhere::thread_local!`, or bare after a `use` of the name from
+  outside `std` and `core`) counts as one function outside `verus!`,
+  `thread_local!`, as another crate's macro does; so does `std::` or
+  `core::` when a Cargo dependency is renamed to that name. std's, and
+  a bare one only a `*` or a `#[macro_use]` may bind to another (#122
+  tracks it), count nothing, as before.
 - `verus/THEOREMS.md`'s template drops its Index table (#102). Each
   theorem file's first line, `# <ID>. <title>` (the theorem skeleton's
   heading), is its index entry, and the Index section gives a command
@@ -188,6 +200,16 @@ where it reports drift.
    at the item's content column (`   <!--`), or delete the old badge. A
    README with one rendered badge and none of these comments changes
    nothing.
+7. For #68, a port changes nothing unless it defines its own
+   `macro_rules! thread_local`, imports the name with a `use` from
+   outside `std` and `core` (in a `{ .. }` list over several lines
+   too), invokes `thread_local!` by another path, or renames a Cargo
+   dependency to `std` or `core`. `grep -rnw thread_local --include=*.rs .`
+   lists every mention; each that is not `thread_local!`,
+   `std::thread_local!`, `::std::thread_local!` or
+   `use std::thread_local;` is a candidate. Each such invocation now
+   adds rows, and a share that falls below FLOOR needs a `lowered` line
+   naming them.
 
 ## 0.4.4
 

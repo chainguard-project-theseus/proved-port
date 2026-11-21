@@ -667,7 +667,16 @@ to rewrite the macro so it expands as rustc's would within the bounds
 (split a long invocation, keep one definition with the `cfg` inside its
 body). A zlib port, the PCRE2 port and the Expat port come nowhere near the bounds (at most
 41 iterations of one repetition, and an expansion two deep).
-`thread_local!` writes statics, and counts nothing.
+std's `thread_local!` writes statics, and counts nothing. One shown to
+be another macro is read as any macro of its name: the bare name where
+the crate defines a `macro_rules! thread_local` (expanded, and its
+functions counted) or where a `use` imports the name from a path that
+does not start at `std` or `core`, and a path whose first segment is
+neither (`elsewhere::thread_local!`); another crate's counts as one
+function outside `verus!`, `thread_local!`. A bare one that only a `*`
+or a `#[macro_use]` may bind to another macro counts nothing, since
+nearly every such one is std's beside `vstd::prelude::*`, but its
+module's globs place no `impl`'s type, as before.
 
 `compile_error!`, which writes nothing that ships, counts nothing
 either, but only by a rule true by rustc's own semantics. The counter

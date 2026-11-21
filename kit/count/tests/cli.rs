@@ -1467,6 +1467,95 @@ fn a_reach_section_needs_its_file() {
 /// fallback and its function counts; in 2024 it takes the first rule. The
 /// edition is the library's (`[lib]`'s own, else the package's), never a
 /// test's, bench's or example's.
+/// A `thread_local!` not shown to be std's is read as any other macro of
+/// its name (#68): the crate's own `macro_rules! thread_local` is
+/// expanded, so the function it writes is counted, and another crate's,
+/// by its path or by a `use`, counts as one Outside `thread_local!`
+/// function. std's, by `::std::` or by the bare name where nothing else
+/// may bind it, writes statics alone and adds no row.
+#[test]
+fn a_thread_local_not_std_s_is_counted() {
+    for (i, (lib, want)) in [
+        (
+            "macro_rules! thread_local { () => { pub fn made() {} }; }\nthread_local!();\n",
+            vec![("Outside", "crates/a/src/lib.rs:2", "made")],
+        ),
+        (
+            "elsewhere::thread_local! {}\n",
+            vec![("Outside", "crates/a/src/lib.rs:1", "thread_local!")],
+        ),
+        (
+            "use elsewhere::thread_local;\nthread_local! { static A: u8 = 1; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:2", "thread_local!")],
+        ),
+        (
+            "::std::thread_local! { static A: u8 = 1; }\nthread_local! { static B: u8 = 2; }\n",
+            vec![],
+        ),
+        // A bare one only a `*` may bind to another macro is std's in
+        // nearly every port (beside `vstd::prelude::*`): it counts
+        // nothing, as before, though its module's globs place no type.
+        (
+            "use vstd::prelude::*;\nthread_local! { static C: u8 = 3; }\n",
+            vec![],
+        ),
+        ("std::thread_local! { static D: u8 = 4; }\n", vec![]),
+        // std's imported by name: the `use` binds the bare name, so it is
+        // not shown to be std's, but its path is std's, so it counts
+        // nothing.
+        (
+            "use std::thread_local;\nthread_local! { static E: u8 = 5; }\n",
+            vec![],
+        ),
+        // A module of the crate named `core` shadows the extern prelude's:
+        // `core::thread_local!` is the crate's own macro, expanded.
+        (
+            "mod core {\n    macro_rules! thread_local { () => { pub fn made() {} }; }\n    pub(crate) use thread_local;\n}\ncore::thread_local!();\n",
+            vec![("Outside", "crates/a/src/lib.rs:5", "made")],
+        ),
+        // With a Cargo dependency renamed to `std`, `std::` and a `use
+        // std::thread_local;` may name another crate's macro: each counts.
+        (
+            "RENAMED\nstd::thread_local! { static F: u8 = 6; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:1", "thread_local!")],
+        ),
+        (
+            "RENAMED\nuse std::thread_local;\nthread_local! { static G: u8 = 7; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:2", "thread_local!")],
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        // A `RENAMED` first line stands for a Cargo.toml that renames a
+        // dependency to `std`.
+        let renamed = lib.starts_with("RENAMED\n");
+        let lib = lib.trim_start_matches("RENAMED\n");
+        let dir = crate_of(&format!("thread-local-{i}"), &[("lib.rs", lib)]);
+        if renamed {
+            fs::write(
+                dir.join("crates/a/Cargo.toml"),
+                "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[package.metadata.verus]\nverify = true\n[dependencies]\nstd = { package = \"other\", path = \"x\" }\n",
+            )
+            .expect("write");
+        }
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<(String, String, String)> = list_rows(&out)
+            .into_iter()
+            .map(|r| (r.0, r.1, r.2))
+            .collect();
+        let want: Vec<(String, String, String)> = want
+            .iter()
+            .map(|(c, at, n)| ((*c).to_owned(), (*at).to_owned(), (*n).to_owned()))
+            .collect();
+        assert!(
+            got == 0 && rows == want,
+            "{lib:?}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 #[test]
 fn the_edition_sets_what_an_expr_matches() {
     let lib = "macro_rules! m { ($e:expr) => {}; ($t:tt) => { pub fn unproved() {} }; }\nm!(_);\n";
