@@ -722,7 +722,11 @@ crate elsewhere as core;` gives another crate that name
 import, in 2015, a `use` at the crate root or a root glob but std's,
 core's or Verus's rebinds it too (a 2015 `use` path is read from the
 root), while the path is read in its own module in every edition, so
-a root `use` rebinds it only at the root. Another crate's counts as one
+a root `use` rebinds it only at the root. Nor is an import's `std` or
+`core` that crate where it names a module of the crate as rustc reads
+a `use` path (in 2015 one at the root, from 2018 on one in the
+module): the import is read as any other macro's, and a re-export the
+counter does not follow fails the run. Another crate's counts as one
 function outside `verus!`, `thread_local!`. A bare one beside a `*` or
 a `#[macro_use]` is read the same way when one of them may bring
 another crate's `thread_local`: a `#[macro_use]` of a crate other than

@@ -80,7 +80,10 @@
 //! nothing may rebind the name. A `thread_local!` imported by name or
 //! invoked by a path from `std` or `core` is std's only where no `use`
 //! in the module (for the import in 2015, at the root too) or `extern
-//! crate .. as` gives another crate that name ([`Counter::use_rebinds`]).
+//! crate .. as` gives another crate that name ([`Counter::use_rebinds`]),
+//! and, for the import, where no module of the crate has that name as
+//! rustc reads a `use` path (in 2015 one at the root, from 2018 on one
+//! in the module: [`Counter::use_module`]).
 //! A bare `thread_local!` that a `*` or a
 //! `#[macro_use]` may rebind is std's only where each such source is
 //! shown not to bring another ([`Counter::other_thread_local`]): a glob
@@ -4894,7 +4897,9 @@ impl Counter {
     /// `std` or `core`; or a path whose first segment is neither
     /// (`elsewhere::thread_local!`, `crate::thread_local!`). A `std` or
     /// `core` first segment that a `use` or an `extern crate .. as` gives
-    /// another crate is neither (#137; [`Counter::use_rebinds`]). A bare one
+    /// another crate is neither (#137; [`Counter::use_rebinds`]), nor, in
+    /// an import, one that names a module of the crate as rustc reads a
+    /// `use` path (#140; [`Counter::use_module`]). A bare one
     /// only a `*` or a `#[macro_use]` may bind to another counts too
     /// (#122), unless each such source is shown not to bring one
     /// ([`Counter::foreign_glob`]): a `#[macro_use]` of a crate other than
@@ -4907,7 +4912,9 @@ impl Counter {
             self.macros.contains_key("thread_local")
                 || self.imported("thread_local", false).iter().any(|p| {
                     !self.std_crate(p.first())
-                        || p.first().is_some_and(|f| self.use_rebinds(&self.module, f))
+                        || p.first().is_some_and(|f| {
+                            self.use_rebinds(&self.module, f) || self.use_module(&self.module, f)
+                        })
                 })
                 || self
                     .macro_use
@@ -4982,6 +4989,20 @@ impl Counter {
         self.binds(m, f)
             || (self.edition < 2018 && (self.binds(&m[..1], f) || self.glob_may_bring_any(&m[..1])))
             || self.extern_alias(f)
+    }
+
+    /// Whether a `use` path's plain first segment `f`, in module `m`, may
+    /// name a module of the crate, as rustc reads a `use` path: in 2015 one
+    /// at the crate root, from 2018 on one in `m` (#140). A module some
+    /// build may leave out still may. A leading `::` is not read (the
+    /// module's `use` paths are kept without it), so from 2018 on `use
+    /// ::core::thread_local;` beside a `mod core` in `m` may too, though
+    /// rustc reads it as core's: that fails the run (closed), and writing
+    /// `::std::thread_local!` at the invocation, or no `mod core` beside
+    /// the import, passes.
+    fn use_module(&self, m: &[String], f: &str) -> bool {
+        let base = if self.edition < 2018 { &m[..1] } else { m };
+        self.modules.contains(&[base, &[f.to_owned()]].concat())
     }
 
     /// Whether an `extern crate path as name;` a shipped build or Verus's

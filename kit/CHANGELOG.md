@@ -137,6 +137,12 @@ where it reports drift.
   The kit's tests hold it to cargo's own answer on every case. No
   port's run changes (each port's counter output, `--list` included,
   is identical before and after).
+- A bare `thread_local!` imported by name through a `std` or `core`
+  that names a module of the crate, as rustc reads a `use` path (in
+  2015 a root `mod core`), is read as any other imported macro (#140):
+  a re-export the counter does not follow fails the run. It counted
+  nothing. No port's run changes (each port's counter output, `--list`
+  included, is identical before and after).
 
 ## 0.4.5
 

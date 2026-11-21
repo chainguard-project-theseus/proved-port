@@ -1706,6 +1706,12 @@ fn a_thread_local_not_std_s_is_counted() {
             "mod n {\n    use elsewhere as core;\n    use core::thread_local;\n    thread_local! { static AW: u8 = 49; }\n}\n",
             vec![("Outside", "crates/a/src/lib.rs:4", "thread_local!")],
         ),
+        // From 2018 on a `use` path's `core` in `n` is the crate, not the
+        // root's module of that name (#140).
+        (
+            "mod core {\n    pub(crate) use elsewhere::thread_local;\n}\nmod n {\n    use core::thread_local;\n    thread_local! { static BC: u8 = 55; }\n}\n",
+            vec![],
+        ),
         // A root `use` does not rebind a path in another module from 2018
         // on: `core` in `n` is core.
         (
@@ -1762,6 +1768,50 @@ fn a_thread_local_not_std_s_is_counted() {
     assert!(
         got == 1 && err.contains("thread_local! may come through `m::*`"),
         "binds: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // In 2015 a `use` path starts at the crate root, so `core` in `n` is
+    // the root's module, not core (#140): its re-export may be another
+    // crate's macro, and one the counter does not follow fails the run.
+    let dir = crate_of(
+        "thread-local-2015-module",
+        &[(
+            "lib.rs",
+            "extern crate elsewhere;\nmod core {\n    pub(crate) use elsewhere::thread_local;\n}\nmod n {\n    use core::thread_local;\n    thread_local! { static BB: u8 = 54; }\n}\n",
+        )],
+    );
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2015\"\n[package.metadata.verus]\nverify = true\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains(
+                "thread_local! is imported from this crate by a path the counter does not follow"
+            ),
+        "2015 module: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // From 2018 on (the edition boundary of the rule) `core` in `n` is the
+    // crate, not the root's module: the bare one is std's.
+    let dir = crate_of(
+        "thread-local-2018-module",
+        &[(
+            "lib.rs",
+            "mod core {\n    pub(crate) use elsewhere::thread_local;\n}\nmod n {\n    use core::thread_local;\n    thread_local! { static BE: u8 = 57; }\n}\n",
+        )],
+    );
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2018\"\n[package.metadata.verus]\nverify = true\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &["--list"]);
+    assert!(
+        got == 0 && list_rows(&out).is_empty(),
+        "2018 module: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, no rows"
     );
     let _ = fs::remove_dir_all(&dir);
     // In 2015 a `use` path starts at the crate root: `elsewhere` in `n` is
