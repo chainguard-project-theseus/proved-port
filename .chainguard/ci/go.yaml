@@ -62,11 +62,12 @@ checks:
   stats-test:
     description: >-
       kit/perf/stats, the bench stats tool (PLAN step 6, the Go
-      replacement for a port's awk medians, comparison and tallies):
-      gofmt lists no file, go vet passes, and go test passes (its
-      medians, comparisons and tallies against goldens the reference awk
-      in testdata/ref wrote, hand-worked bands and comparison lines, and
-      the input and usage it refuses).
+      replacement for a port's awk medians, comparison and tallies, and
+      its pull's relabel, output, counter and md5 checks): gofmt lists
+      no file, go vet passes, and go test passes (its medians,
+      comparisons, tallies, relabelling and findings against goldens the
+      reference awk in testdata/ref wrote, hand-worked bands, comparison
+      lines and findings, and the input and usage it refuses).
     trigger: [presubmit, postsubmit]
     timeout: 10m
     cmd:
