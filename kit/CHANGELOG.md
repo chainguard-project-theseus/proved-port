@@ -54,6 +54,36 @@ where it reports drift.
   changes. The no-kit guard in `kit/count/README.md` lists it; a port
   that copied the guard adds `noalias` to its `PROVED_PORT_TARGETS`
   when it starts to use the target.
+- The counter's version is 0.4.9, ready for the v0.4.9 tag. The counter
+  is otherwise unchanged from 0.4.8.
+
+### Porting notes
+
+1. Move the pin together, to 0.4.9, as 0.3.1's note 1 lists, then run
+   `make verus-headers`. A port moving from 0.4.7 or earlier applies the
+   notes of each release in between first. Nothing else changes for a
+   port that does not use `make noalias`: no counter output, header or
+   existing target changes.
+2. Nothing is required for `make noalias`. A port with a check like
+   challoc's `heap-noalias` may replace its script with the target: set
+   `NOALIAS_CRATE`, `NOALIAS_TYPE`, and `NOALIAS_BUILDS` with a
+   `NOALIAS_FLAGS_<name>` for each build that needs its own flags, before
+   the include. Have the check run `make noalias`, with the kit pinned in
+   its environment and `make` in its packages, and add `noalias` to the
+   no-kit guard's `PROVED_PORT_TARGETS` if the Makefile has one. The
+   kit's target fails some runs the port's script passed, each a
+   difference the Changes entry above describes:
+   - a method in an impl in a module that is not below the type's is
+     now read, so its `noalias` `&mut self` fails the run;
+   - a type of the same name in another module no longer counts, so it
+     no longer supplies the `&mut self` witness;
+   - a build whose rustflags set opt-level 0 fails as unoptimized, and
+     one whose profile sets it is checked at opt-level 3 all the same,
+     where the script saw no `noalias` at all;
+   - with several targets, each must pass on its own.
+
+   A port that adopts it compares the two verdicts on its main in that
+   pull request.
 
 ## 0.4.8
 
