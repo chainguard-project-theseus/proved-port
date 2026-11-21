@@ -2244,6 +2244,56 @@ fn every_shipped_file_is_scanned_for_exports() {
     }
 }
 
+/// An export a `cfg_attr` applies roots the walk where a shipped build
+/// can meet the predicate (#153): with an empty
+/// REACH, an unverified `cfg_attr(feature = "export-symbols",
+/// unsafe(export_name = prefix!(..)))` function and the helper it calls
+/// fail as reached, with the feature in `verus_sets` or not. Negative:
+/// under `cfg_attr(test, ..)` neither is an entry point, so the run
+/// passes.
+#[test]
+fn an_export_under_cfg_attr_roots_the_walk() {
+    let sets = "verus_sets = ['feature = \"export-symbols\"']\n";
+    let reach = "[reach]\npath = \"verus/REACH\"\n";
+    let lib = |p: &str| {
+        format!(
+            "fn helper() {{}}\n#[cfg_attr({p}, unsafe(export_name = prefix!(BZ2_x)))]\npub extern \"C\" fn api() {{ helper() }}\n"
+        )
+    };
+    for (config, src, reached) in [
+        (
+            format!("{PLAIN}{sets}{reach}"),
+            lib("feature = \"export-symbols\""),
+            true,
+        ),
+        (
+            format!("{PLAIN}{reach}"),
+            lib("feature = \"export-symbols\""),
+            true,
+        ),
+        (format!("{PLAIN}{sets}{reach}"), lib("test"), false),
+    ] {
+        let dir = crate_of("cfg-attr-export", &[("lib.rs", &src)]);
+        fs::write(dir.join("verus/count.toml"), &config).expect("write");
+        fs::write(dir.join("verus/REACH"), "").expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        if reached {
+            assert!(
+                got == 1
+                    && err.contains("`api` is reachable from a C entry point")
+                    && err.contains("`helper` is reachable from a C entry point"),
+                "{config}{src}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, api and helper reached"
+            );
+        } else {
+            assert!(
+                got == 0,
+                "{config}{src}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 /// A `macro_rules!` under a `cfg` that `verus_sets` names is sure in
 /// Verus's build but not in a shipped one, which may compile the earlier
 /// definition of its name instead: both are candidates (#26), so a pair
