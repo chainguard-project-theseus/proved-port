@@ -35,6 +35,46 @@ where it reports drift.
   16 warnings. The function still counts unchecked, whatever the
   status: nothing outside Verus checks that it ends. The figures do not
   change; only the warnings go.
+- `make codegen`, `make codegen-capture` and `make codegen-compare`
+  (#168, `codegen.sh`, installed beside noalias.sh): challoc's codegen
+  checks (`scripts/codegen-diff.sh`, `ci/codegen.sh` and
+  `ci/codegen-notices.sh`) as kit targets, comparing with the kit's
+  fncmp (`kit/perf/codegen/fncmp`, #164) in place of challoc's
+  `scripts/codegen-fncmp.py`. For each build `CODEGEN_BUILDS` names (by
+  default one, `default`, each with its own cargo flags in
+  `CODEGEN_FLAGS_<name>`, and `CODEGEN_CARGO_FLAGS` for all), it builds
+  the release library `CODEGEN_LIB` in its own target directory and
+  compares its machine code with the base's: the `.text` hash, the
+  section sizes and, when the hash differs, fncmp's per-function report.
+  It exits 2 when a function changed. `make codegen` captures the base
+  revision (`CHAINGUARD_BASE_REVISION`, else `CODEGEN_BASE`) in a git
+  worktree, compares the tree with it, and prints each build's verdicts
+  as `::notice` lines; `codegen-capture` and `codegen-compare` do the
+  same in two steps, around a local change, keeping the capture in
+  `CODEGEN_DIR`. Unlike challoc's scripts:
+  - the builds and the library are settings, not challoc's two quanta;
+  - the base's capture builds in a target directory of its own, so an
+    absolute `CARGO_TARGET_DIR` cannot leave the tree's build fresh
+    from the base's and compare the base with itself;
+  - a failed build fails the run (exit 1) with cargo's output, where
+    challoc's piped it through `tail` and went on;
+  - its report says `fncmp failed (exit N)` where challoc's names the
+    Python script, and the uncommitted-changes note covers the whole
+    tree, not only `src`, `Cargo.toml` and `build.rs`;
+  - it fails closed (exit 1, no verdict): the `.text` hash fails when
+    objcopy or sha256sum does, rather than compare two empty hashes as
+    identical; each build removes the library an earlier run left
+    (in `release/` or under a target triple) and takes the one it
+    wrote; compare checks every build's capture, and compare and base
+    look up the comparer, before any build; base checks that its
+    revision resolves before the capture.
+
+  The package does not install fncmp: a port builds it from the kit's
+  `kit/perf/codegen/fncmp` with go at the tag it pins and names it in
+  `CODEGEN_FNCMP` (by default `fncmp`, from PATH). It is a new target:
+  no existing target or check changes. The no-kit guard in
+  `kit/count/README.md` lists the three; a port that copied the guard
+  adds them to its `PROVED_PORT_TARGETS` when it starts to use them.
 
 ### Porting notes
 
@@ -46,6 +86,13 @@ where it reports drift.
    exec_allows_no_decreases_clause --include=*.rs .` finds the
    candidates to check; make them agree, or give the function the same
    attributes in each.
+2. Nothing is required for `make codegen`. A port with codegen checks
+   like challoc's may replace its scripts with it: set `CODEGEN_LIB`,
+   and `CODEGEN_BUILDS` with a `CODEGEN_FLAGS_<name>` for each build
+   that needs its own flags, before the include; give the checks the kit
+   pinned, `make`, `go` (to build fncmp) and `binutils`; and add the
+   three targets to the no-kit guard's `PROVED_PORT_TARGETS` if the
+   Makefile has one.
 
 ## 0.4.9
 

@@ -1,6 +1,6 @@
 # proved-port.mk: the proof targets every proved port shares. The
 # theseus-proved-port package installs it, with kani.sh, headers.sh,
-# lint-unsafe.sh, noalias.sh and VERUS-FILES, in
+# lint-unsafe.sh, noalias.sh, codegen.sh and VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
@@ -67,7 +67,17 @@
 #                     takes a noalias &mut self in the release
 #                     library's LLVM IR, for each build NOALIAS_BUILDS
 #                     names (challoc's heap-noalias).
-#   verify            every target VERIFY_TARGETS lists (by default verus
+#   codegen           codegen.sh base: capture the base revision's
+#                     release library (CHAINGUARD_BASE_REVISION, else
+#                     CODEGEN_BASE) for each build CODEGEN_BUILDS names,
+#                     compare this tree's with it function by function
+#                     (fncmp), and print the verdicts as ::notice lines;
+#                     exit 2 when a function changed (challoc's codegen
+#                     checks).
+#   codegen-capture   codegen.sh capture CODEGEN_DIR, and
+#   codegen-compare   codegen.sh compare CODEGEN_DIR: the same in two
+#                     steps, around a local change.
+#   verify           every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
 
@@ -282,7 +292,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -377,6 +387,50 @@ noalias: ## no method of NOALIAS_TYPE takes a noalias &mut self in the release l
 	$(if $(strip $(NOALIAS_BUILDS)),,$(error $(noalias_builds_empty)))
 	NOALIAS_CRATE='$(strip $(NOALIAS_CRATE))' NOALIAS_TYPE='$(strip $(NOALIAS_TYPE))' NOALIAS_BUILDS='$(strip $(NOALIAS_BUILDS))' $(foreach b,$(NOALIAS_BUILDS),NOALIAS_FLAGS_$(b)='$(strip $(NOALIAS_FLAGS_$(b)))' )NOALIAS_CARGO_FLAGS='$(strip $(NOALIAS_CARGO_FLAGS))' NOALIAS_TARGET_DIR='$(or $(CARGO_TARGET_DIR),target)' sh $(PROVED_PORT_MAKE)noalias.sh .
 
+# --- codegen ---------------------------------------------------------------
+# codegen.sh reads these from its environment; its header says what
+# each does. CODEGEN_LIB is the release library's file name
+# (libchalloc.so); every codegen target fails while it is empty.
+# CODEGEN_BUILDS names the builds (by default one, default), and
+# CODEGEN_FLAGS_<name> holds a build's own cargo flags, so challoc's two
+# quanta are
+#   CODEGEN_BUILDS = q16 q8
+#   CODEGEN_FLAGS_q8 = --no-default-features --features quantum8
+# CODEGEN_CARGO_FLAGS go to every build. CODEGEN_FNCMP is the comparer,
+# the kit's kit/perf/codegen/fncmp built with go (by default fncmp, from
+# PATH): the package does not install it. codegen compares with
+# CHAINGUARD_BASE_REVISION (a check's base), else CODEGEN_BASE;
+# codegen-capture and codegen-compare keep their capture in CODEGEN_DIR.
+CODEGEN_LIB ?=
+CODEGEN_BUILDS ?= default
+CODEGEN_CARGO_FLAGS ?=
+CODEGEN_FNCMP ?= fncmp
+CODEGEN_BASE ?=
+CODEGEN_DIR ?= target/codegen-baseline
+codegen_lib_empty = CODEGEN_LIB is empty: the port's Makefile names its release library's file (libchalloc.so)
+codegen_builds_empty = CODEGEN_BUILDS is empty: the port's Makefile names its builds (by default default)
+codegen_dir_empty = CODEGEN_DIR is empty: name the directory of the capture (by default target/codegen-baseline)
+codegen_env = CODEGEN_LIB='$(strip $(CODEGEN_LIB))' CODEGEN_BUILDS='$(strip $(CODEGEN_BUILDS))' $(foreach b,$(CODEGEN_BUILDS),CODEGEN_FLAGS_$(b)='$(strip $(CODEGEN_FLAGS_$(b)))' )CODEGEN_CARGO_FLAGS='$(strip $(CODEGEN_CARGO_FLAGS))' CODEGEN_TARGET_DIR='$(or $(CARGO_TARGET_DIR),target)' CODEGEN_FNCMP='$(strip $(CODEGEN_FNCMP))'
+define codegen_check
+$(proved_port_version_check)
+$(if $(strip $(CODEGEN_LIB)),,$(error $(codegen_lib_empty)))
+$(if $(strip $(CODEGEN_BUILDS)),,$(error $(codegen_builds_empty)))
+endef
+
+codegen: ## the release library's machine code from the base revision to this tree, function by function, per build in CODEGEN_BUILDS (codegen.sh base)
+	$(codegen_check)
+	$(codegen_env) CODEGEN_BASE='$(strip $(CODEGEN_BASE))' sh $(PROVED_PORT_MAKE)codegen.sh base
+
+codegen-capture: ## save the release library's machine code in CODEGEN_DIR for codegen-compare (codegen.sh capture)
+	$(codegen_check)
+	$(if $(strip $(CODEGEN_DIR)),,$(error $(codegen_dir_empty)))
+	$(codegen_env) sh $(PROVED_PORT_MAKE)codegen.sh capture '$(strip $(CODEGEN_DIR))'
+
+codegen-compare: ## compare the release library's machine code with CODEGEN_DIR's capture, function by function (codegen.sh compare)
+	$(codegen_check)
+	$(if $(strip $(CODEGEN_DIR)),,$(error $(codegen_dir_empty)))
+	$(codegen_env) sh $(PROVED_PORT_MAKE)codegen.sh compare '$(strip $(CODEGEN_DIR))'
+
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
 # order `make verify` runs them, each in its own make. A package build
@@ -400,7 +454,7 @@ noalias: ## no method of NOALIAS_TYPE takes a noalias &mut self in the release l
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

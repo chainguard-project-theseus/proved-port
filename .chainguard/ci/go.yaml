@@ -9,6 +9,10 @@
 # path a port's codegen checks take. apk-tools and
 # wolfi-keys let the deps agent's guest, which runs in this
 # environment, install a new stream and read Wolfi's index.
+# codegen-test also builds a fixture library, so its own environment
+# adds count.yaml's rust-1.NN stream and build-base: the go-toolchain
+# entry moves its go stream with this file's, and the toolchain entry
+# its rust stream with count.yaml's.
 version: 1
 
 environment:
@@ -54,3 +58,25 @@ checks:
         cd kit/perf/codegen/fncmp;
         f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
         go vet ./... && go test -count=1 ./...
+
+  codegen-test:
+    description: >-
+      kit/codegen-test.sh: kit/make/codegen.sh (make codegen,
+      codegen-capture and codegen-compare). Its notices on challoc's
+      saved reports, base with a stand-in compare, the settings it
+      refuses, and a fixture library built twice through base with fncmp
+      built here: no change is .text identical, a moved table is
+      reloc-only with changed 0, a changed function is changed 1 and
+      exits 2, a feature's function changes one build only, and a
+      missing comparer fails; a failing objcopy or sha256sum, a missing
+      capture or build, an unwritten library and a failed build each
+      fail with no verdict, and a --target build compares its own
+      library. The fixture has no dependencies, so it
+      needs no network.
+    trigger: [presubmit, postsubmit]
+    timeout: 15m
+    environment:
+      # The file's go stream, and count.yaml's rust stream with
+      # build-base for the fixture's build.
+      packages: [go-1.27, rust-1.99, build-base, busybox, git, binutils]
+    cmd: [sh, kit/codegen-test.sh]

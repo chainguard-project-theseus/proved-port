@@ -440,6 +440,22 @@ expect "make -n noalias, challoc's two quanta" \
   "$(shows noalias NOALIAS_CRATE=challoc NOALIAS_TYPE=heap::Heap NOALIAS_BUILDS='q16  q8' NOALIAS_FLAGS_q8='--no-default-features --features quantum8' CARGO_TARGET_DIR=/t)" \
   "NOALIAS_CRATE='challoc' NOALIAS_TYPE='heap::Heap' NOALIAS_BUILDS='q16 q8' NOALIAS_FLAGS_q16='' NOALIAS_FLAGS_q8='--no-default-features --features quantum8' NOALIAS_CARGO_FLAGS='' NOALIAS_TARGET_DIR='/t' sh $home/make/noalias.sh ."
 
+# codegen, codegen-capture and codegen-compare pass the port's settings
+# to codegen.sh: one build by default, each build's own flags, the
+# comparer, and CARGO_TARGET_DIR's target directory.
+expect "make -n codegen, one build" \
+  "$(shows codegen CODEGEN_LIB=libalpha.so)" \
+  "CODEGEN_LIB='libalpha.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='fncmp' CODEGEN_BASE='' sh $home/make/codegen.sh base"
+expect "make -n codegen, challoc's two quanta" \
+  "$(shows codegen CODEGEN_LIB=libchalloc.so CODEGEN_BUILDS='q16  q8' CODEGEN_FLAGS_q8='--no-default-features --features quantum8' CARGO_TARGET_DIR=/t CODEGEN_FNCMP=/bin/fncmp CODEGEN_BASE=main)" \
+  "CODEGEN_LIB='libchalloc.so' CODEGEN_BUILDS='q16 q8' CODEGEN_FLAGS_q16='' CODEGEN_FLAGS_q8='--no-default-features --features quantum8' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='/t' CODEGEN_FNCMP='/bin/fncmp' CODEGEN_BASE='main' sh $home/make/codegen.sh base"
+expect "make -n codegen-capture" \
+  "$(shows codegen-capture CODEGEN_LIB=libalpha.so)" \
+  "CODEGEN_LIB='libalpha.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='fncmp' sh $home/make/codegen.sh capture 'target/codegen-baseline'"
+expect "make -n codegen-compare, another directory" \
+  "$(shows codegen-compare CODEGEN_LIB=libalpha.so CODEGEN_DIR=/tmp/base)" \
+  "CODEGEN_LIB='libalpha.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='fncmp' sh $home/make/codegen.sh compare '/tmp/base'"
+
 # verify runs every target VERIFY_TARGETS lists, in order, each with the
 # command line's variables. Under -n make prints its loop (a line naming
 # $(MAKE), which -n runs) before the targets' commands; its $t is text.
@@ -508,6 +524,14 @@ refuses_make "make -n noalias with no NOALIAS_CRATE" "NOALIAS_CRATE is empty" no
 refuses_make "make -n noalias with no NOALIAS_TYPE" "NOALIAS_TYPE is empty" noalias NOALIAS_CRATE=alpha
 refuses_make "make -n noalias with a blank NOALIAS_BUILDS" "NOALIAS_BUILDS is empty" \
   noalias NOALIAS_CRATE=alpha NOALIAS_TYPE=Heap NOALIAS_BUILDS=' '
+for t in codegen codegen-capture codegen-compare; do
+  refuses_make "make -n $t with no CODEGEN_LIB" "CODEGEN_LIB is empty" $t
+  refuses_make "make -n $t with a blank CODEGEN_BUILDS" "CODEGEN_BUILDS is empty" \
+    $t CODEGEN_LIB=libalpha.so CODEGEN_BUILDS=' '
+done
+for t in codegen-capture codegen-compare; do
+  refuses_make "make -n $t with a blank CODEGEN_DIR" "CODEGEN_DIR is empty" $t CODEGEN_LIB=libalpha.so CODEGEN_DIR=' '
+done
 # The no-kit guard kit/count/README.md gives ports lists every kit
 # target, so each fails with the kit's message where the package is
 # missing: proved_port_phony and verify, in that order.
@@ -638,13 +662,13 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;
       *) msg="PROVED_PORT_VERSION is 0.0.0-other, but $home/KIT records tag v$version" ;;
     esac
-    if make -s -n -C "$port" "$t" VERUS_BASE=none UNSAFE_CRATES=alpha-capi NOALIAS_CRATE=alpha NOALIAS_TYPE=Heap "$p" > "$tmp/out" 2> "$tmp/err"; then
+    if make -s -n -C "$port" "$t" VERUS_BASE=none UNSAFE_CRATES=alpha-capi NOALIAS_CRATE=alpha NOALIAS_TYPE=Heap CODEGEN_LIB=libalpha.so "$p" > "$tmp/out" 2> "$tmp/err"; then
       fail "make -n $t $p: got = success, want = failure"
     fi
     grep -qF "$msg" "$tmp/err" \

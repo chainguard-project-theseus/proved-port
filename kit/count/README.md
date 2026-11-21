@@ -1128,8 +1128,8 @@ takes the kit. It installs:
 - `/usr/bin/verus-count`, this crate, whose `--version` prints
   `verus-count X.Y.Z` for release vX.Y.Z;
 - `/usr/share/proved-port/make/`: `proved-port.mk`, `kani.sh`,
-  `headers.sh`, `lint-unsafe.sh`, `noalias.sh` and `VERUS-FILES`
-  (`kit/make`);
+  `headers.sh`, `lint-unsafe.sh`, `noalias.sh`, `codegen.sh` and
+  `VERUS-FILES` (`kit/make`);
 - `/usr/share/proved-port/templates/`: all of `kit/templates`, under
   their own names;
 - `/usr/share/proved-port/CHANGELOG.md`: `kit/CHANGELOG.md`, each
@@ -1166,7 +1166,7 @@ A port takes it this way:
   ifneq ($(wildcard $(PROVED_PORT_HOME)/make/proved-port.mk),)
   include $(PROVED_PORT_HOME)/make/proved-port.mk
   else
-  PROVED_PORT_TARGETS = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias verify
+  PROVED_PORT_TARGETS = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare verify
   .PHONY: $(PROVED_PORT_TARGETS)
   $(PROVED_PORT_TARGETS):
   	@echo "$@: no proved-port kit at $(PROVED_PORT_HOME): install theseus-proved-port~$(PROVED_PORT_VERSION), or set PROVED_PORT_HOME to a kit install root (make/, templates/ and KIT, as the package lays out /usr/share/proved-port)" >&2; exit 1
