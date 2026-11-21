@@ -373,13 +373,31 @@ a run with `--floor FILE` also fails (exit 1) unless the file holds
 exactly one Verus badge, and that line is exactly the one FILE's
 `functions` and `lines` figures give, each with one decimal. A Verus
 badge is any rendered line holding `verus` in any case together with
-`shields.io` or a Markdown image (`![`), so a second badge with a
-lowercase label, another shields.io endpoint or an `<img>` tag counts.
-Lines inside fenced code blocks (```` ``` ```` or `~~~`) and the text
-inside HTML comments (`<!--` to `-->`, across lines) do not render, so
-they are neither the badge nor a second one: an example badge in a
-fence is not counted, and the canonical line only inside a comment or
-a fence fails as no badge. The line FILE's figures give is:
+`shields.io`, a Markdown image (`![`) or an HTML `<img`, so a second
+badge with a lowercase label, another shields.io endpoint, or an
+`<img>` tag from any host counts. Lines inside fenced code blocks
+(```` ``` ```` or `~~~`) and the text inside HTML comments (`<!--` to
+`-->`, across lines; `<!-->` and `<!--->` are whole comments) do not
+render, so they are neither the badge nor a second one: an example
+badge in a fence is not counted, and the canonical line only inside a
+comment or a fence fails as no badge. Since a renderer may end a fence
+or a comment sooner than the scan does, the gate reads the file twice.
+The strict reading hides a fence or a comment the file never closes to
+the end of the file. The lenient reading takes that opener as text,
+takes as text a `<!--` that renders as text (inside a backtick code
+span, escaped as `\<!--`, on a line indented 4 or more spaces, or one
+whose container ends before its `-->`: an inline comment's paragraph
+at a blank line or a line that starts a block, a list item at a line
+indented less, a block quote at a line without `>`; a `<!--` at the
+start of a line opens an HTML block, which crosses blank lines), and
+ends a fence
+indented by some spaces at the first non-blank line indented less (a
+list item's fence ends with the item). A line that holds a badge in
+either reading counts, so a stale badge after one of these openers is a
+second badge even when a closer comes later in the file. The canonical
+line passes only when it renders in both readings: after an opener the
+file never closes, it fails (exit 1) as a badge that may not render.
+The line FILE's figures give is:
 
 ```markdown
 [![Verus: 86.3% of functions, 94.4% of lines](https://img.shields.io/badge/Verus-86.3%25%20of%20functions%2C%2094.4%25%20of%20lines-blue)](verus/README.md#coverage)

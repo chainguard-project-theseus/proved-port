@@ -79,6 +79,20 @@ where it reports drift.
   crates of a base `[crates] dir` are listed from the whole tree
   (`ls-tree --full-tree`), so a crate the head deletes there is a
   narrowing below the top level too.
+- The badge gate counts more second badges (#22): an HTML `<img`
+  badge from any host (not only shields.io), and a badge that renders
+  in either of two readings of the file. The strict reading hides a
+  fence or an HTML comment never closed to the end of the file, as
+  before; the lenient one reads that opener as text, reads as text a
+  `<!--` in a backtick code span, escaped, on a line indented 4 or
+  more spaces, or one whose paragraph, list item or block quote ends
+  before its `-->`, and
+  ends an indented fence (a list
+  item's) at the first line indented less. `<!-->` and `<!--->` are
+  whole comments. A README with a stale second badge in one of these
+  shapes now fails (exit 1), naming its line, and so does one whose
+  canonical badge renders in only one reading (after a fence or a
+  comment the file never closes).
 - The template AGENTS.md and review prompt record two rules ports had
   each been adding by hand (#75). "Coverage first for the runtime cost
   of a proof": where no ghost or spec route avoids it, a measured cost
