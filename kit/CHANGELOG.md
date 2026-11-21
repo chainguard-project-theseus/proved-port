@@ -51,6 +51,18 @@ where it reports drift.
   more code first" stays the first step, and the proved-c-port skill
   (SKILL.md, references/proofs.md) says the same. The counter reads
   `lowered` lines as before.
+- The counter reads the base revision's files at their paths relative
+  to ROOT (`REV:./PATH`), also when ROOT is below the repository's top
+  level (#114). It read `REV:PATH`, which Git resolves from the top
+  level, so for such a ROOT every base read (the configuration, FLOOR,
+  RLIMIT, REACH, the crates' sources and manifests) found nothing and
+  each ratchet compared with nothing. A port whose ROOT is the top
+  level reads the same files as before. The base crates' file list is
+  now read verbatim (`git ls-tree -z`), so a name Git would quote is
+  read too, and one that is not UTF-8 fails the run (exit 2). The
+  crates of a base `[crates] dir` are listed from the whole tree
+  (`ls-tree --full-tree`), so a crate the head deletes there is a
+  narrowing below the top level too.
 - The template AGENTS.md and review prompt record two rules ports had
   each been adding by hand (#75). "Coverage first for the runtime cost
   of a proof": where no ghost or spec route avoids it, a measured cost
