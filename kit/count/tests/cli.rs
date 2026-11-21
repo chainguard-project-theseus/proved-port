@@ -1586,19 +1586,125 @@ fn a_thread_local_not_std_s_is_counted() {
             "RENAMED\nuse std::thread_local;\nthread_local! { static G: u8 = 7; }\n",
             vec![("Outside", "crates/a/src/lib.rs:2", "thread_local!")],
         ),
+        // A bare one beside a `*` or a `#[macro_use]` that may bring
+        // another crate's `thread_local` counts as one (#122): a glob of
+        // another crate, of a module of this crate that imports the name or
+        // globs another crate in turn, or a `#[macro_use]` of a crate other
+        // than std's or Verus's. std's, core's and Verus's globs, a glob of
+        // a module that brings nothing in, and `#[macro_use]` of std or
+        // vstd do not.
+        (
+            "use elsewhere::*;\nthread_local! { static H: u8 = 8; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:2", "thread_local!")],
+        ),
+        (
+            "mod m {\n    pub(crate) use elsewhere::*;\n}\nuse m::*;\nthread_local! { static J: u8 = 10; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:5", "thread_local!")],
+        ),
+        (
+            "#[macro_use]\nextern crate elsewhere;\nthread_local! { static K: u8 = 11; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        (
+            "use std::io::prelude::*;\nuse core::cell::*;\nuse verus_builtin_macros::*;\nthread_local! { static L: u8 = 12; }\n",
+            vec![],
+        ),
+        (
+            "mod m {\n    pub(crate) use std::cell::*;\n    pub fn f() {}\n}\nuse m::*;\nmod n {\n    use super::*;\n    thread_local! { static M: u8 = 13; }\n}\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "f")],
+        ),
+        (
+            "#[macro_use]\nextern crate std;\n#[macro_use]\nextern crate vstd;\nthread_local! { static N: u8 = 14; }\n",
+            vec![],
+        ),
+        // A glob only tests build is not in a shipped build.
+        (
+            "#[cfg(test)]\nuse elsewhere::*;\nthread_local! { static O: u8 = 15; }\n",
+            vec![],
+        ),
+        // From 2018 on, a glob's plain first segment in a module other
+        // than the root names a module in scope there or a crate, not the
+        // root's module of that name: `elsewhere` here is the crate.
+        (
+            "mod elsewhere {}\nmod n {\n    use elsewhere::*;\n    thread_local! { static P: u8 = 16; }\n}\n",
+            vec![("Outside", "crates/a/src/lib.rs:4", "thread_local!")],
+        ),
+        (
+            "mod n {\n    mod elsewhere {}\n    use elsewhere::*;\n    thread_local! { static Q: u8 = 17; }\n}\n",
+            vec![],
+        ),
+        // A name a `use` rebinds, or a Cargo dependency renamed to Verus's
+        // crate, is not that crate.
+        (
+            "use elsewhere as std;\nuse std::*;\nthread_local! { static R: u8 = 18; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        (
+            "RENAMED vstd\nuse vstd::prelude::*;\nthread_local! { static S: u8 = 19; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:2", "thread_local!")],
+        ),
+        (
+            "RENAMED vstd\n#[macro_use]\nextern crate vstd;\nthread_local! { static T: u8 = 20; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        (
+            "extern crate elsewhere as core;\nuse core::*;\nthread_local! { static Y: u8 = 25; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        // A module under a `cfg` the counter cannot settle may be left
+        // out, and the glob then names the crate.
+        (
+            "#[cfg(feature = \"stub\")]\nmod elsewhere {}\nuse elsewhere::*;\nthread_local! { static AH: u8 = 34; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:4", "thread_local!")],
+        ),
+        // So may one inside it, or one a `cfg`-gated `verus!` block
+        // declares.
+        (
+            "#[cfg(feature = \"stub\")]\nmod e {\n    pub mod inner {}\n}\nuse e::inner::*;\nthread_local! { static AI: u8 = 35; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:6", "thread_local!")],
+        ),
+        (
+            "#[cfg(feature = \"stub\")]\nverus! {\n    mod elsewhere {}\n}\nuse elsewhere::*;\nthread_local! { static AJ: u8 = 36; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:6", "thread_local!")],
+        ),
+        // A `cfg` may select a module of that name or the alias: either
+        // may be what the glob names.
+        (
+            "#[cfg(feature = \"local\")]\nmod core {}\n#[cfg(not(feature = \"local\"))]\nextern crate elsewhere as core;\nuse core::*;\nthread_local! { static AB: u8 = 28; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:6", "thread_local!")],
+        ),
+        // From 2018 on a leading `::` names a crate, never a module in
+        // scope; `::std::` is still std's.
+        (
+            "mod n {\n    mod elsewhere {}\n    use ::elsewhere::*;\n    thread_local! { static X: u8 = 24; }\n}\n",
+            vec![("Outside", "crates/a/src/lib.rs:4", "thread_local!")],
+        ),
+        (
+            "use ::std::cell::*;\nthread_local! { static Z: u8 = 26; }\n",
+            vec![],
+        ),
+        (
+            "RENAMED verus_builtin\n#[macro_use]\nextern crate verus_builtin;\nthread_local! { static W: u8 = 23; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
     ]
     .into_iter()
     .enumerate()
     {
         // A `RENAMED` first line stands for a Cargo.toml that renames a
-        // dependency to `std`.
-        let renamed = lib.starts_with("RENAMED\n");
-        let lib = lib.trim_start_matches("RENAMED\n");
+        // dependency to `std`, `RENAMED vstd` to `vstd`.
+        let (renamed, lib) = match lib.split_once('\n') {
+            Some(("RENAMED", rest)) => (Some("std"), rest),
+            Some((first, rest)) if first.starts_with("RENAMED ") => {
+                (Some(&first["RENAMED ".len()..]), rest)
+            }
+            _ => (None, lib),
+        };
         let dir = crate_of(&format!("thread-local-{i}"), &[("lib.rs", lib)]);
-        if renamed {
+        if let Some(name) = renamed {
             fs::write(
                 dir.join("crates/a/Cargo.toml"),
-                "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[package.metadata.verus]\nverify = true\n[dependencies]\nstd = { package = \"other\", path = \"x\" }\n",
+                format!("[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[package.metadata.verus]\nverify = true\n[dependencies]\n{name} = {{ package = \"other\", path = \"x\" }}\n"),
             )
             .expect("write");
         }
@@ -1614,6 +1720,218 @@ fn a_thread_local_not_std_s_is_counted() {
         assert!(
             got == 0 && rows == want,
             "{lib:?}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A glob of a module of this crate that brings the name in by a `use`
+    // may bring another crate's: the invocation resolves as any other
+    // macro's, and a re-export the counter does not follow fails the run.
+    let dir = crate_of(
+        "thread-local-binds",
+        &[(
+            "lib.rs",
+            "mod m {\n    pub(crate) use elsewhere::thread_local;\n}\nuse m::*;\nthread_local! { static I: u8 = 9; }\n",
+        )],
+    );
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("thread_local! may come through `m::*`"),
+        "binds: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // In 2015 a `use` path starts at the crate root: `elsewhere` in `n` is
+    // the root's empty module, so the bare one stays std's; with no such
+    // module at the root it is the crate, though `n` has a child
+    // `elsewhere`.
+    for (case, lib, want) in [
+        (
+            "the root's module",
+            "mod elsewhere {}\nmod n {\n    use elsewhere::*;\n    thread_local! { static U: u8 = 21; }\n}\n",
+            vec![],
+        ),
+        (
+            "a `cfg`-gated module beside the crate",
+            "#[cfg(feature = \"stub\")]\nmod elsewhere {}\n#[cfg(not(feature = \"stub\"))]\nextern crate elsewhere;\nuse elsewhere::*;\nthread_local! { static AG: u8 = 33; }\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:6".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob that brings a module named core",
+            "extern crate elsewhere;\nmod outer {\n    pub mod core {\n        pub use elsewhere::*;\n    }\n}\nuse outer::*;\nmod n {\n    use core::*;\n    thread_local! { static AM: u8 = 39; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:10".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob through an alias that brings a module named core",
+            "extern crate elsewhere;\nmod outer {\n    pub mod core {\n        pub use elsewhere::*;\n    }\n}\nuse outer as alias;\nuse alias::*;\nmod n {\n    use core::*;\n    thread_local! { static AO: u8 = 41; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:11".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob through an alias that brings a module named vstd",
+            "extern crate elsewhere;\nmod outer {\n    pub mod vstd {\n        pub mod prelude {\n            pub use elsewhere::*;\n        }\n    }\n}\nuse outer as alias;\nuse alias::*;\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AP: u8 = 42; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:13".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob of an alias named core that brings vstd",
+            "extern crate elsewhere;\nmod outer {\n    pub mod vstd {\n        pub mod prelude {\n            pub use elsewhere::*;\n        }\n    }\n}\nuse outer as core;\nuse core::*;\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AQ: u8 = 43; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:13".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob of an extern crate alias named core",
+            "extern crate elsewhere as core;\nuse core::*;\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AS: u8 = 45; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob of a module named core that brings vstd",
+            "extern crate elsewhere;\nmod core {\n    pub mod vstd {\n        pub mod prelude {\n            pub use elsewhere::*;\n        }\n    }\n}\nuse core::*;\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AR: u8 = 44; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:12".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob that brings a module named vstd",
+            "extern crate elsewhere;\nmod outer {\n    pub mod vstd {\n        pub mod prelude {\n            pub use elsewhere::*;\n        }\n    }\n}\nuse outer::*;\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AN: u8 = 40; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:12".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `use` alias of vstd",
+            "extern crate elsewhere;\nuse elsewhere as vstd;\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AC: u8 = 29; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `use` alias of core",
+            "extern crate elsewhere;\nuse elsewhere as core;\nmod n {\n    use core::*;\n    thread_local! { static AD: u8 = 30; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `mod vstd` that re-exports a crate's module",
+            "mod vstd {\n    pub(crate) use elsewhere::prelude;\n}\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AE: u8 = 31; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:6".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `mod core` that re-exports a crate's module",
+            "mod core {\n    pub(crate) use elsewhere::cell;\n}\nuse core::cell::*;\nthread_local! { static AF: u8 = 32; }\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `mod core` that globs a crate",
+            "mod core {\n    pub use elsewhere::*;\n}\nuse core::*;\nthread_local! { static AA: u8 = 27; }\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "the crate, beside a child module",
+            "extern crate elsewhere;\nmod n {\n    mod elsewhere {}\n    use elsewhere::*;\n    thread_local! { static V: u8 = 22; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+    ] {
+        let dir = crate_of("thread-local-2015", &[("lib.rs", lib)]);
+        fs::write(
+            dir.join("crates/a/Cargo.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2015\"\n[package.metadata.verus]\nverify = true\n",
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<(String, String, String)> = list_rows(&out)
+            .into_iter()
+            .map(|r| (r.0, r.1, r.2))
+            .collect();
+        assert!(
+            got == 0 && rows == want,
+            "2015, {case}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A module file whose own `#![cfg]` may leave it out: the glob names
+    // the crate then, in either edition.
+    for (edition, lib, line) in [
+        (
+            "2024",
+            "mod elsewhere;\nuse elsewhere::*;\nthread_local! { static AK: u8 = 37; }\n",
+            3,
+        ),
+        (
+            "2015",
+            "mod elsewhere;\n#[cfg(not(feature = \"stub\"))]\nextern crate elsewhere;\nuse elsewhere::*;\nthread_local! { static AL: u8 = 38; }\n",
+            5,
+        ),
+    ] {
+        let dir = crate_of(
+            "thread-local-file-cfg",
+            &[
+                ("lib.rs", lib),
+                ("elsewhere.rs", "#![cfg(feature = \"stub\")]\n"),
+            ],
+        );
+        fs::write(
+            dir.join("crates/a/Cargo.toml"),
+            format!("[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"{edition}\"\n[package.metadata.verus]\nverify = true\n"),
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<(String, String, String)> = list_rows(&out)
+            .into_iter()
+            .map(|r| (r.0, r.1, r.2))
+            .collect();
+        let want = vec![(
+            "Outside".to_owned(),
+            format!("crates/a/src/lib.rs:{line}"),
+            "thread_local!".to_owned(),
+        )];
+        assert!(
+            got == 0 && rows == want,
+            "file #![cfg], {edition}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
         );
         let _ = fs::remove_dir_all(&dir);
     }

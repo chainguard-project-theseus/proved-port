@@ -715,9 +715,38 @@ the crate defines a `macro_rules! thread_local` (expanded, and its
 functions counted) or where a `use` imports the name from a path that
 does not start at `std` or `core`, and a path whose first segment is
 neither (`elsewhere::thread_local!`); another crate's counts as one
-function outside `verus!`, `thread_local!`. A bare one that only a `*`
-or a `#[macro_use]` may bind to another macro counts nothing, since
-nearly every such one is std's beside `vstd::prelude::*`, but its
+function outside `verus!`, `thread_local!`. A bare one beside a `*` or
+a `#[macro_use]` is read the same way when one of them may bring
+another crate's `thread_local`: a `#[macro_use]` of a crate other than
+std's (`std`, `core`, `alloc`) or Verus's (`vstd`, `verus_builtin`,
+`verus_builtin_macros`), or a `*` other than Verus's
+(`vstd::prelude::*`, `verus_builtin_macros::*`), std's or core's, and
+other than one of a module of the crate that imports nothing of the
+name (by a `use` of it or by such a `*` of its own, read through each
+`*` it has). A crate's name is exempt only where no Cargo dependency is
+renamed to it and neither a `use` in the module, or in 2015 at the
+crate root, where the path is read from (`use elsewhere as core;`),
+nor an `extern crate elsewhere as core;` gives another crate
+that name; in 2015 any root glob but std's, core's or Verus's (one of
+a module of the crate by any path or alias, or of another crate, or
+one whose first segment a `use`, an `extern crate .. as` or a module
+of the crate takes) may bring a module of that name, so with one the
+name is never exempt. A
+`*` path's plain first segment names a module of the
+crate as rustc reads it, and that module is read whatever its name (a
+`mod core` too): from 2018 on, a module in scope where the `use` is
+(none after a leading `::`), and in 2015, a module at the crate root
+(else, in both, a crate). Where such an alias gives the name too (a
+`cfg` may select either), the alias counts it whatever the module
+holds. A path whose first segment names a module of the crate but
+whose rest names none (`mod core { pub(crate) use elsewhere::cell; }`
+beside `use core::cell::*;`) goes through a re-export the counter does
+not follow, so it counts it too. A module whose `mod` item (or one
+around it on the path) is under a `cfg` of its own, or in a `verus!`
+block that is, or whose file has a `#![cfg]`, may be left out of a
+build, so the path is read as a crate's too, and counts where either
+reading may bring another `thread_local`.
+One beside only those counts nothing, as std's; its
 module's globs place no `impl`'s type, as before.
 
 `compile_error!`, which writes nothing that ships, counts nothing

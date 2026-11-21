@@ -77,9 +77,13 @@
 //! one the crate defines that does not expand fails the run. The
 //! exceptions are std's item macros that write no function
 //! (`compile_error!`, `thread_local!`), by `::std::` or bare where
-//! nothing may rebind the name, and a bare `thread_local!` that only a
-//! `*` or a `#[macro_use]` may rebind ([`Counter::other_thread_local`]),
-//! which counts nothing though it may be another crate's. Fragments
+//! nothing may rebind the name. A bare `thread_local!` that a `*` or a
+//! `#[macro_use]` may rebind is std's only where each such source is
+//! shown not to bring another ([`Counter::other_thread_local`]): a glob
+//! of Verus's prelude, of std or core, or of a module of the crate that
+//! brings in no `thread_local`, and a `#[macro_use]` of std's or Verus's
+//! crates, each by a name no Cargo rename or `use` alias rebinds; any
+//! other source counts it as another crate's macro. Fragments
 //! match by the crate's edition ([`walked_editions`]): below 2024 an
 //! `expr` is an `expr_2021` (no `const` block, no `_`), and below 2021 a
 //! `pat` is a `pat_param` (no top-level `|`). A crate whose read targets
@@ -375,6 +379,10 @@ struct Counter {
     /// Every module of the crate, by path from its root, so that a `use`
     /// path whose first segment is one of them reads as this crate's.
     modules: std::collections::BTreeSet<Vec<String>>,
+    /// The modules a `mod` item under a `cfg` of its own declares
+    /// ([`cfg_gated_mods`]), and those whose file has a `#![cfg]`: a build
+    /// may leave each out.
+    cfg_modules: std::collections::BTreeSet<Vec<String>>,
     /// For each crate root (the library, each binary and other target),
     /// the files it may compile and those it surely names by their place
     /// under src/ ([`Counter::add_proof_trees`]), by which
@@ -394,7 +402,7 @@ struct Counter {
     /// The crate's edition (its Cargo.toml's, or the workspace's it
     /// inherits; 2015 when it gives none, as cargo reads it).
     edition: u32,
-    /// Each name among `vstd`, `verus_builtin_macros`, `core`, `std` and `alloc`
+    /// Each of std's and Verus's crate names ([`STD_OR_VERUS_CRATES`])
     /// that a dependency of the crate takes for another package (`vstd =
     /// { package = "other" }`), with why.
     renamed_deps: Vec<(String, String)>,
@@ -546,6 +554,7 @@ impl Counter {
             carry: Default::default(),
             inline_macro_use: Vec::new(),
             modules: std::collections::BTreeSet::new(),
+            cfg_modules: std::collections::BTreeSet::new(),
             proof_trees: Vec::new(),
             macro_use: Vec::new(),
             bindings: Vec::new(),
@@ -796,8 +805,8 @@ const UNREAD_DECLARATION: &str = "verus_count_unread_declaration";
 /// edition`, or, with `edition.workspace = true`, `[workspace.package]
 /// edition` of `root`'s Cargo.toml; 2015 when none is given, as cargo
 /// reads it; the lowest of that and any target's own, `[lib] edition`
-/// and the like), and each of `vstd`, `verus_builtin_macros`, `core`, `std` and `alloc`
-/// that a dependency table (`[dependencies]`, `[dev-dependencies]`,
+/// and the like), and each of std's and Verus's crate names
+/// ([`STD_OR_VERUS_CRATES`]) that a dependency table (`[dependencies]`, `[dev-dependencies]`,
 /// `[build-dependencies]`, or a `[target.*]` one) takes for another
 /// package (`vstd = { package = "other" }`, directly or through a
 /// `{ workspace = true }` entry of `[workspace.dependencies]`), or
@@ -844,7 +853,7 @@ fn crate_manifest(root: &Path, dir: &Path) -> (u32, Vec<(String, String)>) {
     for table in tables.into_iter().filter_map(toml::Value::as_table) {
         for (key, dep) in table {
             let name = key.replace('-', "_");
-            if !["vstd", "verus_builtin_macros", "core", "std", "alloc"].contains(&name.as_str()) {
+            if !STD_OR_VERUS_CRATES.contains(&name.as_str()) {
                 continue;
             }
             // `{ workspace = true }` takes the workspace's entry of the key,
@@ -3564,6 +3573,7 @@ impl Counter {
         // with `#[macro_use]` declares carries on outward through it.
         let mut inline_carried = InlineMods::new();
         self.modules.clear();
+        self.cfg_modules.clear();
         self.macro_use.clear();
         (self.edition, self.renamed_deps) = crate_manifest(root, k);
         // Macros match by the edition of the target compiling them. The
@@ -3590,6 +3600,11 @@ impl Counter {
                 f.strip_prefix(root).unwrap_or(f),
                 (&mut carried, &mut inline_carried, &mut self.modules),
             );
+            cfg_gated_mods(&file.items, &module, &mut self.cfg_modules);
+            // A module file's own `#![cfg]` may leave it out too.
+            if !cfg_predicates(&file.attrs).is_empty() {
+                self.cfg_modules.insert(module.clone());
+            }
             if class(i) == Built::Test {
                 continue;
             }
@@ -4878,30 +4893,169 @@ impl Counter {
     /// this module imports the name from a path that does not start at
     /// `std` or `core`; or a path whose first segment is neither
     /// (`elsewhere::thread_local!`, `crate::thread_local!`). A bare one
-    /// only a `*` or a `#[macro_use]` may bind to another is not shown to
-    /// be either: it places no glob type ([`Counter::std_thread_local`])
-    /// but counts nothing, since nearly every such one is std's, beside
-    /// `vstd::prelude::*`.
+    /// only a `*` or a `#[macro_use]` may bind to another counts too
+    /// (#122), unless each such source is shown not to bring one
+    /// ([`Counter::foreign_glob`]): a `#[macro_use]` of a crate other than
+    /// std's and Verus's ([`STD_OR_VERUS_CRATES`]), or of one of those a
+    /// Cargo dependency is renamed to, or a `*` that may hold another
+    /// `thread_local`, counts it.
     fn other_thread_local(&self, path: &verus_syn::Path) -> bool {
-        // `std` or `core`, unless a Cargo dependency is renamed to it.
-        let std = |first: Option<&String>| {
-            first.is_some_and(|f| {
-                matches!(f.as_str(), "std" | "core")
-                    && !self.renamed_deps.iter().any(|(n, _)| n == f)
-            })
-        };
         let segs = segments(path);
         if segs.len() == 1 && path.leading_colon.is_none() {
             self.macros.contains_key("thread_local")
                 || self
                     .imported("thread_local", false)
                     .iter()
-                    .any(|p| !std(p.first()))
+                    .any(|p| !self.std_crate(p.first()))
+                || self
+                    .macro_use
+                    .iter()
+                    .any(|c| !STD_OR_VERUS_CRATES.contains(&c.as_str()) || self.renamed(c))
+                || self.foreign_glob(&self.module, &mut Vec::new())
         } else {
             // A first segment that is a module of this crate (`mod core`)
             // shadows the extern prelude's `std` or `core`.
-            !std(segs.first()) || self.local(&segs)
+            !self.std_crate(segs.first()) || self.local(&segs)
         }
+    }
+
+    /// Whether `first`, a path's first segment, is `std` or `core`, unless
+    /// a Cargo dependency is renamed to it.
+    fn std_crate(&self, first: Option<&String>) -> bool {
+        first.is_some_and(|f| matches!(f.as_str(), "std" | "core") && !self.renamed(f))
+    }
+
+    /// Whether a Cargo dependency of the crate is renamed to `name`
+    /// ([`Counter::renamed_deps`]).
+    fn renamed(&self, name: &str) -> bool {
+        self.renamed_deps.iter().any(|(n, _)| n == name)
+    }
+
+    /// Whether module `path` of the crate is declared where every build
+    /// compiling its parent compiles it: no `mod` item of it is under a
+    /// `cfg` of its own ([`Counter::cfg_modules`]).
+    fn surely_declared(&self, path: &[String]) -> bool {
+        !self.cfg_modules.contains(path)
+    }
+
+    /// Whether module `m` has a glob, one a shipped build or Verus's may
+    /// compile, that may bring a name of any kind: any but a glob of
+    /// std's, core's or Verus's by a name no Cargo rename takes (a glob
+    /// of a module of the crate, by any path or alias, or of another
+    /// crate, may).
+    fn glob_may_bring_any(&self, m: &[String]) -> bool {
+        self.bindings.iter().any(|b| {
+            // The glob's first segment is the crate of that name only
+            // where no `use` here or `extern crate .. as` rebinds it and no
+            // module of the crate has that name.
+            let other = b.path.first().is_some_and(|f| {
+                self.binds(m, f)
+                    || self.extern_alias(f)
+                    || self.module_from(m, std::slice::from_ref(f)).is_some()
+            });
+            b.glob
+                && b.module == m
+                && (b.shipped || b.verus)
+                && (other
+                    || !((one_of(&b.path, &VERUS_GLOBS) && !self.renamed(&b.path[0]))
+                        || self.std_crate(b.path.first())))
+        })
+    }
+
+    /// Whether an `extern crate path as name;` a shipped build or Verus's
+    /// may compile gives `name` to a crate of another name.
+    fn extern_alias(&self, name: &str) -> bool {
+        self.bindings
+            .iter()
+            .any(|b| b.extern_crate && b.name == name && b.path != [name] && (b.shipped || b.verus))
+    }
+
+    /// Whether a `use p::*;` of module `m` (one not built only for tests)
+    /// may bring a `thread_local` other than std's (#122). A glob of a
+    /// module of this crate (whatever its name, a `mod core` included)
+    /// may only where that module brings the name in by a `use`
+    /// ([`Counter::binds`]) or has such a glob itself, read through every
+    /// glob it has (`seen` ends a cycle). A plain first segment names such
+    /// a module as rustc reads a `use` path: from 2018 on one in scope in
+    /// `m` (none after a leading `::`), in 2015 one at the crate root,
+    /// whatever `m` holds. Of a crate's globs, Verus's ([`VERUS_GLOBS`])
+    /// and std's or core's cannot, where no Cargo rename
+    /// ([`Counter::renamed`]), `use` in `m` (or, in 2015, at the root),
+    /// or `extern crate .. as`
+    /// ([`Counter::extern_alias`]) gives another crate that name, and no
+    /// module of the crate has the first segment's name there (the rest
+    /// would then be a re-export the counter does not follow); any other
+    /// may.
+    fn foreign_glob(&self, m: &[String], seen: &mut Vec<Vec<String>>) -> bool {
+        if seen.iter().any(|s| s == m) {
+            return false;
+        }
+        seen.push(m.to_vec());
+        // Each glob of `m` a shipped build or Verus's may compile, with
+        // whether it has a leading `::`.
+        let globs: Vec<(Vec<String>, bool)> = self
+            .bindings
+            .iter()
+            .filter(|b| b.glob && b.module == m && (b.shipped || b.verus))
+            .map(|b| (b.path.clone(), b.absolute))
+            .collect();
+        globs.iter().any(|(p, absolute)| {
+            // A plain first segment names, from 2018 on, a module in
+            // scope here or an extern crate, and after a leading `::` an
+            // extern crate alone; in 2015, a module at the crate root or
+            // an extern crate there. A module of the crate it names is
+            // read, whatever its name (a `mod core` included).
+            let lookup = |q: &[String]| {
+                match q.first().map(String::as_str) {
+                    Some("crate" | "self" | "super") => self.module_from(m, q),
+                    _ if self.edition < 2018 => Some([&m[..1], q].concat()),
+                    _ if *absolute => None,
+                    _ => Some([m, q].concat()),
+                }
+                .filter(|l| self.modules.contains(l))
+            };
+            let local = lookup(p);
+            // A `use` here (`use elsewhere as std;`) or an `extern crate
+            // .. as` that gives another crate the first segment's name may
+            // be what the path names, beside a module of that name under
+            // `cfg`s: then each may bring the name.
+            // In 2015 the path is read from the crate root, so a root `use`
+            // rebinds it too, and so may any root glob not shown to be
+            // std's, core's or Verus's (it may bring a module of that name).
+            let rebound = p.first().is_some_and(|f| {
+                self.binds(m, f)
+                    || (self.edition < 2018
+                        && (self.binds(&m[..1], f) || self.glob_may_bring_any(&m[..1])))
+                    || self.extern_alias(f)
+            });
+            if let Some(local) = local {
+                let brings = rebound
+                    || self.binds(&local, "thread_local")
+                    || self.foreign_glob(&local, seen);
+                // A module some build may leave out (under a `cfg` the
+                // counter cannot settle) leaves the crate of that name as
+                // the other reading.
+                let named = p
+                    .iter()
+                    .filter(|s| !matches!(s.as_str(), "crate" | "self" | "super"))
+                    .count();
+                let base = local.len() - named;
+                if brings || (base + 1..=local.len()).all(|k| self.surely_declared(&local[..k])) {
+                    return brings;
+                }
+            }
+            // A first segment that names a module of the crate, where the
+            // rest is no module of it (a re-export the counter does not
+            // follow: `mod core { pub(crate) use elsewhere::cell; }`), may
+            // be any crate's.
+            if p.len() > 1 && lookup(&p[..1]).is_some() {
+                return true;
+            }
+            // A crate's: std's, core's and Verus's bring none, unless so
+            // rebound.
+            rebound
+                || !((one_of(p, &VERUS_GLOBS) && !self.renamed(&p[0])) || self.std_crate(p.first()))
+        })
     }
 
     /// How item macro `name`, invoked by `path` and defined nowhere in the
@@ -5098,6 +5252,18 @@ const VERUS_PATHS: [&[&str]; 2] = [
 
 /// The modules of [`VERUS_PATHS`], whose `*` imports Verus's `verus!`.
 const VERUS_GLOBS: [&[&str]; 2] = [&["vstd", "prelude"], &["verus_builtin_macros"]];
+
+/// The crates whose `#[macro_use] extern crate` cannot bring a
+/// `thread_local` other than std's ([`Counter::other_thread_local`]):
+/// the standard library's and Verus's.
+const STD_OR_VERUS_CRATES: [&str; 6] = [
+    "std",
+    "core",
+    "alloc",
+    "vstd",
+    "verus_builtin",
+    "verus_builtin_macros",
+];
 
 /// The standard library's item macros that write nothing that ships,
 /// each with the paths of more than one segment that name it: only
@@ -5502,6 +5668,42 @@ fn macro_use_mods(
                     .push(has_attr(&m.attrs, "macro_use"));
                 macro_use_mods(items, &inner, file, (carried, inline, all));
             }
+        }
+    }
+}
+
+/// The modules among `items` (in `module`, and in its inline modules)
+/// whose `mod` item is under a `cfg` of its own, or inside a `verus!`
+/// block that is, and every module inside such a one, into `out`: a
+/// build may leave each out ([`Counter::foreign_glob`]).
+fn cfg_gated_mods(
+    items: &[Item],
+    module: &[String],
+    out: &mut std::collections::BTreeSet<Vec<String>>,
+) {
+    for item in items {
+        if let Item::Macro(v) = item
+            && verus_path(&v.mac.path)
+            && let Ok(f) = parse2::<verus_syn::File>(v.mac.tokens.clone())
+        {
+            if cfg_predicates(&v.attrs).is_empty() {
+                cfg_gated_mods(&f.items, module, out);
+            } else {
+                // Every module the block declares is under its `cfg`.
+                let mut all = std::collections::BTreeSet::new();
+                let (mut c, mut i) = (Carried::new(), InlineMods::new());
+                macro_use_mods(&f.items, module, Path::new(""), (&mut c, &mut i, &mut all));
+                out.extend(all);
+            }
+            continue;
+        }
+        let Item::Mod(m) = item else { continue };
+        let inner = [module, &[m.ident.to_string()]].concat();
+        if !cfg_predicates(&m.attrs).is_empty() {
+            out.insert(inner.clone());
+        }
+        if let Some((_, items)) = &m.content {
+            cfg_gated_mods(items, &inner, out);
         }
     }
 }
