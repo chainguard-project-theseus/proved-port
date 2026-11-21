@@ -75,11 +75,15 @@ where it reports drift.
   no existing target or check changes. The no-kit guard in
   `kit/count/README.md` lists the three; a port that copied the guard
   adds them to its `PROVED_PORT_TARGETS` when it starts to use them.
+- The counter's version is 0.4.10, ready for the v0.4.10 tag.
 
 ### Porting notes
 
-1. Move the pin. No figure, header or target changes, and the counter
-   prints fewer warnings. One run can newly fail: a macro with candidate
+1. Move the pin together, to 0.4.10, as 0.3.1's note 1 lists, then run
+   `make verus-headers`. A port moving from 0.4.8 or earlier applies the
+   notes of each release in between first. No figure, header or existing
+   target changes, and with a generated ledger the counter prints fewer
+   warnings (#166). One run can newly fail: a macro with candidate
    definitions under `cfg`s the counter cannot settle, where one writes
    a function with `exec_allows_no_decreases_clause` alone and another
    writes it `external_body` too. Before the bump, `grep -rn
