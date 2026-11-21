@@ -43,6 +43,15 @@ where it reports drift.
   still passes as the change that adopts the counter, unless it has a
   FLOOR (at the head's `[floor] path` or `verus/FLOOR`) and the
   configuration is under ROOT: that run now fails (exit 1).
+- The counter refuses only the symlinks under a crate's `src/` that its
+  source walk reads through (#71): one named `*.rs`, or one to a
+  directory holding a `.rs` file or a cycle at any depth, or one whose
+  target, or anything under it, it cannot stat, resolve or list (a link
+  loop); a dangling link is passed over. It refused
+  any link there, so uutils, which links a `LICENSE` into each
+  utility's directory and some `locales` directories of `.ftl` files,
+  could not count its `coreutils` and `uu_stdbuf` crates. A crate
+  whose directory or `src/` is a link fails as before.
 - `verus/THEOREMS.md`'s template drops its Index table (#102). Each
   theorem file's first line, `# <ID>. <title>` (the theorem skeleton's
   heading), is its index entry, and the Index section gives a command

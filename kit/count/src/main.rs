@@ -6244,12 +6244,22 @@ fn symlink_in(root: &Path, rel: &Path) -> Option<PathBuf> {
 }
 
 /// The first path at or below `rel` under `root`, in path order, that is
-/// a symlink: `rel` itself, or a file or directory under it.
+/// a symlink the source walk ([`rust_files`]) reads through: `rel` itself
+/// (a crate's `src/`), or below it one named `*.rs`, or one to a directory
+/// that holds a `.rs` file or a cycle at any depth (the walk follows
+/// directory links). Any other link below `rel` (a `LICENSE`, a `locales`
+/// directory of `.ftl` files) is a file the walk never reads (#71).
 fn symlink_below(root: &Path, rel: &Path) -> Option<PathBuf> {
     let meta = fs::symlink_metadata(root.join(rel)).ok()?;
     if meta.file_type().is_symlink() {
         return Some(rel.to_path_buf());
     }
+    read_link_under(root, rel, &meta)
+}
+
+/// The first link under `rel` (a directory, `meta` its metadata) that the
+/// source walk reads through, as [`symlink_below`] defines it.
+fn read_link_under(root: &Path, rel: &Path, meta: &fs::Metadata) -> Option<PathBuf> {
     if !meta.is_dir() {
         return None;
     }
@@ -6259,7 +6269,58 @@ fn symlink_below(root: &Path, rel: &Path) -> Option<PathBuf> {
         .map(|e| rel.join(e.file_name()))
         .collect();
     entries.sort();
-    entries.iter().find_map(|e| symlink_below(root, e))
+    entries.iter().find_map(|e| {
+        let meta = fs::symlink_metadata(root.join(e)).ok()?;
+        if !meta.file_type().is_symlink() {
+            return read_link_under(root, e, &meta);
+        }
+        let read = e.extension().is_some_and(|x| x == "rs")
+            || (dir_or_unreadable(&root.join(e))
+                && reaches_rs(&root.join(e), &mut std::collections::HashSet::new()));
+        read.then(|| e.clone())
+    })
+}
+
+/// Whether [`rust_files`] would read a `.rs` file under `dir`, following
+/// links as it does, or come back to a directory it is already in (a
+/// cycle, which the walk would follow without end). `seen` holds the
+/// canonical directories on the way down. A directory it cannot resolve
+/// or list counts as one that does, so a read error refuses the link
+/// rather than pass it unread.
+fn reaches_rs(dir: &Path, seen: &mut std::collections::HashSet<PathBuf>) -> bool {
+    let Ok(canon) = fs::canonicalize(dir) else {
+        return true;
+    };
+    if !seen.insert(canon.clone()) {
+        return true;
+    }
+    let found = match fs::read_dir(dir) {
+        Err(_) => true,
+        Ok(entries) => entries.into_iter().any(|e| {
+            let Ok(e) = e else {
+                return true;
+            };
+            let p = e.path();
+            if dir_or_unreadable(&p) {
+                reaches_rs(&p, seen)
+            } else {
+                p.extension().is_some_and(|x| x == "rs")
+            }
+        }),
+    };
+    seen.remove(&canon);
+    found
+}
+
+/// Whether `p`, followed through links, is a directory, or cannot be
+/// stat'd for a reason other than its absence (a link loop, a permission
+/// or I/O error), which [`reaches_rs`] then refuses. A dangling link is
+/// neither: the walk reads nothing through it.
+fn dir_or_unreadable(p: &Path) -> bool {
+    match fs::metadata(p) {
+        Ok(m) => m.is_dir(),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
 }
 
 /// The revision `--base-rev` names, and its copy of the configuration
@@ -11432,6 +11493,48 @@ verus! {
         std::os::unix::fs::symlink("../crates/a/src", root.join("other/src")).unwrap();
         std::os::unix::fs::symlink("../../crates/a/src/lib.rs", root.join("deep/src/lib.rs"))
             .unwrap();
+        // Links below a crate's `src/` (#71): uutils' `LICENSE` and a
+        // `locales` directory of `.ftl` files, which the source walk never
+        // reads, beside a directory link holding a `.rs` file and a cycle,
+        // which it reads through.
+        for d in [
+            "lic/src/uu",
+            "lic/data/locales",
+            "rsdir/src",
+            "rsdir/data",
+            "cycle/src/m",
+            "diamond/src/uu",
+            "diamond/data/ftl",
+            "eloop/src",
+            "dangle/src",
+            "nloop/src",
+            "nloop/data",
+        ] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        // A diamond: two links to one `.ftl` directory under a linked
+        // directory, which holds no `.rs` file and no cycle.
+        fs::write(root.join("diamond/data/ftl/en-US.ftl"), "x = y\n").unwrap();
+        std::os::unix::fs::symlink("ftl", root.join("diamond/data/l1")).unwrap();
+        std::os::unix::fs::symlink("ftl", root.join("diamond/data/l2")).unwrap();
+        std::os::unix::fs::symlink("../../data", root.join("diamond/src/uu/x")).unwrap();
+        // A link loop, which no stat resolves (ELOOP), and a dangling
+        // link, which the walk reads nothing through.
+        std::os::unix::fs::symlink("l2", root.join("eloop/src/l1")).unwrap();
+        std::os::unix::fs::symlink("l1", root.join("eloop/src/l2")).unwrap();
+        // The same loop inside a linked directory's target.
+        std::os::unix::fs::symlink("../data", root.join("nloop/src/x")).unwrap();
+        std::os::unix::fs::symlink("l2", root.join("nloop/data/l1")).unwrap();
+        std::os::unix::fs::symlink("l1", root.join("nloop/data/l2")).unwrap();
+        std::os::unix::fs::symlink("../nowhere", root.join("dangle/src/gone")).unwrap();
+        fs::write(root.join("crates/a/src/lib.rs"), "").unwrap();
+        fs::write(root.join("lic/LICENSE"), "MIT\n").unwrap();
+        fs::write(root.join("lic/data/locales/en-US.ftl"), "x = y\n").unwrap();
+        std::os::unix::fs::symlink("../../LICENSE", root.join("lic/src/uu/LICENSE")).unwrap();
+        std::os::unix::fs::symlink("../../data/locales", root.join("lic/src/uu/locales")).unwrap();
+        fs::write(root.join("rsdir/data/gen.rs"), "").unwrap();
+        std::os::unix::fs::symlink("../data", root.join("rsdir/src/gen")).unwrap();
+        std::os::unix::fs::symlink("..", root.join("cycle/src/m/up")).unwrap();
         let read = |text: &str| -> Vec<(String, bool)> {
             crate_dirs(&root, &Config::parse(text).expect("parses"))
                 .expect("reads")
@@ -11513,6 +11616,22 @@ verus! {
                 "[crates]\nmembers = [{ name = \"d\", path = \"deep\" }]\n",
                 "[crates] crate d reads deep/src/lib.rs, a symlink",
             ),
+            (
+                "[crates]\nmembers = [{ name = \"g\", path = \"rsdir\" }]\n",
+                "[crates] crate g reads rsdir/src/gen, a symlink",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"c\", path = \"cycle\" }]\n",
+                "[crates] crate c reads cycle/src/m/up, a symlink",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"e\", path = \"eloop\" }]\n",
+                "[crates] crate e reads eloop/src/l1, a symlink",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"n\", path = \"nloop\" }]\n",
+                "[crates] crate n reads nloop/src/x, a symlink",
+            ),
         ] {
             let got = crate_dirs(&root, &Config::parse(text).expect("parses"));
             assert!(
@@ -11521,6 +11640,31 @@ verus! {
                 got.map(|k| k.into_iter().map(|k| k.name).collect::<Vec<_>>())
             );
         }
+        assert_eq!(
+            read("[crates]\nmembers = [{ name = \"l\", path = \"lic\" }]\n"),
+            [("l".to_string(), true)]
+        );
+        assert_eq!(
+            read("[crates]\nmembers = [{ name = \"m\", path = \"diamond\" }]\n"),
+            [("m".to_string(), true)]
+        );
+        assert_eq!(
+            read("[crates]\nmembers = [{ name = \"g\", path = \"dangle\" }]\n"),
+            [("g".to_string(), true)]
+        );
+        // A directory the guard cannot resolve or list refuses the link.
+        // A mode-000 directory is listable as root, so a missing path and
+        // a regular file stand in for the two read errors.
+        let mut seen = std::collections::HashSet::new();
+        assert!(
+            reaches_rs(&root.join("gone"), &mut seen),
+            "a directory that does not resolve: got = passed, wanted = refused"
+        );
+        assert!(
+            reaches_rs(&root.join("lic/LICENSE"), &mut seen),
+            "a directory that cannot be listed: got = passed, wanted = refused"
+        );
+        assert!(seen.is_empty(), "seen after the walk: {seen:?}");
         // A path from `/`, even to a crate under the root, is refused:
         // `root.join` would read it while it compares unequal to the base's
         // relative path.
