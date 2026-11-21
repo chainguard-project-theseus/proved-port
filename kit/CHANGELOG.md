@@ -41,10 +41,20 @@ where it reports drift.
   `--base-rev`, a run added, removed or renamed, an atom added to a
   run, or `[[runs]]` replacing the shorthand, is a narrowing. A run may set only one value of each
   single-valued key (`target_arch`, `target_os`, ...).
+- The counter's version is 0.4.7, ready for the v0.4.7 tag.
 
 ### Porting notes
 
-1. The ledger layout is a port's own move, not part of the bump: a port
+1. Move the pin together, to 0.4.7, as 0.3.1's note 1 lists, then run
+   `make verus-headers`. A port moving from 0.4.5 or earlier applies the
+   notes of each release in between first. Nothing else changes: the
+   counter built at 0.4.6 and at this release gave identical output
+   (standard output, standard error, exit code, `--list` included) on
+   the eleven ports the v0.4.7 release pull request names, and
+   `room_functions`, `room_lines` and `[[runs]]` are new keys a port
+   turns on by adding them. A port that keeps its own room paragraph in
+   verus/FLOOR may set the two room keys to the figures it states.
+2. The ledger layout is a port's own move, not part of the bump: a port
    still on `docs/abi-changes.md` keeps it, and the kit entry leaves it
    alone. A port that moves splits each `### ABI-nnn` entry into
    `docs/abi/ABI-nnn.md`, keeps the file's preamble as
@@ -52,7 +62,7 @@ where it reports drift.
    `docs/abi-changes.md` (its AGENTS.md, CONTRIBUTING.md, review prompt,
    deps.yaml paths and prompts, and check descriptions), in a pull
    request of its own.
-2. A port that runs Verus on several hosts (challoc: x86_64 and
+3. A port that runs Verus on several hosts (challoc: x86_64 and
    aarch64) may declare each run as `[[runs]]` in place of the
    shorthand, in its own pull request with a `[[narrowed]]` line for
    `[[runs]] replaces the [crates] verus_sets shorthand` and one per
