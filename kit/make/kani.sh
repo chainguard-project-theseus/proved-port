@@ -220,10 +220,18 @@ harnesses() {
   # passes has no use for; a failed one prints them on stderr, with its
   # own stderr, so a crate that does not compile under Kani says why.
   said=$out/list-$(fname "$lc").out
+  # A kani-list.json left from an earlier listing (a manual `cargo kani
+  # list`'s) goes first, so one that writes none fails rather than read
+  # the old crate's harnesses.
+  rm -f kani-list.json
   # shellcheck disable=SC2046,SC2086
   if ! cargo kani $(pflag "$lc") $(mflag) ${KANI_FLAGS:-} "$@" list ${KANI_LIST_FLAGS:-} --format json > "$said"; then
     echo "kani: cargo kani list failed for $(fname "$lc"), printing:" >&2
     cat "$said" >&2
+    exit 1
+  fi
+  if [ ! -f kani-list.json ]; then
+    echo "kani: cargo kani list wrote no kani-list.json for $(fname "$lc")" >&2
     exit 1
   fi
   mv kani-list.json "$json"
