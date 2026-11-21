@@ -730,8 +730,9 @@ fn arity(sig: &Signature) -> (usize, bool) {
 /// the declarations a file makes under the other reading of where its
 /// modules live, for a file another target may read the other way (a
 /// root read as a module, a main.rs or lib.rs that is a module, a
-/// `#[path]`-named file declared by its place elsewhere); only
-/// [`Counter::add_proof_trees`] reads them, as files a target may compile.
+/// `#[path]`-named file declared by its place elsewhere);
+/// [`Counter::add_proof_trees`] and [`module_guards`] read them, as files
+/// a target may compile.
 #[derive(Default)]
 struct ModFiles {
     inner: Vec<(PathBuf, Vec<String>)>,
@@ -1496,14 +1497,19 @@ fn module_dir(file: &Path) -> Option<PathBuf> {
 /// The `cfg` predicates that must hold for the file `f` to be built, given
 /// the module files `mods` records: its inner `#![cfg(..)]`s, and for each
 /// declaration of it, that declaration's guards and the declaring file's
-/// own ([`module_guards`] of it). A file declared once takes that
+/// own ([`module_guards`] of it). The declarations are those of every
+/// reading that may compile it: the primary one's and the other's
+/// ([`ModFiles::alternate`]). A file declared once takes that
 /// declaration's; one declared several times is built where any
 /// declaration holds, so it takes their `any(all(..), ..)`, and nothing
-/// more when one declaration needs nothing. A crate file no declaration
-/// names, other than a root, is unsure ([`UNREAD_DECLARATION`]) and takes
-/// the guards of each recorded file whose module directory ([`module_dir`])
-/// it is under, so one under a test-only module stays test-only. A root
-/// has its inner `cfg`s alone.
+/// more when one declaration needs nothing. A crate root is built by its
+/// own target too, which needs nothing, so a root has its inner `cfg`s
+/// alone, whatever declares it as a module. A crate file no declaration
+/// of the primary reading names, other than a root, is unsure
+/// ([`UNREAD_DECLARATION`]) and takes the guards of each recorded file
+/// whose module directory ([`module_dir`]) it is under, so one under a
+/// test-only module stays test-only; the other reading's declarations of
+/// it are alternatives beside that one, as they only widen.
 fn module_guards(f: &Path, mods: &ModFiles) -> Vec<String> {
     guards_of(f, mods, &mut Vec::new())
 }
@@ -1521,12 +1527,28 @@ fn guards_of(f: &Path, mods: &ModFiles, seen: &mut Vec<PathBuf>) -> Vec<String> 
         .filter(|(i, _)| i == f)
         .flat_map(|(_, g)| g.iter().cloned())
         .collect();
-    let declarations: Vec<&Declared> = mods.declared.iter().filter(|d| d.file == f).collect();
-    if declarations.is_empty() && !mods.roots.iter().any(|r| r == f) {
-        // No declaration the counter reads names this file, so nothing
-        // shows where it is built: it is unsure, and keeps the guards of
-        // the files whose module directory holds it.
-        out.push(UNREAD_DECLARATION.to_owned());
+    // Every reading that may compile the file: the declarations of the
+    // primary one and of the other ([`ModFiles::alternate`]), and for a
+    // crate root its own target, which needs no declaration.
+    // An alternate declaration is a reading some target may not make
+    // (a root's `mod foo;` read under `src/lib/`), so it shows only that
+    // the file may be built: it is unsure ([`UNREAD_DECLARATION`]), and
+    // so never verified through it.
+    let declarations: Vec<(&Declared, bool)> = mods
+        .declared
+        .iter()
+        .map(|d| (d, false))
+        .chain(mods.alternate.iter().map(|d| (d, true)))
+        .filter(|(d, _)| d.file == f)
+        .collect();
+    let root = mods.roots.iter().any(|r| r == f);
+    // No declaration of the primary reading names this file, so nothing
+    // the counter reads shows where it is built (an `include!` may
+    // compile it): it is unsure, and keeps the guards of the files whose
+    // module directory holds it.
+    let undeclared = !root && declarations.iter().all(|(_, alternate)| *alternate);
+    let fallback = |seen: &mut Vec<PathBuf>| {
+        let mut g = vec![UNREAD_DECLARATION.to_owned()];
         let mut above: Vec<&PathBuf> = mods
             .inner
             .iter()
@@ -1537,17 +1559,33 @@ fn guards_of(f: &Path, mods: &ModFiles, seen: &mut Vec<PathBuf>) -> Vec<String> 
         above.sort();
         above.dedup();
         for m in above {
-            out.extend(guards_of(m, mods, seen));
+            g.extend(guards_of(m, mods, seen));
         }
+        g
+    };
+    if declarations.is_empty() && !root {
+        out.extend(fallback(seen));
     } else if !declarations.is_empty() {
-        let alternatives: Vec<Vec<String>> = declarations
+        let mut alternatives: Vec<Vec<String>> = declarations
             .iter()
-            .map(|d| {
+            .map(|(d, alternate)| {
                 let mut g = d.guards.clone();
+                if *alternate {
+                    g.push(UNREAD_DECLARATION.to_owned());
+                }
                 g.extend(guards_of(&d.from, mods, seen));
                 g
             })
             .collect();
+        if root {
+            alternatives.push(Vec::new());
+        }
+        // The other reading's declarations only widen where the file is
+        // built: one the primary reading does not declare keeps the
+        // fallback beside them.
+        if undeclared {
+            alternatives.push(fallback(seen));
+        }
         match alternatives.as_slice() {
             [one] => out.extend(one.iter().cloned()),
             several if several.iter().any(Vec::is_empty) => {}
