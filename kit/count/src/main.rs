@@ -5870,8 +5870,11 @@ fn opted_in(crates: &[Krate], verus: &[String]) -> bool {
 /// configuration under `root` reached through a symlink exits 2: the
 /// base would be read at the link's path while the head is read through
 /// it, and once a link merged, the base's copy would be the link's text.
-/// A base with no copy, the change that adopts the counter, has nothing
-/// to compare. The base's copy, when there is one, for [`Base::copy`].
+/// A base with no copy at that path is held to the one configuration
+/// file of its tree, and one with none is the change that adopts the
+/// counter, with nothing to compare, unless it has a FLOOR
+/// ([`base_config`]). The base's copy, when there is one, for
+/// [`Base::copy`].
 fn check_config(root: &Path, file: &Path, cfg: &Config, rev: &str) -> Option<Config> {
     let under = std::path::absolute(file)
         .ok()
@@ -5884,23 +5887,18 @@ fn check_config(root: &Path, file: &Path, cfg: &Config, rev: &str) -> Option<Con
         );
         std::process::exit(2);
     }
-    let rel = under.unwrap_or_else(|| PathBuf::from("verus/count.toml"));
+    let in_root = under.is_some();
+    let rel = under.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
     let rel = rel.to_string_lossy();
-    let text = match base_file(root, rev, &rel) {
-        Ok(Some(text)) => text,
-        Ok(None) => {
-            println!("ok configuration: {rev} has no {rel} to compare with");
-            return None;
-        }
-        Err(e) => {
-            eprintln!("FAIL configuration: {e}");
-            std::process::exit(2);
-        }
-    };
+    let (base_rel, text) = base_config(root, rev, (&rel, in_root), cfg).unwrap_or_else(|e| {
+        eprintln!("FAIL configuration: {e}");
+        std::process::exit(2);
+    })?;
     let base = Config::parse(&text).unwrap_or_else(|e| {
-        eprintln!("FAIL configuration: {rev}:{rel}: {e}");
+        eprintln!("FAIL configuration: {rev}:{base_rel}: {e}");
         std::process::exit(2);
     });
+    let rev_rel = format!("{rev}:{base_rel}");
     let crate_changes = base_dir_narrowed(root, cfg, &base, rev)
         .and_then(|mut v| {
             v.extend(newly_unpublished(root, cfg, &base, rev)?);
@@ -5916,24 +5914,181 @@ fn check_config(root: &Path, file: &Path, cfg: &Config, rev: &str) -> Option<Con
     }
     for n in &explained.unnamed {
         eprintln!(
-            "FAIL configuration: {rel}: {n}, where {rev}:{rel} runs it: restore it, or give it a new [[narrowed]] line with change = {:?} and a reason",
+            "FAIL configuration: {rel}: {n}, where {rev_rel} runs it: restore it, or give it a new [[narrowed]] line with change = {:?} and a reason",
             n.change
         );
     }
     for change in &explained.stale {
         eprintln!(
-            "FAIL configuration: {rel}: the [[narrowed]] line for {change:?} names no change from {rev}:{rel}: remove it, or name the change as this run prints it"
+            "FAIL configuration: {rel}: the [[narrowed]] line for {change:?} names no change from {rev_rel}: remove it, or name the change as this run prints it"
         );
     }
     if !explained.unnamed.is_empty() || !explained.stale.is_empty() {
         std::process::exit(1);
     }
     if explained.named.is_empty() {
-        println!("ok configuration: {rel} keeps every gate {rev}:{rel} runs");
+        println!("ok configuration: {rel} keeps every gate {rev_rel} runs");
     } else {
-        println!("ok configuration: {rel} keeps every other gate {rev}:{rel} runs");
+        println!("ok configuration: {rel} keeps every other gate {rev_rel} runs");
     }
     Some(base)
+}
+
+/// The configuration path the counter reads when `--config` is not given.
+const DEFAULT_CONFIG: &str = "verus/count.toml";
+
+/// `rev`'s configuration to hold the head's to ([`check_config`]), with
+/// the path it was read at. The head's configuration is held to `rev`'s
+/// copy at `rel` (the head's path under ROOT, or [`DEFAULT_CONFIG`] for
+/// one outside ROOT, `in_root` false), or, when `rev` has none there, to
+/// the one file of its tree that is a configuration ([`base_configs`],
+/// [`DEFAULT_CONFIG`] among them); with several, which one `rev` ran is
+/// unknown, and the run exits 1 naming them. One outside ROOT with no
+/// base configuration is compared with nothing.
+///
+/// Under ROOT, `None` when `rev` has no configuration and no FLOOR (at the head's
+/// `[floor] path` or `verus/FLOOR`): the change that adopts the counter,
+/// with nothing to compare. A `rev` with a FLOOR but no configuration
+/// ran its gates from a file this run cannot find, so the run exits 1
+/// rather than compare with nothing: otherwise a head that moved its
+/// configuration with `--config` would narrow every gate, and move
+/// FLOOR, REACH and RLIMIT, unchecked.
+fn base_config(
+    root: &Path,
+    rev: &str,
+    (rel, in_root): (&str, bool),
+    cfg: &Config,
+) -> Result<Option<(String, String)>, String> {
+    if let Some(text) = base_file(root, rev, rel)? {
+        return Ok(Some((rel.to_string(), text)));
+    }
+    // The head's configuration as the messages name it: one outside ROOT
+    // has no path the base could share.
+    let head = if in_root {
+        rel.to_string()
+    } else {
+        "the configuration outside ROOT".to_string()
+    };
+    let found = base_configs(root, rev)?;
+    match found.as_slice() {
+        [] => {}
+        [(path, text)] => {
+            println!(
+                "ok configuration: {rev} has no {rel}, so {head} is held to {rev}:{path}, the one configuration {rev} has"
+            );
+            return Ok(Some((path.clone(), text.clone())));
+        }
+        several => {
+            let paths: Vec<&str> = several.iter().map(|(p, _)| p.as_str()).collect();
+            eprintln!(
+                "FAIL configuration: {rev} has no {rel}, and {} configuration files ({}), so which one it ran is unknown: keep the configuration at the path {rev} reads it from in this change, and move it in a change of its own",
+                paths.len(),
+                paths.join(", ")
+            );
+            std::process::exit(1);
+        }
+    }
+    // A configuration outside ROOT with no base configuration to hold it
+    // to is compared with nothing, FLOOR or not: a port may generate its
+    // configuration outside the tree, and the base cannot hold it.
+    if !in_root {
+        println!("ok configuration: {rev} has no {rel} to compare with");
+        return Ok(None);
+    }
+    let mut floors = vec![cfg.floor.path.as_str()];
+    if cfg.floor.path != "verus/FLOOR" {
+        floors.push("verus/FLOOR");
+    }
+    for floor in floors {
+        if base_file(root, rev, floor)?.is_some() {
+            eprintln!(
+                "FAIL configuration: {rev} has {floor} but no configuration, so the gates it ran cannot be compared with {rel}'s: a port whose FLOOR predates its configuration adds {rel} in a change that runs the verus check with VERUS_BASE=none, as the change that adds the first FLOOR does"
+            );
+            std::process::exit(1);
+        }
+    }
+    let shown = if rel == DEFAULT_CONFIG {
+        rel.to_string()
+    } else {
+        format!("{rel} or other configuration")
+    };
+    println!("ok configuration: {rev} has no {shown} to compare with");
+    Ok(None)
+}
+
+/// The configuration files of `rev`'s tree, as `(path, text)` in path
+/// order: each `.toml` file but a `Cargo.toml` with a top-level `crates`
+/// key, which every configuration has and other `.toml` files
+/// (`rustfmt.toml`, `.cargo/config.toml`) do not. `git grep` lists the
+/// candidates in one call. One that [`Config::parse`] refuses (a key
+/// this release dropped or renamed, say), any candidate that is not TOML,
+/// and one `git grep` lists that cannot be read back, are errors naming
+/// it (exit 2), as the base's copy at the head's path is, rather than be
+/// passed over.
+fn base_configs(root: &Path, rev: &str) -> Result<Vec<(String, String)>, String> {
+    let commit = base_commit(root, rev, "its configuration")?;
+    let listed = git_in(
+        root,
+        &[
+            "grep",
+            "-l",
+            "-z",
+            "-F",
+            "crates",
+            &commit,
+            "--",
+            "*.toml",
+            ":(exclude,glob)**/Cargo.toml",
+        ],
+    )?;
+    // git grep exits 1 when nothing matches. Its exit status says only
+    // whether some file matched: a blob it cannot read is reported on
+    // stderr and treated as no match, so any stderr fails the run too,
+    // rather than leave the list empty or short.
+    let failed = !listed.status.success() && listed.status.code() != Some(1);
+    if failed || !listed.stderr.is_empty() {
+        return Err(format!(
+            "git grep crates {commit}: {}",
+            String::from_utf8_lossy(&listed.stderr).trim()
+        ));
+    }
+    // -z gives each path verbatim, NUL-terminated, where Git would quote
+    // one with unusual characters. One the counter cannot read back
+    // exactly (not UTF-8, or not under the commit) fails, rather than be
+    // passed over as no configuration.
+    let mut found = Vec::new();
+    let prefix = format!("{commit}:");
+    for entry in listed.stdout.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        let path = std::str::from_utf8(entry)
+            .ok()
+            .and_then(|e| e.strip_prefix(&prefix))
+            .ok_or_else(|| {
+                format!(
+                    "git grep crates {commit}: {:?} is not a UTF-8 path under the commit, so whether it is {rev}'s configuration cannot be read",
+                    String::from_utf8_lossy(entry)
+                )
+            })?;
+        // git grep lists paths relative to ROOT, as `base_file` reads
+        // them; one that still reads back as nothing fails, rather than be
+        // passed over.
+        let text = base_file(root, rev, path)?.ok_or_else(|| {
+            format!(
+                "git grep crates {commit}: {path} is listed but cannot be read back from {rev}, so whether it is {rev}'s configuration cannot be read"
+            )
+        })?;
+        // A candidate that is not TOML may be a configuration this run
+        // cannot read, so it fails as one that does not parse.
+        let table = text
+            .parse::<toml::Table>()
+            .map_err(|e| format!("{rev}:{path}: {e}"))?;
+        if !table.contains_key("crates") {
+            continue;
+        }
+        Config::parse(&text).map_err(|e| format!("{rev}:{path}: {e}"))?;
+        found.push((path.to_string(), text));
+    }
+    found.sort();
+    Ok(found)
 }
 
 /// The crates that leave the shipped tally because their own Cargo.toml
@@ -6591,11 +6746,16 @@ fn in_rev(rev: &str, path: &str) -> String {
 /// verus/RLIMIT), failing closed: a
 /// revision that does not resolve to a commit (a shallow clone, another
 /// uid's checkout git refuses, an empty name) is an error, and only a
-/// resolved commit without the file is `None`.
+/// resolved commit without the file is `None`. Whether the file exists
+/// is read from the trees alone (`rev-parse --verify`), so a file whose
+/// blob cannot be read is an error from `git show`, not `None`.
 fn base_file(root: &Path, rev: &str, file: &str) -> Result<Option<String>, String> {
     let commit = base_commit(root, rev, file)?;
     let path = in_rev(&commit, file);
-    if !git_in(root, &["cat-file", "-e", &path])?.status.success() {
+    if !git_in(root, &["rev-parse", "--verify", "--quiet", &path])?
+        .status
+        .success()
+    {
         return Ok(None);
     }
     let shown = git_in(root, &["show", &path])?;

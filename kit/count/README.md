@@ -90,15 +90,34 @@ under no name and at no directory is new, with nothing to compare: so a
 and a new crate, as a member renamed to a new path is. Renaming a table
 or a mint is not a narrowing. The base's
 copy is read at the configuration's path under ROOT, as the repository
-names it (`verus/count.toml` when `--config` names a file outside ROOT);
-a base with none, the change that adopts the counter, prints `ok
-configuration: REV has no ... to compare with`, and one that does not
-parse fails the run (exit 2). A configuration under ROOT reached through
-a symlink, the file or a directory above it, fails the run (exit 2),
-since the base would be read at the link's path while the head is read
-through it. An in-ROOT `--config` at a path the base lacks still has
-nothing to compare: that is a Makefile edit, the same file that carries
-`--base-rev`.
+names it, or at `verus/count.toml` when `--config` names a file outside
+ROOT. A base with no copy at that path is read at the one configuration
+file of its tree (a `.toml` other than a `Cargo.toml` with a top-level
+`crates` key, `verus/count.toml` among them), so a head that moves its
+configuration with `--config`, under ROOT or out of it, is held to the
+gates the base ran (`ok configuration: REV has no ..., so ... is held to
+REV:..., the one configuration REV has`). A base with several such
+files fails the run (exit 1), naming them, since which one it ran is
+unknown: a change that moves the configuration keeps the path its base
+reads. A base with none and no FLOOR (at the head's `[floor] path` or
+`verus/FLOOR`), the change that adopts the counter, prints `ok
+configuration: REV has no ... to compare with`; under ROOT, one with a
+FLOOR ran its gates from a configuration the run cannot find, and fails
+the run (exit 1), while a configuration outside ROOT is still compared
+with nothing there, since a port may write its configuration outside
+the tree. A base copy that does not parse, found at the head's path or
+by the search (any candidate that is not TOML included), fails the run
+(exit 2), as does a file the search lists but cannot read back (a name
+that is not UTF-8, or a blob Git cannot read); a base copy at the head's path whose blob Git
+cannot read fails it too, rather than read as absent. One route stays
+open: a head that switches back to a path the base still has, such as
+an older `verus/count.toml` the base kept beside the file it ran, is
+compared with that copy, which may run fewer gates. A port that moves
+its configuration deletes the old copy in the same or the next change,
+and review reads a `--config` change in the Makefile. A configuration under ROOT
+reached through a symlink, the file or a directory above it, fails the
+run (exit 2), since the base would be read at the link's path while the
+head is read through it.
 
 A narrowing made on purpose (a root that moves with its function, a
 crate directory renamed, a gate a port retires) is named the way FLOOR

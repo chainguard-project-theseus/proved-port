@@ -27,6 +27,22 @@ where it reports drift.
   the file that declares it), the attribute fails the run (exit 1),
   since the counter reads each module file on its own. No stand-in may rewrite the name, and the template AGENTS.md's
   escape-hatch grep lists it.
+- The counter holds a configuration that `--config` moved to a path the
+  base lacks (under ROOT, or outside it where the base has no
+  `verus/count.toml`) to the one configuration file of the base's tree
+  (a `.toml` other than a `Cargo.toml` with a top-level `crates` key,
+  `verus/count.toml` among them) (#89). It read the base only at the
+  head's path and, finding nothing there, compared no gate and read the
+  base's FLOOR, REACH and RLIMIT at the head's paths, so a head could
+  move its configuration, narrow its gates and move those files in one
+  change and pass. A base with several such files fails the run (exit
+  1), naming them, and one such file that does not parse, a name the
+  search cannot read back, or a blob Git cannot read, fails it with
+  exit 2. A base copy at the head's path whose blob Git cannot read
+  now fails with exit 2 too, where it read as absent. A base with none
+  still passes as the change that adopts the counter, unless it has a
+  FLOOR (at the head's `[floor] path` or `verus/FLOOR`) and the
+  configuration is under ROOT: that run now fails (exit 1).
 - `verus/THEOREMS.md`'s template drops its Index table (#102). Each
   theorem file's first line, `# <ID>. <title>` (the theorem skeleton's
   heading), is its index entry, and the Index section gives a command
@@ -109,6 +125,17 @@ where it reports drift.
    beside its `from:` (#111), and the clause of the template's comment
    that says why it is there and not in dev.yaml. A port that already
    lists it, or runs no agents in its sessions, changes nothing.
+5. For #89, a port whose configuration has a base copy (it stays at one
+   path under ROOT, or is outside ROOT beside a base
+   `verus/count.toml`), or is outside ROOT with no configuration in the
+   tree, changes nothing. One that moves it is held to the base's copy
+   at its old path, which must
+   be the base's only configuration file; with several (a kept older
+   `verus/count.toml` counts), it keeps the path its base reads in that
+   change, and deletes the others in a change of their own. A port
+   whose FLOOR predates its configuration adds the configuration in a
+   change that runs the verus check with `VERUS_BASE=none`, as the
+   change that adds the first FLOOR does.
 
 ## 0.4.4
 

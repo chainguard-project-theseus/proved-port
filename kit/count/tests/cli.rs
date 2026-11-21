@@ -188,6 +188,390 @@ fn a_gate_dropped_since_the_base_fails_the_run() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A head that moves its configuration with `--config` to a path the base
+/// lacks is held to the one configuration file of the base's tree
+/// (`verus/count.toml` or another, whatever Git's quoting): moving it with
+/// every gate passes, and narrowing a gate on the way fails. A base with
+/// several such files fails, naming them, even when one is
+/// `verus/count.toml`; one that does not parse, or whose name is not
+/// UTF-8, fails with exit 2. A base with none passes, unless it has
+/// a FLOOR (at the head's `[floor] path` or `verus/FLOOR`), whose gates
+/// came from a configuration the run cannot find: that exits 1, with
+/// `--config` or without. A configuration outside ROOT, which the base
+/// cannot hold at its path, is compared with the base's
+/// `verus/count.toml`, or with the base's one configuration file (several
+/// fail, as above), or, with none, with nothing even beside a FLOOR.
+#[test]
+fn a_moved_configuration_is_held_to_the_base_one() {
+    let dir = repository("moved");
+    let commit = |tag: &str, rm: &[&str], add: &[(&str, &str)]| {
+        for f in rm {
+            fs::remove_file(dir.join(f)).expect("rm");
+        }
+        for (f, text) in add {
+            fs::write(dir.join(f), text).expect("write");
+        }
+        git(&dir, &["add", "-A", "verus"]);
+        git(&dir, &["commit", "-q", "-m", tag]);
+        git(&dir, &["tag", tag]);
+    };
+    commit(
+        "floored",
+        &["verus/count.toml"],
+        &[("verus/FLOOR", "functions 0.0\n")],
+    );
+    commit(
+        "floored2",
+        &["verus/FLOOR"],
+        &[("verus/F2", "functions 0.0\n")],
+    );
+    commit("elsewhere", &["verus/F2"], &[("verus/other.toml", GATED)]);
+    commit("twice", &[], &[("verus/third.toml", PLAIN)]);
+    // A name Git quotes in its output unless asked for it verbatim.
+    commit(
+        "quoted",
+        &["verus/other.toml", "verus/third.toml"],
+        &[("verus/café FLOOR.toml", GATED)],
+    );
+    // A base that ran verus/a.toml and kept an older verus/count.toml.
+    commit(
+        "stale",
+        &["verus/café FLOOR.toml"],
+        &[("verus/count.toml", PLAIN), ("verus/a.toml", GATED)],
+    );
+    // A base configuration with a key this release does not read.
+    let unknown = format!("dropped_key = 1\n{GATED}");
+    commit(
+        "unknown",
+        &["verus/count.toml", "verus/a.toml"],
+        &[("verus/other.toml", unknown.as_str())],
+    );
+    // A base configuration that is not TOML: a `[crates]` table twice,
+    // with comments on the headers.
+    commit(
+        "malformed",
+        &["verus/other.toml"],
+        &[(
+            "verus/m.toml",
+            "[crates] # one\ndir = \"crates\"\n[crates] # two\ndir = \"crates\"\n",
+        )],
+    );
+    let outside =
+        std::env::temp_dir().join(format!("verus-count-outside-{}.toml", std::process::id()));
+    let outside = outside.to_str().expect("utf-8").to_owned();
+    let moved = dir.join("verus/count2.toml");
+    let moved = moved.to_str().expect("utf-8").to_owned();
+    let default = dir.join("verus/count.toml");
+    let default = default.to_str().expect("utf-8").to_owned();
+    let f2 = format!("{PLAIN}[floor]\npath = \"verus/F2\"\n");
+    // A row with no exit code passes the configuration check and fails
+    // later, on GATED's [reach] file, which this repository lacks. A row
+    // whose file is the default one runs without --config.
+    for (file, text, base, code, want) in [
+        (
+            &moved,
+            PLAIN,
+            "gated",
+            Some(1),
+            "FAIL configuration: verus/count2.toml: the [mints] section is gone, so its gate no longer runs, where gated:verus/count.toml runs it",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "gated",
+            Some(1),
+            "ok configuration: gated has no verus/count2.toml, so verus/count2.toml is held to gated:verus/count.toml, the one configuration gated has",
+        ),
+        (
+            &moved,
+            GATED,
+            "gated",
+            None,
+            "ok configuration: verus/count2.toml keeps every gate gated:verus/count.toml runs",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "none",
+            Some(0),
+            "ok configuration: none has no verus/count2.toml or other configuration to compare with",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "floored",
+            Some(1),
+            "FAIL configuration: floored has verus/FLOOR but no configuration",
+        ),
+        (
+            &moved,
+            &f2,
+            "floored",
+            Some(1),
+            "FAIL configuration: floored has verus/FLOOR but no configuration",
+        ),
+        (
+            &moved,
+            &f2,
+            "floored2",
+            Some(1),
+            "FAIL configuration: floored2 has verus/F2 but no configuration",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "elsewhere",
+            Some(1),
+            "FAIL configuration: verus/count2.toml: the [mints] section is gone, so its gate no longer runs, where elsewhere:verus/other.toml runs it",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "elsewhere",
+            Some(1),
+            "ok configuration: elsewhere has no verus/count2.toml, so verus/count2.toml is held to elsewhere:verus/other.toml, the one configuration elsewhere has",
+        ),
+        (
+            &moved,
+            GATED,
+            "elsewhere",
+            None,
+            "ok configuration: verus/count2.toml keeps every gate elsewhere:verus/other.toml runs",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "twice",
+            Some(1),
+            "FAIL configuration: twice has no verus/count2.toml, and 2 configuration files (verus/other.toml, verus/third.toml)",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "stale",
+            Some(1),
+            "FAIL configuration: stale has no verus/count2.toml, and 2 configuration files (verus/a.toml, verus/count.toml)",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "unknown",
+            Some(2),
+            "FAIL configuration: unknown:verus/other.toml: ",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "malformed",
+            Some(2),
+            "FAIL configuration: malformed:verus/m.toml: ",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "quoted",
+            Some(1),
+            "FAIL configuration: verus/count2.toml: the [mints] section is gone, so its gate no longer runs, where quoted:verus/café FLOOR.toml runs it",
+        ),
+        (
+            &default,
+            PLAIN,
+            "floored",
+            Some(1),
+            "FAIL configuration: floored has verus/FLOOR but no configuration",
+        ),
+        (
+            &outside,
+            PLAIN,
+            "floored",
+            Some(0),
+            "ok configuration: floored has no verus/count.toml to compare with",
+        ),
+        (
+            &outside,
+            PLAIN,
+            "elsewhere",
+            Some(1),
+            "ok configuration: elsewhere has no verus/count.toml, so the configuration outside ROOT is held to elsewhere:verus/other.toml, the one configuration elsewhere has",
+        ),
+        (
+            &outside,
+            PLAIN,
+            "elsewhere",
+            Some(1),
+            "the [mints] section is gone, so its gate no longer runs, where elsewhere:verus/other.toml runs it",
+        ),
+        (
+            &outside,
+            PLAIN,
+            "twice",
+            Some(1),
+            "FAIL configuration: twice has no verus/count.toml, and 2 configuration files (verus/other.toml, verus/third.toml)",
+        ),
+    ] {
+        fs::write(file, text).expect("write");
+        let mut args = vec!["--base-rev", base];
+        if *file != default {
+            args.extend(["--config", file.as_str()]);
+        }
+        let (got, out, err) = count(&dir, &args);
+        let exit = code.map_or(!err.contains("FAIL configuration"), |c| got == c);
+        assert!(
+            exit && (out.contains(want) || err.contains(want)),
+            "{base} with {file} {text:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code:?}, {want:?}"
+        );
+        if *file == default {
+            fs::remove_file(file).expect("rm");
+        }
+    }
+    // A base configuration whose name is not UTF-8 cannot be read back,
+    // so the run fails (exit 2) rather than pass it over.
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let name = std::ffi::OsStr::from_bytes(b"verus/\xff.toml");
+        fs::remove_file(dir.join("verus/m.toml")).expect("rm");
+        fs::remove_file(&moved).expect("rm");
+        fs::write(dir.join(name), GATED).expect("write");
+        git(&dir, &["add", "-A", "verus"]);
+        git(&dir, &["commit", "-q", "-m", "bytes"]);
+        git(&dir, &["tag", "bytes"]);
+        fs::write(&moved, PLAIN).expect("write");
+        let (got, out, err) = count(&dir, &["--base-rev", "bytes", "--config", &moved]);
+        let want = "is not a UTF-8 path under the commit";
+        assert!(
+            got == 2 && err.contains(want),
+            "bytes: got = exit {got}, {out:?}, {err:?}; wanted = exit 2, {want:?}"
+        );
+    }
+    let _ = fs::remove_file(&outside);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A base configuration whose blob cannot be read fails the run (exit 2)
+/// rather than be passed over: the only configuration of the base, an
+/// unreadable gated one beside a readable stale one (where `git grep`
+/// exits 0 or 1 and reports the blob only on stderr), and the base's copy
+/// at the head's own path (whose tree entry exists, so it is not read as
+/// absent).
+#[test]
+fn an_unreadable_base_configuration_fails_closed() {
+    let dir = repository("unreadable");
+    let commit = |tag: &str, rm: &[&str], add: &[(&str, String)]| {
+        for f in rm {
+            fs::remove_file(dir.join(f)).expect("rm");
+        }
+        for (f, text) in add {
+            fs::write(dir.join(f), text).expect("write");
+        }
+        git(&dir, &["add", "-A", "verus"]);
+        git(&dir, &["commit", "-q", "-m", tag]);
+        git(&dir, &["tag", tag]);
+    };
+    // Each configuration is a blob of its own, so deleting it touches no
+    // other commit's.
+    commit(
+        "lone",
+        &["verus/count.toml"],
+        &[("verus/a.toml", format!("{GATED}# lone\n"))],
+    );
+    commit(
+        "beside",
+        &["verus/a.toml"],
+        &[
+            ("verus/b.toml", format!("{GATED}# beside\n")),
+            ("verus/count.toml", format!("{PLAIN}# stale\n")),
+        ],
+    );
+    commit(
+        "headpath",
+        &["verus/b.toml"],
+        &[("verus/count.toml", format!("{GATED}# headpath\n"))],
+    );
+    for object in [
+        "lone:verus/a.toml",
+        "beside:verus/b.toml",
+        "headpath:verus/count.toml",
+    ] {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["rev-parse", object])
+            .output()
+            .expect("runs");
+        let oid = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        assert!(out.status.success() && oid.len() == 40, "{object}: {oid:?}");
+        fs::remove_file(dir.join(".git/objects").join(&oid[..2]).join(&oid[2..]))
+            .expect("rm object");
+    }
+    let moved = dir.join("verus/count2.toml");
+    fs::write(&moved, PLAIN).expect("write");
+    let moved = moved.to_str().expect("utf-8").to_owned();
+    fs::write(dir.join("verus/count.toml"), PLAIN).expect("write");
+    for (base, config, want) in [
+        (
+            "lone",
+            Some(moved.as_str()),
+            "FAIL configuration: git grep crates ",
+        ),
+        (
+            "beside",
+            Some(moved.as_str()),
+            "FAIL configuration: git grep crates ",
+        ),
+        ("headpath", None, "FAIL configuration: git show "),
+    ] {
+        let mut args = vec!["--base-rev", base];
+        args.extend(config.iter().flat_map(|c| ["--config", c]));
+        let (got, out, err) = count(&dir, &args);
+        assert!(
+            got == 2 && err.contains(want),
+            "{base}: got = exit {got}, {out:?}, {err:?}; wanted = exit 2, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A ROOT below the repository's top level: `git grep` there lists the
+/// base's configuration relative to ROOT, and the base reads find it
+/// there (#114), so a moved configuration is held to it.
+#[test]
+fn a_moved_configuration_below_the_top_level_is_held_to_the_base_one() {
+    let top = std::env::temp_dir().join(format!("verus-count-cli-sub-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&top);
+    let dir = top.join("sub");
+    fs::create_dir_all(dir.join("crates/a/src")).expect("mkdir");
+    fs::create_dir_all(dir.join("verus")).expect("mkdir");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n",
+    )
+    .expect("write");
+    fs::write(dir.join("crates/a/src/lib.rs"), "pub fn f() {}\n").expect("write");
+    fs::write(dir.join("verus/a.toml"), GATED).expect("write");
+    git(&top, &["init", "-q"]);
+    git(&top, &["add", "sub"]);
+    git(&top, &["commit", "-q", "-m", "base"]);
+    git(&top, &["tag", "base"]);
+    let moved = dir.join("verus/count2.toml");
+    fs::write(&moved, PLAIN).expect("write");
+    let (got, out, err) = count(
+        &dir,
+        &[
+            "--base-rev",
+            "base",
+            "--config",
+            moved.to_str().expect("utf-8"),
+        ],
+    );
+    let want = "FAIL configuration: verus/count2.toml: the [mints] section is gone, so its gate no longer runs, where base:verus/a.toml runs it";
+    assert!(
+        got == 1 && err.contains(want),
+        "got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&top);
+}
+
 /// A ROOT below the repository's top level reads the base at ROOT's
 /// paths: a gate the base's verus/count.toml there runs, dropped at the
 /// head, fails the run, and an unchanged configuration passes. Before
