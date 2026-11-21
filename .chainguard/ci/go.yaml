@@ -1,0 +1,34 @@
+# The kit's Go checks. PLAN.md (2026-11-08) writes the kit's stats tool
+# (step 6) and codegen comparer (step 7) in Go; their vet and test
+# checks go here, in this file's environment. Toolchain: the newest
+# Wolfi go-1.NN stream, pinned by stream as count.yaml pins rust-1.NN;
+# the go-toolchain entry of .chainguard/deps.yaml moves it here and in
+# .chainguard/develop.yaml together. GOTOOLCHAIN=local keeps go from
+# fetching another toolchain a go.mod asks for. apk-tools and
+# wolfi-keys let the deps agent's guest, which runs in this
+# environment, install a new stream and read Wolfi's index.
+version: 1
+
+environment:
+  packages: [go-1.27, busybox, git, apk-tools, wolfi-keys]
+
+checks:
+  go-toolchain:
+    description: >-
+      The Go toolchain is the stream this file's environment names
+      (go env GOVERSION), and .chainguard/develop.yaml installs the same
+      stream.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd:
+      - sh
+      - -c
+      - >-
+        export GOTOOLCHAIN=local;
+        s=$(sed -n 's/^  packages: \[\(go-1\.[0-9]*\),.*/\1/p' .chainguard/ci/go.yaml);
+        v=$(go env GOVERSION);
+        echo "go.yaml: $s; go env GOVERSION: $v";
+        [ -n "$s" ] || { echo "FAIL: go.yaml names no go-1.NN stream first in its packages"; exit 1; };
+        case $v in "go${s#go-}" | "go${s#go-}".*) ;; *) echo "FAIL: $v is not $s"; exit 1 ;; esac;
+        grep -qx "    - $s" .chainguard/develop.yaml || { echo "FAIL: .chainguard/develop.yaml does not install $s"; exit 1; };
+        echo PASS

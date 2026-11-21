@@ -157,7 +157,10 @@ kit/
 7. **Rewrite Python and large shell in Go** (decided 2026-11-08):
    `codegen-fncmp.py`, `seams.sh` and the awk family, so the kit has one
    toolchain besides the Rust counter. challoc's `cb` stays in challoc
-   as a reference design.
+   as a reference design. The toolchain is Wolfi's go-1.NN stream, in
+   `.chainguard/ci/go.yaml` (where the Go tools' checks go) and
+   `.chainguard/develop.yaml`, moved by the deps agent's `go-toolchain`
+   entry (#161).
 8. **Add the second architecture to the emulator** (x86-64), and a
    toolchain check that refuses a driver linked with a different LLVM
    than the shipping build.

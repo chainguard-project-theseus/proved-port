@@ -97,6 +97,26 @@ updates:
     draft. Do not edit
     .chainguard/deps.yaml unless a person asks in a comment.
 
+- name: go-toolchain
+  schedule: "15 17 * * 2" # Tuesdays
+  paths:
+    - ".chainguard/ci/go.yaml"
+    - ".chainguard/develop.yaml"
+  environment: .chainguard/ci/go.yaml
+  merge: manual
+  prompt: >-
+    Move the Wolfi go-1.NN stream .chainguard/ci/go.yaml installs, first
+    in its environment's packages, and the one .chainguard/develop.yaml
+    installs, together, to the newest stream Wolfi ships. If it is
+    already that stream, change nothing. Install the new stream with apk
+    in the guest and commit the move before you run anything; fold later
+    fixes in this run into that commit, and on a turn add a commit on top
+    of the pull request's head. Then run every check command in go.yaml
+    with GOTOOLCHAIN=local, fixing what the new toolchain flags in the
+    kit's Go code without changing what the tools print. The body names
+    the commands the guest ran and any it did not finish. Do not edit
+    .chainguard/deps.yaml unless a person asks in a comment.
+
 - name: tools
   schedule: "0 17 * * 3" # Wednesdays
   paths:

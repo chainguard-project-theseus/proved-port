@@ -3,7 +3,8 @@
 #
 # Packages: what the kit's checks (.chainguard/ci/*.yaml) install, so a
 # session can run each of them: the Wolfi rust stream count.yaml names
-# (move both together), build-base, busybox, git, make, curl and xz;
+# and the Wolfi go stream go.yaml names (move each with its check
+# file), build-base, busybox, git, make, curl and xz;
 # apk-tools and wolfi-keys, so a session can install a package from
 # Wolfi; and claude, Claude Code for the owner agents that run in
 # development sessions. No check installs this environment.
@@ -12,6 +13,7 @@ resources: large
 environment:
   packages:
     - rust-1.99
+    - go-1.27
     - build-base
     - busybox
     - git
