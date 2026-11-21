@@ -94,6 +94,20 @@ where it reports drift.
   `GIT_GLOB_PATHSPECS=1` or `GIT_LITERAL_PATHSPECS=1`, the search for
   the base's configuration (#89) found nothing, so a moved `--config`
   was compared with nothing.
+- A bare `thread_local!` beside a `*` or a `#[macro_use]` that may
+  bring another crate's `thread_local` is read as that other macro
+  (#122): it counts as one function outside `verus!`, `thread_local!`,
+  or fails the run where it may come through a re-export the counter
+  does not follow, as any other crate's macro does. It counted nothing.
+  A glob of Verus's prelude, of std or core, or of a module of the
+  crate that imports nothing of the name, and a `#[macro_use]` of std's
+  or Verus's crates, leave it std's, as before, each by a name no Cargo
+  rename, `use` alias or `extern crate .. as` rebinds. A glob's plain
+  first segment names a module of the crate as rustc reads a `use` path
+  in the crate's edition (none after a leading `::` from 2018 on), and
+  such a module is read whatever its name. No port's run changes (each
+  port's counter output, `--list` included, is identical before and
+  after).
 
 ## 0.4.5
 
