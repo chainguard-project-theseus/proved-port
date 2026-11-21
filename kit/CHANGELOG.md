@@ -13,6 +13,58 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.11
+
+### Changes
+
+- With a generated ledger (`[ledger]`), a function seam (`external_body`,
+  `external_body proof`, `axiom`) at the `fn` line of a trusted function
+  that `exec_allows_no_decreases_clause` covers no longer makes it
+  discharged or partly checked (#169). The function counts unchecked
+  whatever the seam's status, as the README's "Functions with no
+  termination proof" already said (nothing checks that it ends), and
+  the run warns once per line when the status says discharged or partly
+  checked. This holds whether the attribute alone makes the function
+  trusted or it is `external_body` too, and at a macro invocation's
+  line for every function there when the attribute covers one. Before,
+  such a seam, stale or hand-kept, moved the function into the
+  discharged or partly checked share, and the stale-seam check did not
+  fire since the function was still trusted.
+- With `[ledger]`, the Kani marker (`discharged_by = "kani"`) on a
+  function the attribute covers fails the run (exit 1, "FAIL discharged:
+  ... the ledger, not the marker, says what is discharged"), as it does
+  on any other function in that mode (#169). Before, the attribute made
+  such a function trusted first, so its marker went unrefused.
+- In every port, with or without `[ledger]`: candidate definitions of a
+  macro (under `cfg`s the counter cannot settle) that differ only in
+  whether the attribute covers an `external_body` function they write,
+  or only in the Kani marker on a function the attribute covers, now
+  count differently and fail the run (exit 1, "m! could be any of N
+  definitions"), as candidates that differ in the marker on any other
+  function already do (#169).
+
+### Porting notes
+
+1. Every port, before moving its pin to 0.4.11: find the macros with
+   more than one definition that write functions with
+   `exec_allows_no_decreases_clause` (`grep -rn
+   exec_allows_no_decreases_clause --include=*.rs .`, then the
+   `macro_rules!` around each hit), and make the definitions agree on
+   `external_body` and on the Kani marker for each function the
+   attribute covers. A port with no such macro sees nothing from this
+   note.
+2. A port with `[ledger]`, also before the bump: for each function the
+   attribute covers (each hit above, and the functions under each
+   `impl`, trait or module it is on), check that none has a discharged
+   or partly checked function seam and none has the Kani marker. Such a
+   seam now lowers the combined share by that function and warns: give
+   the row an unchecked status (`trusted`), or prove the function's
+   termination and drop the attribute. A marker fails the run: remove
+   it.
+3. Checked here: `verus-count .` over challoc 053c930 and 60db24a7
+   (both with `[ledger]`) prints the same output, byte for byte, with
+   the same exit status, at 0.4.11 and 0.4.10.
+
 ## 0.4.10
 
 ### Changes

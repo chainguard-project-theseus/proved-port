@@ -237,6 +237,17 @@ enum Class {
     Discharged,
 }
 
+/// How `exec_allows_no_decreases_clause` bears on a function the counter
+/// tallies ([`Counter::tally_fn`]): it does not cover it (`No`), it alone
+/// makes it trusted (`Only`: it would be verified without), or it covers
+/// one that is trusted for another reason as well (`Also`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Covered {
+    No,
+    Only,
+    Also,
+}
+
 #[derive(Clone, Default)]
 struct Tally {
     fns: [usize; 4],
@@ -265,6 +276,11 @@ struct Counter {
     /// Each discharged function's file, relative to the root, and name, for
     /// [`unrecorded`].
     discharged: Vec<(PathBuf, String)>,
+    /// Each function with the Kani marker that
+    /// `exec_allows_no_decreases_clause` covers, which counts as trusted
+    /// and so is not in `discharged`: with `[ledger]` its marker is
+    /// refused as a discharged one's is.
+    marked_covered: Vec<(PathBuf, String)>,
     /// Every executable function, for [`recursive`].
     fns: Vec<FnRef>,
     /// Each source file a shipped build compiles, with its crate, whether
@@ -366,6 +382,12 @@ struct Counter {
     /// ([`Counter::termination_only`], [`ledger::match_ledger`]).
     trusted_for_termination: std::collections::BTreeSet<String>,
     trusted_otherwise: std::collections::BTreeSet<String>,
+    /// The `FILE:LINE` of each trusted exec function that
+    /// `exec_allows_no_decreases_clause` covers, whether or not it is
+    /// trusted for another reason too: a ledger's function seam does not
+    /// make it discharged or partly checked, since nothing checks that it
+    /// ends ([`ledger::match_ledger`]).
+    trusted_covered: std::collections::BTreeSet<String>,
     /// The `FILE:LINE` of each function inside `verus!` with
     /// `#[verifier::assume_unsupported_attributes]` ([`assumes_attributes`]),
     /// a seam of the linkage alone ([`ledger::match_assumed`]).
@@ -608,6 +630,7 @@ impl Counter {
             tallies: BTreeMap::new(),
             errors: 0,
             discharged: Vec::new(),
+            marked_covered: Vec::new(),
             fns: Vec::new(),
             files: Vec::new(),
             statics: Vec::new(),
@@ -635,6 +658,7 @@ impl Counter {
             trusted: Vec::new(),
             trusted_for_termination: std::collections::BTreeSet::new(),
             trusted_otherwise: std::collections::BTreeSet::new(),
+            trusted_covered: std::collections::BTreeSet::new(),
             assumed: Vec::new(),
             verus_only_ghost: false,
             macros: BTreeMap::new(),
@@ -2797,12 +2821,37 @@ impl Counter {
         // be trusted all the same. A discharged one is not: it is
         // `external_body` or calls `assume`, with the Kani marker, which a
         // ledger does not take as discharging it, so without the attribute
-        // it is trusted for that.
-        let mut termination_only = false;
+        // it is trusted for that. Any other exec function the attribute
+        // covers is trusted for another reason as well.
+        let covers = no_decreases && !is_ghost(sig);
+        let mut covered = if covers { Covered::Also } else { Covered::No };
         let class = match class {
-            Some(c @ (Class::Verified | Class::Discharged)) if no_decreases && !is_ghost(sig) => {
-                termination_only =
-                    c == Class::Verified && (sure || built == Built::Verus || !self.shipped);
+            Some(c @ (Class::Verified | Class::Discharged)) if covers => {
+                if c == Class::Verified && (sure || built == Built::Verus || !self.shipped) {
+                    covered = Covered::Only;
+                }
+                // Its Kani marker discharges nothing, but with a ledger
+                // it is refused all the same (#169). A candidate
+                // definition's walk gives the marker a row, so candidates
+                // that differ only in it count differently and fail the
+                // run, as they do for a function the attribute does not
+                // cover (Discharged against Trusted), rather than leave
+                // the first candidate to decide whether it is refused.
+                if c == Class::Discharged {
+                    match &mut self.dry {
+                        Some(rows) => rows.push((
+                            Class::Trusted,
+                            format!(
+                                "discharged_by = \"kani\" under exec_allows_no_decreases_clause {}",
+                                sig.ident
+                            ),
+                            0,
+                        )),
+                        None => self
+                            .marked_covered
+                            .push((self.file.clone(), sig.ident.to_string())),
+                    }
+                }
                 Some(Class::Trusted)
             }
             c => c,
@@ -2834,7 +2883,7 @@ impl Counter {
             // column, which Verus checks all the same.
             match class {
                 Some(class @ (Class::Trusted | Class::Discharged)) => {
-                    self.tally_fn(class, sig.ident.to_string(), at, lines, termination_only);
+                    self.tally_fn(class, sig.ident.to_string(), at, lines, covered);
                 }
                 None if self.verus_only_ghost => {
                     self.tallies.entry(self.krate.clone()).or_default().ghost += 1;
@@ -2858,7 +2907,7 @@ impl Counter {
         // configured macros their own way (`[reach]`'s `exports_macro`
         // and `fn_ptr_macro`).
         if self.expansion.is_some() {
-            self.tally_fn(class, sig.ident.to_string(), at, lines, termination_only);
+            self.tally_fn(class, sig.ident.to_string(), at, lines, covered);
             return None;
         }
         let mut calls = Vec::new();
@@ -2886,20 +2935,20 @@ impl Counter {
             receiver: arity(sig).1,
             entry,
         });
-        self.tally_fn(class, sig.ident.to_string(), at, lines, termination_only);
+        self.tally_fn(class, sig.ident.to_string(), at, lines, covered);
         Some(class)
     }
 
     /// [`Counter::tally`] for a function, recording a trusted one's line as
-    /// trusted by `exec_allows_no_decreases_clause` alone
-    /// (`termination_only`) or otherwise.
+    /// trusted by `exec_allows_no_decreases_clause` alone or otherwise, and
+    /// as covered by the attribute or not (`covered`).
     fn tally_fn(
         &mut self,
         class: Class,
         name: String,
         start: usize,
         lines: usize,
-        termination_only: bool,
+        covered: Covered,
     ) {
         if class == Class::Trusted {
             match &mut self.dry {
@@ -2907,17 +2956,26 @@ impl Counter {
                 // trusted is a row too, so two candidates that differ only
                 // in that count differently and fail the run, rather than
                 // leave the first one's reason to decide whether a
-                // `no_decreases` ledger row stands for the function (as
-                // with `assume_unsupported_attributes`).
-                Some(rows) if termination_only => rows.push((
+                // `no_decreases` ledger row stands for the function, or
+                // whether a function seam there can class it (as with
+                // `assume_unsupported_attributes`).
+                Some(rows) if covered == Covered::Only => rows.push((
                     Class::Trusted,
                     format!("#[verifier::exec_allows_no_decreases_clause] {name}"),
+                    0,
+                )),
+                Some(rows) if covered == Covered::Also => rows.push((
+                    Class::Trusted,
+                    format!("#[verifier::exec_allows_no_decreases_clause] (also trusted) {name}"),
                     0,
                 )),
                 Some(_) => {}
                 None => {
                     let loc = format!("{}:{start}", self.file.display());
-                    if termination_only {
+                    if covered != Covered::No {
+                        self.trusted_covered.insert(loc.clone());
+                    }
+                    if covered == Covered::Only {
                         self.trusted_for_termination.insert(loc);
                     } else {
                         self.trusted_otherwise.insert(loc);
@@ -6519,8 +6577,8 @@ fn main() {
     if !opted_in(&crates, &verus_crates(&c)) {
         std::process::exit(1);
     }
-    if cfg.ledger.is_some() && !c.discharged.is_empty() {
-        for (file, name) in &c.discharged {
+    if cfg.ledger.is_some() && !(c.discharged.is_empty() && c.marked_covered.is_empty()) {
+        for (file, name) in c.discharged.iter().chain(&c.marked_covered) {
             eprintln!(
                 "FAIL discharged: {}: `{name}` has the discharged_by = \"kani\" marker, but with [ledger] configured the ledger, not the marker, says what is discharged",
                 file.display()
@@ -7368,8 +7426,12 @@ fn report(
     };
     let seams = ledger::read_ledger(&root.join(&l.dir), &premises)
         .unwrap_or_else(|e| usage(format!("{}: {e}", l.dir)));
-    let (checked, mut warnings, errors) =
-        ledger::match_ledger(&c.trusted, &c.termination_only(), &seams);
+    let (checked, mut warnings, errors) = ledger::match_ledger(
+        &c.trusted,
+        &c.termination_only(),
+        &c.trusted_covered,
+        &seams,
+    );
     let (assumed_seams, w) = ledger::match_assumed(&c.assumed, &seams);
     warnings.extend(w);
     for w in &warnings {
@@ -13322,6 +13384,9 @@ fn outside() {}
             fn assumes() { assume(false); }\n\
             #[verifier::external_body]\n\
             fn plain_trusted() {}\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            #[verifier::external_body]\n\
+            proof fn lemma() {}\n\
             }\n";
         c.items(&parse_file(src).expect("parses").items, false);
         let trusted: Vec<&str> = c.trusted.iter().map(|(_, loc, _)| loc.as_str()).collect();
@@ -13332,6 +13397,7 @@ fn outside() {}
             "src/a.rs:15",
             "src/a.rs:17",
             "src/a.rs:19",
+            "src/a.rs:22",
         ];
         assert_eq!(
             trusted, want,
@@ -13342,6 +13408,21 @@ fn outside() {}
         assert_eq!(
             only, want,
             "termination_only: got = {only:?}, wanted = {want:?}"
+        );
+        // Every trusted function the attribute covers, whatever else makes
+        // it trusted: a function seam does not check one (#169). Not a
+        // ghost one (line 22): the attribute is about exec functions.
+        let covered: Vec<&str> = c.trusted_covered.iter().map(String::as_str).collect();
+        let want = [
+            "src/a.rs:12",
+            "src/a.rs:15",
+            "src/a.rs:17",
+            "src/a.rs:3",
+            "src/a.rs:7",
+        ];
+        assert_eq!(
+            covered, want,
+            "trusted_covered: got = {covered:?}, wanted = {want:?}"
         );
 
         // Under a `cfg` Verus's build might not meet, a shipped verified
@@ -13374,6 +13455,12 @@ fn outside() {}
             only, want,
             "termination_only, shipped: got = {only:?}, wanted = {want:?}"
         );
+        let covered: Vec<&str> = c.trusted_covered.iter().map(String::as_str).collect();
+        let want = ["src/a.rs:4", "src/a.rs:6"];
+        assert_eq!(
+            covered, want,
+            "trusted_covered, shipped: got = {covered:?}, wanted = {want:?}"
+        );
 
         // In a crate that does not ship, verified code leaves the tally
         // whatever its `cfg`, so the attribute alone makes it trusted.
@@ -13395,7 +13482,7 @@ fn outside() {}
         // Functions one macro invocation writes share its line: when one
         // of them is trusted for another reason (`external_body`), the
         // line is not termination-only, whichever is tallied first.
-        for order in [[true, false], [false, true]] {
+        for order in [[Covered::Only, Covered::No], [Covered::No, Covered::Only]] {
             let mut c = Counter {
                 krate: "k".into(),
                 file: PathBuf::from("src/a.rs"),
@@ -13405,7 +13492,7 @@ fn outside() {}
             for (i, only) in order.into_iter().enumerate() {
                 c.tally_fn(Class::Trusted, format!("f{i}"), 15, 1, only);
             }
-            c.tally_fn(Class::Trusted, "g".into(), 20, 1, true);
+            c.tally_fn(Class::Trusted, "g".into(), 20, 1, Covered::Only);
             let only: Vec<String> = c.termination_only().into_iter().collect();
             let want = ["src/a.rs:20"];
             assert_eq!(
