@@ -161,7 +161,7 @@ crate.
 | | `verus_features` | features only Verus's build enables, as `verus_keep_ghost` |
 | | `verus_sets` | `cfg` atoms Verus's build is sure to set, which shipped builds may set too (`'feature = "jit"'` for a default feature the proof run keeps, `"unix"`): "Verus's build", below |
 | | `verus_never_sets` | `cfg` atoms Verus's build never sets (`"miri"`), so `not(miri)` is sure there |
-| | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords that the counter does not handle itself (a Verus keyword naming a field, a parameter or a `let` binding outside `verus!`, such as `exec: u8` or `let tracked = ..`, needs none: it is read as a raw identifier); one that would rewrite a name the counter classes code by (`external_body`, `assume_unsupported_attributes`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, `unsafe`, a test cfg, a configured macro or mint, ...) is refused |
+| | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords that the counter does not handle itself (a Verus keyword naming a field, a parameter or a `let` binding outside `verus!`, such as `exec: u8` or `let tracked = ..`, needs none: it is read as a raw identifier); one that would rewrite a name the counter classes code by (`external_body`, `assume_unsupported_attributes`, `exec_allows_no_decreases_clause`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, `unsafe`, a test cfg, a configured macro or mint, ...) is refused |
 | | `verus_only_ghost` | count the ghost functions of Verus-only code in the ghost column |
 | `[floor]` | `path`, `checked`, `renamed_from` | the FLOOR file (default `verus/FLOOR`); the prefix of the two verified-or-discharged figures (default `checked`); an older prefix the base revision's copy may still give them under, for the change that renames them (challoc's `combined`) |
 | `[rlimit]` | `path` | the RLIMIT file (default `verus/RLIMIT`) |
@@ -400,6 +400,24 @@ the file sits, so keep the file at the root.
   trusted. The report is challoc's two tables, the second the combined
   share. The marker is refused in this mode, so a function cannot be
   discharged twice.
+
+## Functions with no termination proof
+
+`#[verifier::exec_allows_no_decreases_clause]` lets Verus check exec
+functions whose loops and recursion have no `decreases`, so nothing
+proves they end. Each exec function it covers counts as trusted, not
+verified, nor discharged even with the Kani marker (a Kani record does
+not prove termination either): one that carries it, and each in an
+`impl`, trait or inline module that carries it (outer, or inner `#![..]`
+inside the braces), or in a file whose inner attributes carry it. The counter reads it as it
+reads `assume_unsupported_attributes`: in the path form or as
+`#[verifier(exec_allows_no_decreases_clause)]`, and under a `cfg_attr`
+whatever the predicate. Where it covers an out-of-line `mod x;` (on
+it, on an inline module around it, or atop the file that declares it),
+it fails the run (exit 1), naming the declaration: the counter
+reads each module file on its own, so it would not reach the functions
+it covers; put it on those functions, impls, traits or inline modules.
+Ghost functions and code outside `verus!` keep their classes.
 
 ## Linkage attributes Verus takes on trust
 

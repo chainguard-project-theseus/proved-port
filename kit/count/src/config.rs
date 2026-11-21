@@ -325,10 +325,11 @@ impl Config {
     /// still passes. The configured macro, conversion and mint names are
     /// among them.
     fn read_names(&self) -> Vec<String> {
-        const FIXED: [&str; 26] = [
+        const FIXED: [&str; 27] = [
             "external_body",
             "external",
             "assume_unsupported_attributes",
+            "exec_allows_no_decreases_clause",
             "assume",
             "admit",
             "assume_new",
@@ -1142,6 +1143,11 @@ mod tests {
                 r#"["unsupported_attributes]", "unsupported_attributex]"]"#,
                 "",
                 "assume_unsupported_attributes",
+            ),
+            (
+                r#"["decreases_clause]", "decreases_clausx]"]"#,
+                "",
+                "exec_allows_no_decreases_clause",
             ),
             (r#"["body]", "bodx]"]"#, "", "external_body"),
             (r#"["y]", "x]"]"#, "", "external_body"),

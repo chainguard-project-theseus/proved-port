@@ -126,8 +126,12 @@ A seam is anything a verified function relies on without proof:
 `Tracked::assume_new` ghost-token mints for the C caller's premises, and
 `#[verifier::assume_unsupported_attributes]`, which trusts the symbol
 or section a `no_mangle`, `export_name` or `link_section` item gets
-(its body stays verified; the ABI tests are the grounds). SKILL.md's
-audit grep matches every one of these spellings.
+(its body stays verified; the ABI tests are the grounds), and
+`#[verifier::exec_allows_no_decreases_clause]`, which lets the exec
+functions it covers go without a termination proof (the counter
+classes them trusted; give each loop and recursive call its
+`decreases` instead). SKILL.md's audit grep matches every one of these
+spellings.
 
 - One `external_body` or `assume_specification` around the single
   unverifiable call, with a contract stating only what callers rely on.
