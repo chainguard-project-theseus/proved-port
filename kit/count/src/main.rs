@@ -145,6 +145,12 @@
 //! discharged), and on one through a verified function that RN1.md's table
 //! does not name.
 //!
+//! With `[loops]`, it checks nested loops ([`nested_loops`], #76): it fails
+//! on a function of a shipped crate that nests a loop in a loop, or calls
+//! from inside a loop a function that loops (by name within its file, as
+//! the recursion check reads calls), that the work-bound theorem's table
+//! does not name.
+//!
 //! `--rlimit STATS` also checks rlimit headroom ([`rlimit`]; verus/README.md,
 //! "Headroom"): STATS is what `cargo verus verify -- --time-expanded
 //! --output-json` printed, and the run fails when a function of a crate it
@@ -617,6 +623,8 @@ struct FnRef {
     name: String,
     class: Class,
     calls: Vec<(bool, String)>,
+    /// Its body's loops, for the nested-loop check ([`nested_loops`]).
+    loops: LoopShape,
     /// What the body names, for the compile-inputs check ([`inputs`]).
     body: inputs::Body,
     /// Its parameters, the receiver aside, and whether it has one.
@@ -2721,8 +2729,10 @@ impl Counter {
         }
         let mut calls = Vec::new();
         let mut names = inputs::Body::default();
+        let mut loops = LoopShape::default();
         if let Some(b) = &body {
             direct_calls(b.clone(), &mut calls);
+            loops = loop_shape(b.clone());
             names = inputs::body(b.clone());
             inputs::statics_in(b.clone(), false, &mut self.statics);
             inputs::aliases_in(b.clone(), &mut self.aliases);
@@ -2736,6 +2746,7 @@ impl Counter {
             name: sig.ident.to_string(),
             class,
             calls,
+            loops,
             body: names,
             params: arity(sig).0,
             receiver: arity(sig).1,
@@ -2899,6 +2910,7 @@ impl Counter {
                         .collect();
                     let mut calls = Vec::new();
                     let names = inputs::body(body.clone());
+                    let loops = loop_shape(body.clone());
                     direct_calls(body, &mut calls);
                     self.fns.push(FnRef {
                         krate: krate.clone(),
@@ -2908,6 +2920,7 @@ impl Counter {
                         name: g.sig.ident.to_string(),
                         class: Class::Outside,
                         calls,
+                        loops,
                         body: names,
                         params: arity(&g.sig).0,
                         receiver: arity(&g.sig).1,
@@ -3039,6 +3052,7 @@ impl Counter {
                 let body: TokenStream = block.stmts.iter().map(ToTokens::to_token_stream).collect();
                 let mut calls = Vec::new();
                 let names = inputs::body(body.clone());
+                let loops = loop_shape(body.clone());
                 direct_calls(body, &mut calls);
                 let line = sig.fn_token.span.start().line;
                 let entry = self.entry(attrs, sig, line);
@@ -3050,6 +3064,7 @@ impl Counter {
                     name: sig.ident.to_string(),
                     class,
                     calls,
+                    loops,
                     body: names,
                     params: arity(sig).0,
                     receiver: arity(sig).1,
@@ -6340,6 +6355,9 @@ fn main() {
     if let Some(r) = &cfg.recursion {
         check_recursion(&root, &r.table, &c.fns, &unshipped);
     }
+    if let Some(l) = &cfg.loops {
+        check_loops(&root, &l.table, &c.fns, &unshipped);
+    }
     let (tables, tables_named) = seam_tables(&root, &cfg.seams);
     let seams = reach::seam_ids(tables.iter().map(String::as_str));
     if let Some(i) = &cfg.inputs
@@ -8439,6 +8457,323 @@ fn direct_calls(tokens: TokenStream, out: &mut Vec<(bool, String)>) {
     }
 }
 
+/// A closure `let` binds ([`LoopShape::closures`]): its name, whether
+/// its body loops, and its direct calls ([`direct_calls`]).
+type Closure = (String, bool, Vec<(bool, String)>);
+
+/// The loops of a function's body, for the nested-loop check
+/// ([`nested_loops`], #76).
+#[derive(Debug, Default, PartialEq)]
+struct LoopShape {
+    /// Whether the body has a loop (`loop`, `while` or `for`) at all.
+    loops: bool,
+    /// The line of each loop inside another loop's body.
+    nested: Vec<usize>,
+    /// Each direct call ([`direct_calls`]) inside a loop's body (or a
+    /// `while`'s condition), with the line of the outermost loop around it.
+    in_loop: Vec<(bool, String, usize)>,
+    /// Each name a `let` binds (through a type), with whether its
+    /// initializer loops and the initializer's direct calls, so a closure
+    /// is kept whatever wraps it (`Box::new(|..| ..)`, `&`, parentheses).
+    /// One that loops, itself or through a call, makes a call of its name
+    /// a call that loops ([`nested_loops`]).
+    closures: Vec<Closure>,
+    /// Whether the body did not parse as a block, so its loops are
+    /// unknown: the check then names the function (fails closed).
+    unread: bool,
+    /// The line of each macro invocation that holds `loop`, `while` or
+    /// `for`: its expansion's loop structure is unknown, so the check
+    /// names the function (fails closed).
+    macros: Vec<usize>,
+}
+
+/// The loops of `tokens`, a function's body ([`LoopShape`]), parsed as a
+/// block (Verus's syntax included) and read by its structure: `loop`,
+/// `while` and `for` expressions, whatever their headers hold (an
+/// `unsafe` block, a `match`). A `while`'s condition runs each iteration
+/// and is read as inside the loop; a `for`'s iterator runs once and is
+/// not, but a closure in it (`.map(|b| ..)`) runs per item and is. A
+/// nested item (a function, an `impl`) is its own and is left out. A
+/// closure's loops are the body's, and each name a `let` binds is kept
+/// with its initializer's loops and calls
+/// ([`LoopShape::closures`]). A macro
+/// invocation is tokens: one that holds `loop`, `while` or `for` counts
+/// as a loop at its line. A body that does not parse is `unread`.
+fn loop_shape(tokens: TokenStream) -> LoopShape {
+    use verus_syn::__private::ToTokens;
+    use verus_syn::visit::Visit;
+    struct V {
+        /// The line of the outermost loop the walk is inside.
+        at: Option<usize>,
+        /// While a `for`'s iterator is walked, that `for`'s line: a
+        /// closure there runs per item.
+        iter_of: Option<usize>,
+        shape: LoopShape,
+    }
+    impl V {
+        /// A loop at `line`, whose each iteration runs `each`.
+        fn enter(&mut self, line: usize, each: &[TokenStream], walk: impl FnOnce(&mut V)) {
+            self.shape.loops = true;
+            if self.at.is_some() {
+                self.shape.nested.push(line);
+            }
+            let at = self.at.unwrap_or(line);
+            let mut calls = Vec::new();
+            for t in each {
+                direct_calls(t.clone(), &mut calls);
+            }
+            self.shape
+                .in_loop
+                .extend(calls.into_iter().map(|(m, n)| (m, n, at)));
+            let was = self.at.replace(at);
+            walk(self);
+            self.at = was;
+        }
+    }
+    /// Whether `tokens` hold a loop keyword, at any depth.
+    fn has_loop_word(tokens: TokenStream) -> bool {
+        tokens.into_iter().any(|t| match t {
+            TokenTree::Ident(i) => matches!(i.to_string().as_str(), "loop" | "while" | "for"),
+            TokenTree::Group(g) => has_loop_word(g.stream()),
+            _ => false,
+        })
+    }
+    impl<'a> Visit<'a> for V {
+        fn visit_item(&mut self, _: &'a Item) {}
+        fn visit_expr_while(&mut self, w: &'a verus_syn::ExprWhile) {
+            let each = [w.cond.to_token_stream(), w.body.to_token_stream()];
+            self.enter(w.while_token.span.start().line, &each, |v| {
+                v.visit_expr(&w.cond);
+                v.visit_block(&w.body);
+            });
+        }
+        fn visit_expr_for_loop(&mut self, f: &'a verus_syn::ExprForLoop) {
+            let was = self.iter_of.replace(f.for_token.span.start().line);
+            self.visit_expr(&f.expr);
+            self.iter_of = was;
+            let each = [f.body.to_token_stream()];
+            self.enter(f.for_token.span.start().line, &each, |v| {
+                v.visit_block(&f.body)
+            });
+        }
+        fn visit_expr_loop(&mut self, l: &'a verus_syn::ExprLoop) {
+            let each = [l.body.to_token_stream()];
+            self.enter(l.loop_token.span.start().line, &each, |v| {
+                v.visit_block(&l.body)
+            });
+        }
+        fn visit_expr_closure(&mut self, c: &'a verus_syn::ExprClosure) {
+            // In a `for`'s iterator, a closure runs per item: its body is
+            // inside that loop.
+            match self.iter_of.take() {
+                Some(line) => {
+                    let each = [c.body.to_token_stream()];
+                    self.enter(line, &each, |v| v.visit_expr(&c.body));
+                    self.iter_of = Some(line);
+                }
+                None => verus_syn::visit::visit_expr_closure(self, c),
+            }
+        }
+        fn visit_local(&mut self, l: &'a verus_syn::Local) {
+            // The name bound, through a type (`let s: T = ..`).
+            let mut pat = &l.pat;
+            while let verus_syn::Pat::Type(t) = pat {
+                pat = &t.pat;
+            }
+            // The whole initializer, whatever wraps a closure in it
+            // (`Box::new(..)`, `Some(..)`, `&`, parentheses): a call of the
+            // name loops where it loops or calls what loops. A name that is
+            // never called costs nothing.
+            if let (verus_syn::Pat::Ident(p), Some(init)) = (pat, &l.init) {
+                let mut inner = V {
+                    at: None,
+                    iter_of: None,
+                    shape: LoopShape::default(),
+                };
+                inner.visit_expr(&init.expr);
+                let mut calls = Vec::new();
+                direct_calls(init.expr.to_token_stream(), &mut calls);
+                self.shape
+                    .closures
+                    .push((p.ident.to_string(), inner.shape.loops, calls));
+            }
+            verus_syn::visit::visit_local(self, l);
+        }
+        fn visit_macro(&mut self, m: &'a verus_syn::Macro) {
+            if has_loop_word(m.tokens.clone()) {
+                let line = m
+                    .path
+                    .segments
+                    .first()
+                    .map_or(0, |s| s.ident.span().start().line);
+                self.enter(line, std::slice::from_ref(&m.tokens), |_| {});
+                // What the expansion nests is not read: the function is
+                // named (fails closed).
+                self.shape.macros.push(line);
+            }
+        }
+    }
+    let block = TokenTree::Group(proc_macro2::Group::new(
+        proc_macro2::Delimiter::Brace,
+        tokens,
+    ));
+    let Ok(block) = verus_syn::parse2::<verus_syn::Block>(block.into()) else {
+        return LoopShape {
+            unread: true,
+            ..LoopShape::default()
+        };
+    };
+    let mut v = V {
+        at: None,
+        iter_of: None,
+        shape: LoopShape::default(),
+    };
+    v.visit_block(&block);
+    let mut shape = v.shape;
+    shape.in_loop.sort();
+    shape.in_loop.dedup();
+    shape.nested.sort();
+    shape.nested.dedup();
+    shape
+}
+
+/// The nested-loop check (#76): each function of a shipped crate whose
+/// work a loop's `decreases` does not bound, with why: a loop inside
+/// another loop, or a call inside a loop to a function that loops, itself
+/// or through what it calls (each loop's iterations are bounded, but not
+/// the product). Calls are read as the recursion check reads them
+/// ([`recursive`]): by name within a file, a free function for a plain
+/// call and the function's own owner's for `self.f()` or `Self::f()`; a
+/// call across files, or through another receiver or path, is not seen.
+fn nested_loops(fns: &[FnRef], unshipped: &[String]) -> Vec<(usize, Vec<String>)> {
+    use std::collections::BTreeSet;
+    type Key<'a> = (&'a Path, &'a str, &'a str);
+    let key = |f: &FnRef, method: bool, name: &str| -> (PathBuf, String, String) {
+        (
+            f.file.clone(),
+            if method {
+                f.owner.clone()
+            } else {
+                String::new()
+            },
+            name.to_owned(),
+        )
+    };
+    // The functions that loop, themselves or through a call: a fixpoint
+    // over the direct calls, by name.
+    let mut looping: BTreeSet<Key> = fns
+        .iter()
+        .filter(|f| f.loops.loops || f.loops.unread)
+        .map(|f| (f.file.as_path(), f.owner.as_str(), f.name.as_str()))
+        .collect();
+    loop {
+        let before = looping.len();
+        for f in fns {
+            let me: Key = (&f.file, &f.owner, &f.name);
+            if looping.contains(&me) {
+                continue;
+            }
+            let calls_looping = f.calls.iter().any(|(m, c)| {
+                looping.contains(&(
+                    f.file.as_path(),
+                    if *m { f.owner.as_str() } else { "" },
+                    c.as_str(),
+                ))
+            });
+            if calls_looping {
+                looping.insert(me);
+            }
+        }
+        if looping.len() == before {
+            break;
+        }
+    }
+    let mut found = Vec::new();
+    for (i, f) in fns.iter().enumerate() {
+        if unshipped.contains(&f.krate) {
+            continue;
+        }
+        let mut why: Vec<String> = f
+            .loops
+            .nested
+            .iter()
+            .map(|l| format!("a loop at line {l} inside another"))
+            .collect();
+        if f.loops.unread {
+            why.push("a body the check cannot parse".to_owned());
+        }
+        why.extend(f.loops.macros.iter().map(|l| {
+            format!("a macro invocation at line {l} that holds a loop, whose nesting the check cannot read")
+        }));
+        // The function's `let` closures that loop, themselves, through a
+        // call of a function that loops, or through another such closure.
+        let mut closures: BTreeSet<&str> = BTreeSet::new();
+        loop {
+            let before = closures.len();
+            for (name, loops, calls) in &f.loops.closures {
+                let through = calls.iter().any(|(m, c)| {
+                    (!*m && closures.contains(c.as_str()))
+                        || looping.contains(&(
+                            f.file.as_path(),
+                            if *m { f.owner.as_str() } else { "" },
+                            c.as_str(),
+                        ))
+                });
+                if *loops || through {
+                    closures.insert(name);
+                }
+            }
+            if closures.len() == before {
+                break;
+            }
+        }
+        for (m, c, at) in &f.loops.in_loop {
+            if !*m && closures.contains(c.as_str()) {
+                why.push(format!(
+                    "a call to the closure `{c}`, which loops, inside the loop at line {at}"
+                ));
+                continue;
+            }
+            let (file, owner, name) = key(f, *m, c);
+            if looping.contains(&(file.as_path(), owner.as_str(), name.as_str())) {
+                why.push(format!(
+                    "a call to `{c}`, which loops, inside the loop at line {at}"
+                ));
+            }
+        }
+        if !why.is_empty() {
+            found.push((i, why));
+        }
+    }
+    found
+}
+
+/// The nested-loop check (`[loops]`, #76): exits 1 on each function
+/// [`nested_loops`] finds that `table`'s table does not name
+/// ([`documented`]), the work-bound theorem that bounds its product.
+fn check_loops(root: &Path, table: &str, fns: &[FnRef], unshipped: &[String]) {
+    let text = fs::read_to_string(root.join(table)).unwrap_or_default();
+    let mut failed = false;
+    for (i, why) in nested_loops(fns, unshipped) {
+        let f = &fns[i];
+        if documented(&text, f) {
+            continue;
+        }
+        failed = true;
+        eprintln!(
+            "FAIL loops: {}:{}: `{}` has {}, so its loops' `decreases` measures do not bound its work, but {table}'s table has no row naming its file and quoting `fn {}`",
+            f.file.display(),
+            f.line,
+            f.name,
+            why.join("; "),
+            f.name
+        );
+    }
+    if failed {
+        std::process::exit(1);
+    }
+}
+
 /// The recursion check: each function whose name lies on a cycle of direct calls
 /// ([`direct_calls`]) among the functions of its file, with the cycle, in the shipped crates. Verus
 /// checks recursion through verified functions (each needs a `decreases`
@@ -10503,6 +10838,246 @@ mod tests {
             .collect()
     }
 
+    /// What [`nested_loops`] finds in one file, `src`, as `name: why; ..`.
+    fn nesting(src: &str) -> Vec<String> {
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("lib.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        c.items(&parse_file(src).expect("parses").items, false);
+        assert_eq!(c.errors, 0, "{src}");
+        nested_loops(&c.fns, &[])
+            .into_iter()
+            .map(|(i, why)| format!("{}: {}", c.fns[i].name, why.join("; ")))
+            .collect()
+    }
+
+    /// The nested-loop check (#76): a loop in a loop, and a call in a loop
+    /// to a function that loops, itself or through a call, each with its
+    /// line; a single loop, loops one after another, and what only looks
+    /// like a loop (an `impl .. for`, `for<'a>`, a nested function's own
+    /// loop) are not.
+    #[test]
+    fn nested_loops_are_reported() {
+        // A work-bound mutant of a CRC table update: an inner loop that
+        // rescans the bytes before `i`, with its own `decreases`.
+        assert_eq!(
+            nesting(
+                "verus! {\nfn update_table(t: &mut [u32]) {\n    let mut i = 0;\n    while i < t.len()\n        invariant i <= t.len(),\n        decreases t.len() - i,\n    {\n        let mut j = 0;\n        while j < i\n            invariant j <= i,\n            decreases i - j,\n        {\n            j += 1;\n        }\n        i += 1;\n    }\n}\n}\n"
+            ),
+            ["update_table: a loop at line 9 inside another"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(a: &[u8]) {\n    for i in 0..a.len() {\n        for _ in 0..i {}\n    }\n}\n"
+            ),
+            ["f: a loop at line 3 inside another"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f() {\n    'o: loop {\n        while g() { break 'o; }\n    }\n}\nfn g() -> bool { true }\n"
+            ),
+            ["f: a loop at line 3 inside another"]
+        );
+        // A call in a loop, or in its header, to a function that loops,
+        // directly, through another call, or as `self.` or `Self::`.
+        assert_eq!(
+            nesting(
+                "fn g(n: u32) { for _ in 0..n {} }\nfn f() {\n    for _ in 0..4 {\n        g(3);\n    }\n}\n"
+            ),
+            ["f: a call to `g`, which loops, inside the loop at line 3"]
+        );
+        assert_eq!(
+            nesting(
+                "fn h() { for _ in 0..2 {} }\nfn g() { h() }\nfn f() {\n    loop { g(); break; }\n}\n"
+            ),
+            ["f: a call to `g`, which loops, inside the loop at line 4"]
+        );
+        // Through two calls, written before what they call (a fixpoint, not
+        // one pass).
+        assert_eq!(
+            nesting(
+                "fn f() {\n    loop { g(); break; }\n}\nfn g() { k() }\nfn k() { h() }\nfn h() { for _ in 0..2 {} }\n"
+            ),
+            ["f: a call to `g`, which loops, inside the loop at line 2"]
+        );
+        assert_eq!(
+            nesting("fn g() -> bool { for _ in 0..2 {} true }\nfn f() {\n    while g() {}\n}\n"),
+            ["f: a call to `g`, which loops, inside the loop at line 3"]
+        );
+        assert_eq!(
+            nesting(
+                "struct S;\nimpl S {\n    fn g(&self) { for _ in 0..2 {} }\n    fn f(&self) {\n        for _ in 0..2 { self.g(); Self::g(self) }\n    }\n}\n"
+            ),
+            ["f: a call to `g`, which loops, inside the loop at line 5"]
+        );
+        // Not: one loop, loops in sequence, a call in a loop to a function
+        // that does not loop, a call outside any loop to one that does.
+        assert!(nesting("fn f(n: u32) { for _ in 0..n {} let mut i = 0; while i < n { i += 1; } loop { break; } }").is_empty());
+        assert!(nesting("fn g() -> u8 { 1 }\nfn f() { for _ in 0..2 { g(); } }").is_empty());
+        assert!(
+            nesting("fn g() { for _ in 0..2 {} }\nfn f() { g(); for _ in 0..2 {} }").is_empty()
+        );
+        // Not loops: an `impl .. for` and a `for<'a>` inside a loop, and a
+        // nested function's own loop beside one.
+        assert!(nesting("fn f() { for _ in 0..2 { struct A; impl Clone for A { fn clone(&self) -> A { A } } } }").is_empty());
+        assert!(
+            nesting("fn f() { for _ in 0..2 { let _g: &dyn for<'a> Fn(&'a u8) = &|_| {}; } }")
+                .is_empty()
+        );
+        assert!(nesting("fn f() { fn inner() { for _ in 0..2 {} } for _ in 0..2 {} }").is_empty());
+        assert!(nesting("fn f() { for _ in 0..2 { fn inner() { for _ in 0..2 {} } } }").is_empty());
+        // Found in review: a fn-pointer type is no nested item, and a
+        // header may hold a brace group (`unsafe`, a block, `match`).
+        assert_eq!(
+            nesting(
+                "fn id(x: u32) -> u32 { x }\nfn f(n: u32) {\n    let _g: fn(u32) -> u32 = id;\n    let _h = id as fn(u32) -> u32;\n    for i in 0..n {\n        for _ in 0..i {}\n    }\n}\n"
+            ),
+            ["f: a loop at line 6 inside another"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(p: *const u8, n: usize) {\n    for b in unsafe { core::slice::from_raw_parts(p, n) } {\n        for _ in 0..*b {}\n    }\n}\n"
+            ),
+            ["f: a loop at line 3 inside another"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(n: u32) {\n    let mut i = 0;\n    while { i += 1; i < n } {\n        for _ in 0..i {}\n    }\n}\n"
+            ),
+            ["f: a loop at line 4 inside another"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(s: u8) {\n    while match s { 0 => true, _ => false } {\n        loop { break; }\n    }\n}\n"
+            ),
+            ["f: a loop at line 3 inside another"]
+        );
+        // A closure bound by `let` whose body loops, called in a loop.
+        assert_eq!(
+            nesting(
+                "fn f(n: u32) {\n    let scan = |m: u32| { for _ in 0..m {} };\n    for i in 0..n {\n        scan(i);\n    }\n}\n"
+            ),
+            ["f: a call to the closure `scan`, which loops, inside the loop at line 3"]
+        );
+        // A closure that loops through a call, or through another closure,
+        // and one bound with a type or behind a `&` (found in review).
+        assert_eq!(
+            nesting(
+                "fn g(n: u32) { for _ in 0..n {} }\nfn f(n: u32) {\n    let s = |m: u32| g(m);\n    for i in 0..n {\n        s(i);\n    }\n}\n"
+            ),
+            ["f: a call to the closure `s`, which loops, inside the loop at line 4"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(n: u32) {\n    let a = |m: u32| { for _ in 0..m {} };\n    let b = |m: u32| a(m);\n    for i in 0..n {\n        b(i);\n    }\n}\n"
+            ),
+            ["f: a call to the closure `b`, which loops, inside the loop at line 4"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(n: u32) {\n    let s: &dyn Fn(u32) = &|m: u32| { for _ in 0..m {} };\n    let t: fn(u32) = |m: u32| { for _ in 0..m {} };\n    for i in 0..n {\n        s(i);\n        t(i);\n    }\n}\n"
+            ),
+            [
+                "f: a call to the closure `s`, which loops, inside the loop at line 4; a call to the closure `t`, which loops, inside the loop at line 4"
+            ]
+        );
+        // Whatever wraps the closure (found in review).
+        assert_eq!(
+            nesting(
+                "fn f(n: u32) {\n    let s = Box::new(|m: u32| { for _ in 0..m {} });\n    let t = (&|m: u32| { for _ in 0..m {} });\n    for i in 0..n {\n        s(i);\n        t(i);\n    }\n}\n"
+            ),
+            [
+                "f: a call to the closure `s`, which loops, inside the loop at line 4; a call to the closure `t`, which loops, inside the loop at line 4"
+            ]
+        );
+        // A closure that does not loop, called in a loop, is no finding.
+        assert!(
+            nesting("fn f(n: u32) { let s = |m: u32| m + 1; for i in 0..n { s(i); } }").is_empty()
+        );
+        // A closure in a `for`'s iterator runs per item (found in review).
+        assert_eq!(
+            nesting(
+                "fn g(n: u8) { for _ in 0..n {} }\nfn f(v: &[u8]) {\n    for _ in v.iter().map(|b| g(*b)) {}\n}\n"
+            ),
+            ["f: a call to `g`, which loops, inside the loop at line 3"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(v: &[u8]) {\n    for _ in v.iter().map(|b| {\n        let mut k = 0;\n        while k < *b { k += 1; }\n        k\n    }) {}\n}\n"
+            ),
+            ["f: a loop at line 4 inside another"]
+        );
+        // A macro invocation in a loop that holds a loop keyword.
+        assert_eq!(
+            nesting("fn f() {\n    for _ in 0..2 {\n        run! { while true {} }\n    }\n}\n"),
+            [
+                "f: a loop at line 3 inside another; a macro invocation at line 3 that holds a loop, whose nesting the check cannot read"
+            ]
+        );
+        // Nesting wholly inside a macro invocation is not read, so the
+        // function is named (found in review).
+        assert_eq!(
+            nesting("fn f(n: usize) {\n    run! { for i in 0..n { for _ in 0..i {} } }\n}\n"),
+            [
+                "f: a macro invocation at line 2 that holds a loop, whose nesting the check cannot read"
+            ]
+        );
+        // A `for`'s iterator runs once: a looping call there is outside
+        // the loop.
+        assert!(
+            nesting("fn g() -> u32 { for _ in 0..2 {} 2 }\nfn f() { for _ in g()..9 {} }")
+                .is_empty()
+        );
+        // A body that does not parse is unread, and fails closed.
+        let shape = loop_shape("let = ;".parse().unwrap());
+        assert!(shape.unread, "{shape:?}");
+        let fn_ref = |name: &str, calls: Vec<(bool, String)>, loops: LoopShape| FnRef {
+            krate: "k".into(),
+            file: PathBuf::from("lib.rs"),
+            line: 1,
+            owner: String::new(),
+            name: name.into(),
+            class: Class::Outside,
+            calls,
+            loops,
+            body: inputs::Body::default(),
+            params: 0,
+            receiver: false,
+            entry: false,
+        };
+        let g = fn_ref("g", Vec::new(), shape);
+        let found = nested_loops(std::slice::from_ref(&g), &[]);
+        assert_eq!(
+            found,
+            [(0, vec!["a body the check cannot parse".to_owned()])]
+        );
+        // An unread callee counts as one that loops, so a caller that calls
+        // it in a loop is named too (found in review).
+        let f = fn_ref(
+            "f",
+            vec![(false, "g".into())],
+            LoopShape {
+                loops: true,
+                in_loop: vec![(false, "g".into(), 2)],
+                ..LoopShape::default()
+            },
+        );
+        let found = nested_loops(&[g, f], &[]);
+        assert_eq!(
+            found,
+            [
+                (0, vec!["a body the check cannot parse".to_owned()]),
+                (
+                    1,
+                    vec!["a call to `g`, which loops, inside the loop at line 2".to_owned()]
+                )
+            ]
+        );
+    }
+
     #[test]
     fn recursion_outside_verus_is_reported() {
         // Positive: direct, through `Self::` and `self.`, and mutual.
@@ -11189,6 +11764,7 @@ fn uncalled() {
             name: "walk".into(),
             class: Class::Verified,
             calls: Vec::new(),
+            loops: LoopShape::default(),
             body: inputs::Body::default(),
             params: 0,
             receiver: false,

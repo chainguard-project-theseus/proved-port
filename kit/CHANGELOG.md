@@ -143,6 +143,14 @@ where it reports drift.
   a re-export the counter does not follow fails the run. It counted
   nothing. No port's run changes (each port's counter output, `--list`
   included, is identical before and after).
+- A new check, on with `[loops] table = FILE` (#76; README "Nested
+  loops"): the run fails on each function of a shipped crate that
+  nests a loop inside another, or calls from inside a loop a function
+  that loops (by name within its file, as `[recursion]` reads calls),
+  unless FILE's table names its file and quotes `fn NAME`: the
+  work-bound theorem's row that bounds the product. A port with no
+  `[loops]` section runs as before; removing the section after a base
+  revision has it fails a `--base-rev` run, as for the other gates.
 
 ## 0.4.5
 

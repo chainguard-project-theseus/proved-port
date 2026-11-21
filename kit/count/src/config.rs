@@ -28,6 +28,8 @@ pub(crate) struct Config {
     pub(crate) seams: Seams,
     /// The recursion check (`recursive`), on when present.
     pub(crate) recursion: Option<Recursion>,
+    /// The nested-loop check (`nested_loops`, #76), on when present.
+    pub(crate) loops: Option<Loops>,
     /// The entry-point reachability gate ([`crate::reach`]), on when
     /// present.
     pub(crate) reach: Option<Reach>,
@@ -196,6 +198,15 @@ pub(crate) struct Seams {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Recursion {
     /// The file whose table names each verified recursive function.
+    pub(crate) table: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Loops {
+    /// The file whose table names each shipped function that nests a loop
+    /// in a loop, or calls one that loops from inside a loop (a work-bound
+    /// theorem's, which bounds the product).
     pub(crate) table: String,
 }
 
@@ -658,6 +669,7 @@ impl Config {
                 self.recursion.is_some(),
                 base.recursion.is_some(),
             ),
+            ("loops", self.loops.is_some(), base.loops.is_some()),
             ("reach", self.reach.is_some(), base.reach.is_some()),
             ("inputs", self.inputs.is_some(), base.inputs.is_some()),
             ("mints", self.mints.is_some(), base.mints.is_some()),
@@ -1202,6 +1214,8 @@ verus_never_sets = ["miri"]
 stand_ins = [["assert::", "assrtx::"]]
 [recursion]
 table = "verus/theorems/RN1.md"
+[loops]
+table = "verus/theorems/WORK1.md"
 [reach]
 path = "verus/REACH"
 exports_macro = "exports"
@@ -1292,7 +1306,7 @@ home = "crates/pcre2-capi/src/object.rs"
         // No base gate: nothing to narrow.
         let bare = Config::parse(&section("crates")).expect("parses");
         assert!(base.narrowed_from(&bare).is_empty());
-        for name in ["recursion", "reach", "inputs", "mints", "badge"] {
+        for name in ["recursion", "loops", "reach", "inputs", "mints", "badge"] {
             let got = shown(&edit(&section(name), "").narrowed_from(&base));
             let want = format!("the [{name}] section is gone, so its gate no longer runs");
             assert_eq!(

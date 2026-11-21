@@ -3952,6 +3952,69 @@ fn list_rows(out: &str) -> Vec<(String, String, String, String)> {
         .collect()
 }
 
+/// The nested-loop check (`[loops]`, #76): with the section, a shipped
+/// function that nests a loop, or calls one that loops from inside a
+/// loop, fails the run until the table names its file and quotes
+/// `fn NAME`; a crate that does not ship is not read; without the section
+/// nothing is checked.
+#[test]
+fn a_nested_loop_needs_a_work_bound_row() {
+    let lib = "pub fn f(a: &[u8]) -> usize {\n    let mut n = 0;\n    for i in 0..a.len() {\n        for _ in 0..i {\n            n += 1;\n        }\n    }\n    n\n}\nfn g() { for _ in 0..2 {} }\npub fn h() {\n    loop { g(); break; }\n}\n";
+    let dir = crate_of("loops", &[("lib.rs", lib)]);
+    let (got, _, err) = count(&dir, &[]);
+    assert!(
+        got == 0 && !err.contains("FAIL loops"),
+        "off: got = exit {got}, {err:?}"
+    );
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}[loops]\ntable = \"verus/WORK1.md\"\n"),
+    )
+    .expect("write");
+    let (got, _, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains("FAIL loops: crates/a/src/lib.rs:1: `f` has a loop at line 4 inside another")
+            && err.contains("FAIL loops: crates/a/src/lib.rs:11: `h` has a call to `g`, which loops, inside the loop at line 12")
+            && err.contains("verus/WORK1.md's table has no row naming its file and quoting `fn f`"),
+        "no rows: got = exit {got}, {err:?}"
+    );
+    // One row: the other still fails.
+    fs::write(
+        dir.join("verus/WORK1.md"),
+        "| function | file | bound |\n|---|---|---|\n| `fn f` | `crates/a/src/lib.rs` | n^2 |\n",
+    )
+    .expect("write");
+    let (got, _, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && !err.contains("`f` has") && err.contains("`h` has"),
+        "one row: got = exit {got}, {err:?}"
+    );
+    fs::write(
+        dir.join("verus/WORK1.md"),
+        "| function | file | bound |\n|---|---|---|\n| `fn f` | `crates/a/src/lib.rs` | n^2 |\n| `fn h` | `crates/a/src/lib.rs` | 2 |\n",
+    )
+    .expect("write");
+    let (got, _, err) = count(&dir, &[]);
+    assert!(
+        got == 0 && !err.contains("FAIL loops"),
+        "both rows: got = exit {got}, {err:?}"
+    );
+    // A crate that does not ship is not read.
+    fs::write(dir.join("verus/WORK1.md"), "").expect("write");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n[package.metadata.verus]\nverify = true\n",
+    )
+    .expect("write");
+    let (got, _, err) = count(&dir, &[]);
+    assert!(
+        got == 0 && !err.contains("FAIL loops"),
+        "unshipped: got = exit {got}, {err:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A crate `a` with `files` (path under `src/` and text) and `PLAIN`.
 fn crate_of(name: &str, files: &[(&str, &str)]) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("verus-count-cli-{name}-{}", std::process::id()));
