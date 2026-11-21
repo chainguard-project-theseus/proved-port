@@ -30,19 +30,29 @@ checks:
       - name: fuzz workspace
         cmd: [env, CARGO_TARGET_DIR=target/fuzz, cargo, clippy, --locked, --manifest-path, fuzz/Cargo.toml, --all-targets, --, -D, warnings]
 
+  # The unsafe rule is the kit's (`make lint-unsafe`, whose
+  # UNSAFE_CRATES the Makefile sets), so this check pins
+  # theseus-proved-port as verus.yaml does (bump both together), and
+  # cargo check resolves the registry. make lint-unsafe does not check
+  # SAFETY: comments: the clippy check does, once {CAPI_CRATE}'s lints
+  # set clippy's undocumented_unsafe_blocks to deny (the templates
+  # README says where). A rule of the port's own (its own SAFETY: check,
+  # a budget of unsafe blocks) is a step after `make lint-unsafe`, in a
+  # script under ci/.
   source-rules:
     description: >-
-      Every crate but {CAPI_CRATE} is #![forbid(unsafe_code)] and every
-      unsafe block in {CAPI_CRATE} has a SAFETY: comment
-      (ci/lint-unsafe.sh); the vendored headers define every macro exactly
-      as {LIBRARY} {UPSTREAM_VERSION} does (ci/header-check.sh).
+      Every crate but {CAPI_CRATE} forbids unsafe code (make lint-unsafe);
+      the vendored headers define every macro exactly as {LIBRARY}
+      {UPSTREAM_VERSION} does (ci/header-check.sh).
     trigger: [presubmit, postsubmit]
-    timeout: 5m
+    resources: medium
+    timeout: 15m
     environment:
-      packages: [busybox, {REFERENCE_PACKAGES}]
+      packages: [{RUST_STREAM}, build-base, busybox, make, theseus-proved-port~{KIT_VERSION}, {REFERENCE_PACKAGES}]
+    network: *crates
     steps:
-      - name: unsafe confinement and SAFETY comments
-        cmd: [sh, ci/lint-unsafe.sh]
+      - name: unsafe confinement
+        cmd: [make, lint-unsafe]
       - name: header constants
         cmd: [sh, ci/header-check.sh]
 

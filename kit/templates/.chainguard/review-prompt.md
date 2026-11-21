@@ -26,7 +26,7 @@ a change cites. The checks below are what a change must not get wrong.
   lines. A new line needs a reason that cites an active `ABI-nnn` entry; a
   line that hides a regression is Blocking.
 - `unsafe` and the FFI boundary (`{CAPI_CRATE}`). Every other crate is
-  `#![forbid(unsafe_code)]` (`ci/lint-unsafe.sh`). For each touched
+  `#![forbid(unsafe_code)]` (`make lint-unsafe`). For each touched
   `unsafe` block, check for a `SAFETY:` comment naming the caller contract
   it relies on, and for a check before the operation (a NULL check, a
   handle's magic, a length bound). Any `unsafe` outside `{CAPI_CRATE}`, or
