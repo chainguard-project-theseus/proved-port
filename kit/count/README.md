@@ -165,11 +165,16 @@ path is read, and a base without the file prints `ok ...: REV has no
 ... to compare with`. A crate read twice, under one name or from one
 directory, fails the run (exit 2): the tally goes by name. So does a
 `[crates]` `dir` or member `path` that is not relative, has a `..` or
-passes through a symlink, and a crate whose directory, `src/`, or any
-file or directory under `src/` is a symlink (exit 2), since the base
-comparison matches crates by path and another spelling of a directory,
-or another crate's sources reached through a link, would pass for a new
-crate.
+passes through a symlink, and a crate whose directory or `src/` is a
+symlink, or with a symlink under `src/` that the source walk reads
+through (one named `*.rs`, or one to a directory holding a `.rs` file or
+a cycle at any depth, or one whose target, or anything under it, the
+counter cannot stat, resolve or list, such as a link loop; a dangling
+link is passed over) (exit 2), since the base comparison matches crates
+by path and another spelling of a directory, or another crate's sources
+reached through a link, would pass for a new crate. Any other link
+under `src/` (a `LICENSE`, a `locales` directory of `.ftl` files) is
+not a source and is passed over.
 [configs/pcre2.toml](configs/pcre2.toml) and
 [configs/challoc.toml](configs/challoc.toml) are complete examples.
 
