@@ -88,6 +88,12 @@ where it reports drift.
   so a stale one from a manual `cargo kani list` would have stood for
   a crate whose listing wrote nothing. Kani 0.68.0 writes the file on
   every listing, so a port sees no change.
+- The counter's git calls ignore `GIT_LITERAL_PATHSPECS`,
+  `GIT_GLOB_PATHSPECS`, `GIT_NOGLOB_PATHSPECS` and
+  `GIT_ICASE_PATHSPECS` in its environment (#117). With
+  `GIT_GLOB_PATHSPECS=1` or `GIT_LITERAL_PATHSPECS=1`, the search for
+  the base's configuration (#89) found nothing, so a moved `--config`
+  was compared with nothing.
 
 ## 0.4.5
 

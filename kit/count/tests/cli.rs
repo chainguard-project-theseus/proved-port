@@ -71,6 +71,21 @@ fn count(root: &Path, args: &[&str]) -> (i32, String, String) {
     )
 }
 
+/// [`count`] with the environment variables `env` set.
+fn count_env(root: &Path, env: &[(&str, &str)], args: &[&str]) -> (i32, String, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_verus-count"))
+        .envs(env.iter().copied())
+        .args(args)
+        .arg(root)
+        .output()
+        .expect("runs");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
 /// The counter run with `args` alone, no ROOT: its exit code, standard
 /// output and standard error.
 fn run(args: &[&str]) -> (i32, String, String) {
@@ -424,6 +439,27 @@ fn a_moved_configuration_is_held_to_the_base_one() {
             fs::remove_file(file).expect("rm");
         }
     }
+    // Git's pathspec variables do not reach the search (#117): under each,
+    // the base's verus/other.toml is still found, and the dropped
+    // `[mints]` still fails. GIT_ICASE_PATHSPECS, which this base cannot
+    // show, has a test of its own below.
+    fs::write(&moved, PLAIN).expect("write");
+    for var in [
+        "GIT_GLOB_PATHSPECS",
+        "GIT_LITERAL_PATHSPECS",
+        "GIT_NOGLOB_PATHSPECS",
+    ] {
+        let (got, out, err) = count_env(
+            &dir,
+            &[(var, "1")],
+            &["--base-rev", "elsewhere", "--config", moved.as_str()],
+        );
+        let want = "where elsewhere:verus/other.toml runs it";
+        assert!(
+            got == 1 && err.contains(want),
+            "{var}=1: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+        );
+    }
     // A base configuration whose name is not UTF-8 cannot be read back,
     // so the run fails (exit 2) rather than pass it over.
     #[cfg(unix)]
@@ -445,6 +481,33 @@ fn a_moved_configuration_is_held_to_the_base_one() {
         );
     }
     let _ = fs::remove_file(&outside);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// GIT_ICASE_PATHSPECS does not reach the search (#117): a base whose one
+/// configuration is `verus/cargo.toml`, which only a case-folded match
+/// takes for a `Cargo.toml` and excludes, is still found under it, so its
+/// dropped `[mints]` fails, as it does with no variable set.
+#[test]
+fn a_case_folded_pathspec_does_not_hide_a_base_configuration() {
+    let dir = repository("icase");
+    fs::remove_file(dir.join("verus/count.toml")).expect("rm");
+    fs::write(dir.join("verus/cargo.toml"), GATED).expect("write");
+    git(&dir, &["add", "-A", "verus"]);
+    git(&dir, &["commit", "-q", "-m", "lower"]);
+    git(&dir, &["tag", "lower"]);
+    let moved = dir.join("verus/count2.toml");
+    fs::write(&moved, PLAIN).expect("write");
+    let moved = moved.to_str().expect("utf-8");
+    let icase: &[(&str, &str)] = &[("GIT_ICASE_PATHSPECS", "1")];
+    for env in [&[][..], icase] {
+        let (got, out, err) = count_env(&dir, env, &["--base-rev", "lower", "--config", moved]);
+        let want = "where lower:verus/cargo.toml runs it";
+        assert!(
+            got == 1 && err.contains(want),
+            "{env:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+        );
+    }
     let _ = fs::remove_dir_all(&dir);
 }
 
