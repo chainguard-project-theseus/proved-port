@@ -58,6 +58,16 @@ where it reports drift.
   latest first, as it does for one file's own. No port's run changes
   (each port's counter output, `--list` included, is identical before
   and after).
+- The counter classes a file from every reading that may compile it
+  (#47): the declarations of both readings of where a file's modules
+  live (a lib.rs or main.rs that is a module declares them under
+  `stem/`), and for a crate root its own target. A file only the other
+  reading reaches without a guard, or a binary root the library
+  declares as a module under `cfg(test)`, was classed test-only, and
+  its functions left the denominator; they now count. The other reading
+  may be one no target makes, so a file it names is unsure through it:
+  counted, never verified. No port's run changes (each port's counter
+  output, `--list` included, is identical before and after).
 
 ## 0.4.5
 

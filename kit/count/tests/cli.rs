@@ -2061,6 +2061,121 @@ fn an_unread_module_file_of_the_other_reading_fails_the_run() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A file is classed from every reading that may compile it (#47): one
+/// that only the other reading of a lib.rs that is a module (`a::lib`,
+/// whose `mod child;` is `a/lib/child.rs`) reaches without a guard is
+/// shipped, though the primary reading names it only under `cfg(test)`;
+/// and a binary root is shipped, though the library declares it as a
+/// module under `cfg(test)`.
+#[test]
+fn a_file_is_classed_from_every_reading_that_compiles_it() {
+    let tree = |name: &str| {
+        let dir = crate_of(name, &[]);
+        let src = dir.join("crates/a/src");
+        (dir, src)
+    };
+    let (dir, src) = tree("every-reading-alternate");
+    fs::create_dir_all(src.join("a/lib")).expect("mkdir");
+    fs::write(
+        src.join("lib.rs"),
+        "mod a;\n#[cfg(test)]\n#[path = \"a/lib/child.rs\"]\nmod test_child;\n",
+    )
+    .expect("write");
+    fs::write(src.join("a/mod.rs"), "mod lib;\n").expect("write");
+    fs::write(src.join("a/lib.rs"), "mod child;\n").expect("write");
+    fs::write(src.join("a/lib/child.rs"), "pub fn shipped_fn() {}\n").expect("write");
+    let (got, out, err) = count(&dir, &["--list"]);
+    let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+    assert!(
+        got == 0 && names == ["shipped_fn"],
+        "alternate: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, [\"shipped_fn\"]"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    let (dir, src) = tree("every-reading-root");
+    fs::write(src.join("lib.rs"), "#[cfg(test)]\nmod main;\n").expect("write");
+    fs::write(src.join("main.rs"), "pub fn helper() {}\nfn main() {}\n").expect("write");
+    let (got, out, err) = count(&dir, &["--list"]);
+    let mut names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+    names.sort();
+    assert!(
+        got == 0 && names == ["helper", "main"],
+        "root: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, [\"helper\", \"main\"]"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // The other reading may be one no target makes: a stray `src/lib/foo.rs`
+    // beside a root lib.rs's `mod foo;`, or `src/b.rs` beside `src/a.rs`'s
+    // `mod b;` where lib.rs declares `b` only for tests. Each is counted as
+    // unsure through that reading, never verified.
+    for (case, files) in [
+        (
+            "stray lib/foo.rs",
+            &[
+                ("lib.rs", "mod foo;\n"),
+                ("foo.rs", ""),
+                ("lib/foo.rs", "verus! { pub fn b() {} }\n"),
+            ][..],
+        ),
+        (
+            "a.rs's mod b; read beside a.rs",
+            &[
+                ("lib.rs", "mod a;\n#[cfg(test)]\nmod b;\n"),
+                ("a.rs", "mod b;\n"),
+                ("a/b.rs", ""),
+                ("b.rs", "verus! { pub fn b() {} }\n"),
+            ][..],
+        ),
+        // Named by no primary declaration, and by the other reading only
+        // under `cfg(test)`: it keeps the fallback of a file nothing
+        // declares (here `include!` compiles it).
+        (
+            "only a test-only alternate names it",
+            &[
+                ("lib.rs", "mod parser;\ninclude!(\"tables.rs\");\n"),
+                ("parser.rs", "#[cfg(test)]\nmod tables;\n"),
+                ("parser/tables.rs", ""),
+                ("tables.rs", "pub fn b() {}\n"),
+            ][..],
+        ),
+    ] {
+        let (dir, src) = tree("every-reading-stray");
+        for (path, text) in files {
+            if let Some(parent) = src.join(path).parent() {
+                fs::create_dir_all(parent).expect("mkdir");
+            }
+            fs::write(src.join(path), text).expect("write");
+        }
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<(String, String)> = list_rows(&out).into_iter().map(|r| (r.0, r.2)).collect();
+        assert!(
+            got == 0
+                && rows.iter().any(|(_, name)| name == "b")
+                && rows.iter().all(|(class, _)| class != "Verified"),
+            "{case}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, `b` counted, nothing Verified"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // One the primary reading declares only for tests, and the other
+    // reading too, stays test-only: the fallback is for a file the
+    // primary reading does not declare.
+    let (dir, src) = tree("every-reading-test-only");
+    fs::create_dir_all(src.join("parser")).expect("mkdir");
+    for (path, text) in [
+        ("lib.rs", "mod parser;\n#[cfg(test)]\nmod tables;\n"),
+        ("parser.rs", "#[cfg(test)]\nmod tables;\n"),
+        ("parser/tables.rs", ""),
+        ("tables.rs", "pub fn t() {}\n"),
+    ] {
+        fs::write(src.join(path), text).expect("write");
+    }
+    let (got, out, err) = count(&dir, &["--list"]);
+    let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+    assert!(
+        got == 0 && names.is_empty(),
+        "test-only in both readings: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, no rows"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A head that turns verus/count.toml, or the directory above it, into a
 /// symlink to a configuration without `[reach]` or `[mints]` exits 2,
 /// rather than comparing a path the base does not have.

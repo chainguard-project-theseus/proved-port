@@ -242,7 +242,17 @@ nested to any depth (`cfg_attr(P, cfg_attr(R, ..))` applies under
 cfg(Q))]` counts as the `cfg` `any(not(P), Q)`. Every `cfg` a function is under, its own and those
 around it, is read as one conjunction. A file declared more than once
 (`#[cfg(target_os = "linux")] #[path = "unix.rs"] mod sys;` beside the
-same for macos) is built where any declaration holds. A file a `#[path]`
+same for macos) is built where any declaration holds, under either
+reading of where the declaring file's modules live (a lib.rs that is a
+module, `a::lib`, declares `mod child;` as `a/lib/child.rs`), and a
+root is built by its own target whatever declares it as a module
+(`#[cfg(test)] mod main;` in lib.rs leaves the binary shipped). The
+other reading may be one no target makes (a root lib.rs's `mod foo;`
+read as `src/lib/foo.rs`), so a file it names is unsure through it: it
+counts, but never as verified. Those readings only widen where a file
+is built: one no declaration of the primary reading names is unsure
+as a file nothing declares is (an `include!` may compile it), whatever
+the other reading's declarations need. A file a `#[path]`
 names declares its modules beside it, as a `mod.rs` does. A
 `#[cfg_attr(P, path = "..")]` names the module's file where `P` holds
 and no earlier path attribute applies, as rustc takes the first in
