@@ -569,16 +569,23 @@ by a bare
 name takes the last definition of that name before it in its file whose
 module the invocation is in (a definition in a module that has closed
 is out of scope, unless `#[macro_use]` carries it out; one at the top
-of a file a `#[macro_use] mod name;` here declares, or that such a file
-carries in the same way, stands at that `mod`'s line, then at each
+of a file a `#[macro_use] mod name;` here declares (directly, or inside
+inline `#[macro_use]` modules), or that such a file carries in the
+same way, one an expansion writes at such a file's top (or in inline
+`#[macro_use]` modules there) included,
+stands at that `mod`'s line, then at each
 inner `mod`'s line along the chain, then at its own, compared in that
 order; the order within one line is not read, so one on the line of
 a `mod` that carries another in, or two carried in by two `mod`s on
 one line, are not ordered against each other, and both are taken; one
 a `mod` on the invocation's own line carries in is taken beside the
 others, and ends none of them, as is one carried in through a module
-several `mod`s declare under `cfg`s, from the first of them on), and,
-while that
+several `mod`s declare under `cfg`s, from the first of them on; the
+counter reads files in path order, so an invocation that one an
+expansion writes in a file read after the invocation's may reach (a
+carried one from its `mod` on, or one whose scope holds the
+invocation's module, from any other file) fails the run), and, while
+that
 one is under a `cfg` the counter cannot settle (a platform or a
 feature) and so may not be built, each before it back to the first
 under no such `cfg`. In code a shipped build compiles, a definition

@@ -17,6 +17,20 @@ where it reports drift.
 
 ### Changes
 
+- Two more shapes of a carried `macro_rules!` (#134). One at the top of
+  a file whose `#[macro_use] mod name;` sits inside an inline
+  `#[macro_use]` module is carried out through that module too, so it
+  shadows an earlier definition of its name after the module; it was
+  in scope only inside the module, and what it writes was in no count.
+  One an expansion writes at the top of a carried file, or in an inline
+  `#[macro_use]` module, is carried as one written there; it was in
+  scope in its own file, or its own module, alone. The counter reads
+  files in path order, and an invocation a definition an expansion
+  writes may reach (a carried one from its `mod` on, or any in a file
+  of a module in its scope), in a file read before the definition's,
+  fails the run with "may expand the `macro_rules! NAME` that an
+  expansion writes at FILE:LINE": write that `macro_rules!` outside the
+  macro.
 - A `macro_rules!` under a `cfg` that a shipped build may not meet
   where the invocation is built no longer shadows the definition of its
   name before it (#26). A `verus_sets` atom (`feature = "jit"`, or one

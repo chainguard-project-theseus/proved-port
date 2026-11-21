@@ -358,6 +358,20 @@ struct Counter {
     /// ([`Counter::walk_crate`]), so that no function the crate's macro
     /// writes leaves the tally for a lookup the counter does not follow.
     unresolved: Vec<(String, String)>,
+    /// The invocations that resolved to some definition, each with where
+    /// it is, its module, its outermost invocation's line and its name:
+    /// once the crate is read, one a `macro_rules!` that an expansion in a
+    /// file read later writes, carried in by a `#[macro_use] mod`, may
+    /// reach fails the run ([`Counter::walk_crate`]).
+    invoked: Vec<Invoked>,
+    /// The file being walked: its module, and the scope and
+    /// [`MacroDef::carried_at`] a definition at its top has, which a
+    /// `macro_rules!` an expansion writes there takes.
+    carry: Carry,
+    /// While the walk is in inline modules of the file: whether each, from
+    /// the outermost, has `#[macro_use]`, for a `macro_rules!` an
+    /// expansion writes there.
+    inline_macro_use: Vec<bool>,
     /// Every module of the crate, by path from its root, so that a `use`
     /// path whose first segment is one of them reads as this crate's.
     modules: std::collections::BTreeSet<Vec<String>>,
@@ -528,6 +542,9 @@ impl Counter {
             uses: BTreeMap::new(),
             dry: None,
             unresolved: Vec::new(),
+            invoked: Vec::new(),
+            carry: Default::default(),
+            inline_macro_use: Vec::new(),
             modules: std::collections::BTreeSet::new(),
             proof_trees: Vec::new(),
             macro_use: Vec::new(),
@@ -3256,11 +3273,13 @@ impl Counter {
                     {
                         let was = self.enter(built, &m.attrs);
                         self.module.push(m.ident.to_string());
+                        self.inline_macro_use.push(has_attr(&m.attrs, "macro_use"));
                         let instance =
                             mod_instance(&self.file, self.expansion, m.ident.span().start());
                         let outer = std::mem::replace(&mut self.scope, instance);
                         self.items(inner, in_verus);
                         self.scope = outer;
+                        self.inline_macro_use.pop();
                         self.module.pop();
                         self.leave(was);
                     } else if built != Built::Test
@@ -3421,6 +3440,24 @@ impl Counter {
                         .map(ToString::to_string)
                         .unwrap_or_default();
                     let file = self.file.clone();
+                    // Its scope ends with the innermost module around it
+                    // without `#[macro_use]`; where every one up to the
+                    // file's top has it, it is carried out as one written
+                    // at the top is.
+                    let through = self
+                        .inline_macro_use
+                        .iter()
+                        .rev()
+                        .take_while(|u| **u)
+                        .count();
+                    let (scope, carried_at, split) = if through == self.inline_macro_use.len()
+                        && self.module.starts_with(&self.carry.0)
+                    {
+                        (self.carry.1.clone(), self.carry.2.clone(), self.carry.3)
+                    } else {
+                        let keep = self.module.len().saturating_sub(through);
+                        (self.module[..keep].to_vec(), Vec::new(), false)
+                    };
                     let mut def = macro_def(
                         m,
                         &DefsAt {
@@ -3432,9 +3469,9 @@ impl Counter {
                                 (true, true) => Built::Shipped,
                             },
                             guards: self.guards.clone(),
-                            scope: self.module.clone(),
-                            carried_at: Vec::new(),
-                            split: false,
+                            scope,
+                            carried_at,
+                            split,
                         },
                         &self.atoms,
                         true,
@@ -3523,6 +3560,9 @@ impl Counter {
         // The modules a `#[macro_use] mod name;` declares, whose textual
         // scope carries on into the module that declares them.
         let mut carried = Carried::new();
+        // The inline modules' declarations: the scope of a file `mod` one
+        // with `#[macro_use]` declares carries on outward through it.
+        let mut inline_carried = InlineMods::new();
         self.modules.clear();
         self.macro_use.clear();
         (self.edition, self.renamed_deps) = crate_manifest(root, k);
@@ -3548,7 +3588,7 @@ impl Counter {
                 &file.items,
                 &module,
                 f.strip_prefix(root).unwrap_or(f),
-                (&mut carried, &mut self.modules),
+                (&mut carried, &mut inline_carried, &mut self.modules),
             );
             if class(i) == Built::Test {
                 continue;
@@ -3568,22 +3608,44 @@ impl Counter {
             bindings_in(&file.items, &at, &self.atoms, &mut bindings);
         }
         self.add_proof_trees(&mods, (root, src), &files);
+        // Each file's module, and the scope and chain a definition at its
+        // top has: each `#[macro_use] mod name;` carrying it out, and each
+        // inline `#[macro_use]` module around such a `mod` (whose own
+        // file and line the `mod`'s step already gives). A module declared
+        // by more than one `mod` (under `cfg`s) has no one place in its
+        // parent: its definitions are not ordered against the others
+        // there.
+        let carry: Vec<Carry> = files
+            .iter()
+            .map(|f| {
+                let module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
+                let mut scope = module.clone();
+                let mut carried_at = Vec::new();
+                let mut split = false;
+                loop {
+                    if let Some(decls) = carried.get(&scope)
+                        && let Some(c) = decls.iter().flatten().min_by_key(|(_, l)| *l)
+                    {
+                        carried_at.push(c.clone());
+                        split |= decls.len() > 1;
+                    } else if !carried_at.is_empty()
+                        && inline_carried
+                            .get(&scope)
+                            .is_some_and(|d| d.contains(&true))
+                    {
+                        // A file `mod` that two declarations of an inline
+                        // module both hold is itself declared twice.
+                    } else {
+                        break;
+                    }
+                    scope.pop();
+                }
+                (module, scope, carried_at, split)
+            })
+            .collect();
         for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
             let Some(Ok(file)) = p else { continue };
-            let module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
-            let mut scope = module.clone();
-            let mut carried_at = Vec::new();
-            // A module declared by more than one `mod` (under `cfg`s) has
-            // no one place in its parent: its definitions are not ordered
-            // against the others there.
-            let mut split = false;
-            while let Some(decls) = carried.get(&scope)
-                && let Some(c) = decls.iter().flatten().min_by_key(|(_, l)| *l)
-            {
-                carried_at.push(c.clone());
-                split |= decls.len() > 1;
-                scope.pop();
-            }
+            let (module, scope, carried_at, split) = carry[i].clone();
             let at = DefsAt {
                 file: f.strip_prefix(root).unwrap_or(f),
                 scope,
@@ -3656,6 +3718,7 @@ impl Counter {
         self.bindings = bindings;
         self.emitted.clear();
         self.took.clear();
+        self.invoked.clear();
         for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
             // A module built only for Verus is read for its rlimits alone,
             // and one Verus's build might not compile counts no function
@@ -3672,6 +3735,7 @@ impl Counter {
                 self.files.push((self.krate.clone(), self.file.clone()));
             }
             self.module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
+            self.carry = carry[i].clone();
             self.scope = self.file.display().to_string();
             self.no_decreases = false;
             match p {
@@ -3710,6 +3774,37 @@ impl Counter {
             if defined {
                 eprintln!(
                     "{here}: {name}! resolves to none of this crate's definitions of `{name}`, though rustc may reach one; invoke it by its definition's path, or in that definition's textual scope"
+                );
+                self.errors += 1;
+            }
+        }
+        // A `macro_rules!` an expansion writes is known only once its own
+        // file is walked: an invocation of its name in a file walked
+        // before it, in a module in its scope, may expand it, and fails
+        // the run. One carried out by a `#[macro_use] mod` is in the
+        // declaring file's scope from that `mod` on; in any other file
+        // (a module file of its scope, such as one a later `mod`
+        // declares) the resolution reaches it as one of the others,
+        // wherever the invocation is.
+        let rels: Vec<PathBuf> = files
+            .iter()
+            .map(|f| f.strip_prefix(root).unwrap_or(f).to_path_buf())
+            .collect();
+        let order = |p: &Path| rels.iter().position(|r| r == p);
+        for (here, file, module, at, name) in std::mem::take(&mut self.invoked) {
+            let late = self.macros.get(&name).into_iter().flatten().find(|d| {
+                d.emitted
+                    && d.built != Built::Test
+                    && order(&file) < order(&d.file)
+                    && module.starts_with(&d.scope)
+                    && (d.carried_at.iter().all(|(f, _)| *f != file)
+                        || d.carried_at.iter().any(|(f, l)| *f == file && *l <= at))
+            });
+            if let Some(d) = late {
+                eprintln!(
+                    "{here}: {name}! may expand the `macro_rules! {name}` that an expansion writes at {}:{}, which may be in scope here but is in a file the counter reads after this one; write that `macro_rules!` outside the macro",
+                    d.file.display(),
+                    d.line
                 );
                 self.errors += 1;
             }
@@ -4080,6 +4175,15 @@ impl Counter {
                     return;
                 }
             };
+        if !found.is_empty() {
+            self.invoked.push((
+                here.clone(),
+                self.file.clone(),
+                self.module.clone(),
+                at,
+                name.clone(),
+            ));
+        }
         // The expansion by `rules`, read as items (inside `wrap`, in an
         // `impl` or trait).
         let expand = |rules: &expand::Rules| {
@@ -5359,21 +5463,27 @@ pub(crate) fn verus_path(path: &verus_syn::Path) -> bool {
 /// declaration with `#[macro_use]` with the declaring `file` and the line
 /// of its `mod`: the textual scope of a definition at such a file's top
 /// carries on into the module that declares it, from that line on. One
-/// without is kept too, as a declaration that does not carry. Every
-/// module `items`
-/// declares goes into `all`, one declared inside a `verus!` block too.
+/// without is kept too, as a declaration that does not carry. Each
+/// declaration of an inline module goes into `inline`, with whether it
+/// has `#[macro_use]`: that scope carries on through one that has. Every
+/// module `items` declares goes into `all`, one declared inside a
+/// `verus!` block too.
 fn macro_use_mods(
     items: &[Item],
     module: &[String],
     file: &Path,
-    (carried, all): (&mut Carried, &mut std::collections::BTreeSet<Vec<String>>),
+    (carried, inline, all): (
+        &mut Carried,
+        &mut InlineMods,
+        &mut std::collections::BTreeSet<Vec<String>>,
+    ),
 ) {
     for item in items {
         if let Item::Macro(v) = item
             && verus_path(&v.mac.path)
             && let Ok(f) = parse2::<verus_syn::File>(v.mac.tokens.clone())
         {
-            macro_use_mods(&f.items, module, file, (carried, all));
+            macro_use_mods(&f.items, module, file, (carried, inline, all));
             continue;
         }
         let Item::Mod(m) = item else { continue };
@@ -5385,7 +5495,13 @@ fn macro_use_mods(
                 has_attr(&m.attrs, "macro_use")
                     .then(|| (file.to_path_buf(), m.mod_token.span.start().line)),
             ),
-            Some((_, items)) => macro_use_mods(items, &inner, file, (carried, all)),
+            Some((_, items)) => {
+                inline
+                    .entry(inner.clone())
+                    .or_default()
+                    .push(has_attr(&m.attrs, "macro_use"));
+                macro_use_mods(items, &inner, file, (carried, inline, all));
+            }
         }
     }
 }
@@ -5473,6 +5589,19 @@ type MacroDefs = BTreeMap<String, Vec<MacroDef>>;
 /// its own (under `cfg`s, one module may have several): the file and the
 /// line of each with `#[macro_use]`, `None` for each without.
 type Carried = BTreeMap<Vec<String>, Vec<Option<(PathBuf, usize)>>>;
+
+/// An invocation [`Counter::resolve`] found definitions for: where it is
+/// (`file:line`), its file, its module, its outermost invocation's line
+/// and its name.
+type Invoked = (String, PathBuf, Vec<String>, usize, String);
+
+/// A file's module, and the scope, [`MacroDef::carried_at`] and
+/// [`MacroDef::split`] of a definition at its top.
+type Carry = (Vec<String>, Vec<String>, Vec<(PathBuf, usize)>, bool);
+
+/// Each declaration of each inline module ([`macro_use_mods`]): whether it
+/// has `#[macro_use]`.
+type InlineMods = BTreeMap<Vec<String>, Vec<bool>>;
 
 /// Where a definition stands in an invocation's file
 /// ([`Counter::resolve`]): each `mod` step's line with the file it leads
