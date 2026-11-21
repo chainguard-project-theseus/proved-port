@@ -551,7 +551,12 @@ module the invocation is in (a definition in a module that has closed
 is out of scope, unless `#[macro_use]` carries it out), and, while that
 one is under a `cfg` the counter cannot settle (a platform or a
 feature) and so may not be built, each before it back to the first
-under no such `cfg`. Failing an unconditional one, it also takes each
+under no such `cfg`. In code a shipped build compiles, a definition
+under a `cfg` that a shipped build may not meet where the invocation
+is built (a `verus_sets` atom such as `feature = "jit"`, or one
+`target_arch` of two) is such a one too, though Verus's build is sure
+to compile it: a shipped build without the feature compiles the
+definition before it. Failing an unconditional one, it also takes each
 definition its module imports by `use` under that name (`use w::ex;`,
 or `use w::ex as build;` for `build!`, the imported path read from the
 module), each in another file whose textual scope reaches the

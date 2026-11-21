@@ -1774,6 +1774,98 @@ fn every_shipped_file_is_scanned_for_exports() {
     }
 }
 
+/// A `macro_rules!` under a `cfg` that `verus_sets` names is sure in
+/// Verus's build but not in a shipped one, which may compile the earlier
+/// definition of its name instead: both are candidates (#26), so a pair
+/// that counts differently fails the run and one that counts alike
+/// passes, written or emitted, as the same pair under `cfg(unix)` does.
+#[test]
+fn a_macro_a_shipped_build_may_skip_does_not_shadow_the_one_before() {
+    let jit = "verus_sets = ['feature = \"jit\"']\n";
+    let arch = "verus_sets = ['target_arch = \"x86_64\"', 'target_arch = \"aarch64\"']\n";
+    let differ = Some("m! could be any of 2 definitions");
+    for (config, lib, want) in [
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\n#[cfg(feature = \"jit\")]\nmacro_rules! m { () => { fn a() {} }; }\nm!();\n",
+            differ,
+        ),
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} }; }\n#[cfg(feature = \"jit\")]\nmacro_rules! m { () => { fn a() {} }; }\nm!();\n",
+            None,
+        ),
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\n#[cfg(feature = \"jit\")]\nmod j {\n    macro_rules! m { () => { fn a() {} }; }\n    m!();\n}\n",
+            None,
+        ),
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\nmacro_rules! def { () => { #[cfg(feature = \"jit\")] macro_rules! m { () => { fn a() {} }; } }; }\ndef!();\nm!();\n",
+            differ,
+        ),
+        // The `cfg` is on what holds the definition: a `#[macro_use]`
+        // module, a `verus!` block, or a `verus!` block an expansion
+        // writes it in.
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\n#[cfg(feature = \"jit\")]\n#[macro_use]\nmod j {\n    macro_rules! m { () => { fn a() {} }; }\n}\nm!();\n",
+            differ,
+        ),
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\n#[cfg(feature = \"jit\")]\nverus! {\n    macro_rules! m { () => { fn a() {} }; }\n}\nm!();\n",
+            differ,
+        ),
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\nmacro_rules! def { () => { macro_rules! m { () => { fn a() {} }; } }; }\n#[cfg(feature = \"jit\")]\nverus! {\n    def!();\n}\nm!();\n",
+            differ,
+        ),
+        (
+            arch,
+            "#[cfg(target_arch = \"x86_64\")]\nmacro_rules! m { () => { fn a() {} fn b() {} }; }\n#[cfg(target_arch = \"aarch64\")]\nmacro_rules! m { () => { fn a() {} }; }\nm!();\n",
+            differ,
+        ),
+        (
+            "",
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\nmacro_rules! m { () => { fn a() {} }; }\nm!();\n",
+            None,
+        ),
+        // A `cfg` the counter cannot read may be false: the definition
+        // under it does not shadow.
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\n#[cfg(version(\"1.80\"))]\nmacro_rules! m { () => { fn a() {} }; }\nm!();\n",
+            differ,
+        ),
+        // In Verus-only code the rule reads Verus's build, which surely
+        // compiles the `jit` definition: it alone is the one, and the
+        // earlier one, which does not expand, is never tried.
+        (
+            jit,
+            "macro_rules! m { () => { fn }; }\n#[cfg(feature = \"jit\")]\nmacro_rules! m { () => {}; }\n#[cfg(verus_keep_ghost)]\nmod j {\n    m!();\n}\n",
+            None,
+        ),
+    ] {
+        let dir = crate_of("macro-shadow", &[("lib.rs", lib)]);
+        fs::write(dir.join("verus/count.toml"), format!("{PLAIN}{config}")).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        match want {
+            None => assert!(
+                got == 0,
+                "{config:?} {lib:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+            ),
+            Some(want) => assert!(
+                got == 1 && err.contains(want),
+                "{config:?} {lib:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+            ),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 /// A head that turns verus/count.toml, or the directory above it, into a
 /// symlink to a configuration without `[reach]` or `[mints]` exits 2,
 /// rather than comparing a path the base does not have.

@@ -13,6 +13,21 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.6
+
+### Changes
+
+- A `macro_rules!` under a `cfg` that a shipped build may not meet
+  where the invocation is built no longer shadows the definition of its
+  name before it (#26). A `verus_sets` atom (`feature = "jit"`, or one
+  of two `target_arch` values) made it sure for Verus's build, so the
+  invocation took it alone, and what the earlier definition writes,
+  which a shipped build without the atom compiles, was in no count. Both
+  are candidates now: a pair that counts differently fails the run as
+  "could be any of 2 definitions", as the same pair under `cfg(unix)`
+  does. No port's run changes (each port's counter output is identical
+  before and after).
+
 ## 0.4.5
 
 ### Changes
