@@ -151,6 +151,27 @@ where it reports drift.
   work-bound theorem's row that bounds the product. A port with no
   `[loops]` section runs as before; removing the section after a base
   revision has it fails a `--base-rev` run, as for the other gates.
+- The counter's version is 0.4.6, ready for the v0.4.6 tag.
+
+### Porting notes
+
+1. Move the pin together, to 0.4.6, as 0.3.1's note 1 lists, then run
+   `make verus-headers`. A port moving from 0.4.4 or earlier applies the
+   notes of each release in between first. Nothing else changes: each
+   counter change above gave identical counter output (`--list`
+   included) on the eleven ports its pull request compared, built at
+   its base and its head (the v0.4.6 release pull request, #144, names
+   the ports' commits and the command), and `[loops]` is a new check a
+   port turns on by adding the section.
+2. A port that kept a test-only feature in `[crates] verus_never_sets`
+   because `test_features` needed cargo in its floor or verus job
+   (#136) may now move it to `test_features`. That is a narrowing under
+   `--base-rev` (`[crates] test_features adds "NAME"`): add a
+   `[[narrowed]]` line with that `change` and a reason, and remove the
+   atom from `verus_never_sets` in the same change, since an atom in
+   both fails the run. The move takes the functions under that feature
+   out of the counts, where under `verus_never_sets` they counted but
+   were never verified.
 
 ## 0.4.5
 
