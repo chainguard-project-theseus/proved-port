@@ -248,7 +248,17 @@ names declares its modules beside it, as a `mod.rs` does. A
 and no earlier path attribute applies, as rustc takes the first in
 effect: a bare `#[path]` applies wherever none earlier does and ends the
 list, and the default `name.rs` is the file where none applies. An inline
-module's directory is chosen the same way. A file declared only
+module's directory is chosen the same way. A declaration whose file the
+counter does not read, a `#[path]` to a file not named `*.rs` or to one
+outside the crate's `src/`, fails the run (exit 1), since rustc builds
+its functions and the counts would leave them out; one only tests build
+may name any file. "Only tests" is read by reachability: a declaration
+fails when its declaring file is reachable from a crate root (or from a
+file nothing declares, which may be a target the counter does not
+know) along declarations that are each not test-only on their own, and
+it is not test-only on its own either. That holds under either reading of where a file's
+modules live, so a lib.rs that is a module (`a::lib`, whose modules a
+target reads under `a/lib/`) is checked both ways. A file declared only
 inside another macro's body (`cfg_if! { if #[cfg(windows)] { mod win; }
 }`, or the file a `#[path]` there names) is unsure whatever the
 configuration settles, since the counter does not evaluate the macro.

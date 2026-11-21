@@ -1866,6 +1866,201 @@ fn a_macro_a_shipped_build_may_skip_does_not_shadow_the_one_before() {
     }
 }
 
+/// A module declaration whose file the walk does not read fails the run
+/// (#124): a `#[path]` to a file not named `*.rs` (`src/gen`), to a
+/// `.rs` file outside `src/`, or a `cfg_attr` path to either. A test-only
+/// module may sit anywhere, since its functions are left out anyway.
+#[test]
+fn a_module_file_the_walk_does_not_read_fails_the_run() {
+    let fns = "verus! { pub fn f() {} }\n";
+    for (lib, want) in [
+        (
+            "#[path = \"gen\"]\nmod gen;\n",
+            Some("src/gen, which the counter does not read"),
+        ),
+        (
+            "#[path = \"../extra.rs\"]\nmod extra;\n",
+            Some("crates/a/extra.rs, which the counter does not read"),
+        ),
+        (
+            "#[cfg_attr(unix, path = \"gen\")]\nmod gen;\n",
+            Some("src/gen, which the counter does not read"),
+        ),
+        ("#[cfg(test)]\n#[path = \"gen\"]\nmod gen;\n", None),
+        (
+            "#[cfg(test)]\n#[path = \"../extra.rs\"]\nmod extra;\n",
+            None,
+        ),
+        ("#[path = \"gen.rs\"]\nmod gen;\n", None),
+    ] {
+        let dir = crate_of(
+            "unread-module",
+            &[("lib.rs", lib), ("gen", fns), ("gen.rs", fns)],
+        );
+        fs::write(dir.join("crates/a/extra.rs"), fns).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        match want {
+            None => assert!(
+                got == 0,
+                "{lib:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+            ),
+            Some(want) => assert!(
+                got == 1 && err.contains(want),
+                "{lib:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+            ),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// A lib.rs that is a module (`a::lib`) declares its modules under
+/// `lib/`, the other reading of where its modules live: a `#[path]` in
+/// an inline module there reaches `src/a/lib/inl/gen`, which the walk
+/// does not read, and fails the run as a primary reading's would. Under
+/// `cfg(test)` it may sit anywhere.
+#[test]
+fn an_unread_module_file_of_the_other_reading_fails_the_run() {
+    let fns = "verus! { pub fn f() {} }\n";
+    for (inl, want) in [
+        ("mod inl {\n    #[path = \"gen\"]\n    mod g;\n}\n", true),
+        (
+            "#[cfg(test)]\nmod inl {\n    #[path = \"gen\"]\n    mod g;\n}\n",
+            false,
+        ),
+    ] {
+        let dir = crate_of("unread-alternate", &[("lib.rs", "mod a;\n")]);
+        let src = dir.join("crates/a/src");
+        fs::create_dir_all(src.join("a/lib/inl")).expect("mkdir");
+        fs::write(src.join("a/mod.rs"), "mod lib;\n").expect("write");
+        fs::write(src.join("a/lib.rs"), inl).expect("write");
+        fs::write(src.join("a/lib/inl/gen"), fns).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        if want {
+            assert!(
+                got == 1 && err.contains("src/a/lib/inl/gen, which the counter does not read"),
+                "{inl:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+            );
+        } else {
+            assert!(
+                got == 0,
+                "{inl:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A descendant: `a/lib/child.rs`, which the shipped build reaches by
+    // the other reading of `a/lib.rs` and which the one declaration of the
+    // primary reading names under `cfg(test)`, declares `gen`. Its
+    // declaring file is shipped by the other reading, so `gen` is too.
+    let dir = crate_of(
+        "unread-descendant",
+        &[(
+            "lib.rs",
+            "mod a;\n#[cfg(test)]\n#[path = \"a/lib/child.rs\"]\nmod test_child;\n",
+        )],
+    );
+    let src = dir.join("crates/a/src");
+    fs::create_dir_all(src.join("a/lib")).expect("mkdir");
+    fs::write(src.join("a/mod.rs"), "mod lib;\n").expect("write");
+    fs::write(src.join("a/lib.rs"), "mod child;\n").expect("write");
+    fs::write(src.join("a/lib/child.rs"), "#[path = \"gen\"]\nmod g;\n").expect("write");
+    fs::write(src.join("a/lib/gen"), fns).expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("src/a/lib/gen, which the counter does not read"),
+        "descendant: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // A crate root is built on its own: `src/main.rs`, a binary, names
+    // `gen` (directly, or through `src/m.rs`), though the library declares
+    // `main` only under `cfg(test)`.
+    for (main, m, want) in [
+        ("#[path = \"gen\"]\nmod g;\nfn main() {}\n", None, "src/gen"),
+        (
+            "mod m;\nfn main() {}\n",
+            Some("#[path = \"gen\"]\nmod g;\n"),
+            "src/gen",
+        ),
+    ] {
+        let dir = crate_of(
+            "unread-root",
+            &[
+                ("lib.rs", "#[cfg(test)]\nmod main;\n"),
+                ("main.rs", main),
+                ("gen", fns),
+            ],
+        );
+        if let Some(m) = m {
+            fs::write(dir.join("crates/a/src/m.rs"), m).expect("write");
+        }
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 1 && err.contains(&format!("{want}, which the counter does not read")),
+            "{main:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A file no declaration names may be a target the counter does not
+    // know, so it is an entry point; one whose own `#![cfg(test)]` keeps
+    // it out of shipped builds declares only test-only modules.
+    for (lib, other, want) in [
+        ("", "#[path = \"gen\"]\nmod g;\n", 1),
+        (
+            "mod other;\n",
+            "#![cfg(test)]\n#[path = \"gen\"]\nmod g;\n",
+            0,
+        ),
+    ] {
+        let dir = crate_of(
+            "unread-entry",
+            &[("lib.rs", lib), ("other.rs", other), ("gen", fns)],
+        );
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == want && (want == 0 || err.contains("src/gen, which the counter does not read")),
+            "{other:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {want}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A test-only step earlier on the path: `t` is declared only under
+    // `cfg(test)`, and `t.rs` (or `u.rs`, which `t.rs` declares) names
+    // `gen` with no guard of its own. No shipped build reaches it.
+    for (t, u) in [
+        ("#[path = \"gen\"]\nmod g;\n", None),
+        ("mod u;\n", Some("#[path = \"../gen\"]\nmod g;\n")),
+    ] {
+        let dir = crate_of(
+            "unread-test-path",
+            &[
+                ("lib.rs", "#[cfg(test)]\nmod t;\n"),
+                ("t.rs", t),
+                ("gen", fns),
+            ],
+        );
+        if let Some(u) = u {
+            fs::create_dir_all(dir.join("crates/a/src/t")).expect("mkdir");
+            fs::write(dir.join("crates/a/src/t/u.rs"), u).expect("write");
+        }
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 0,
+            "{t:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A link under src/ to a file not named `*.rs`, which the walk passes
+    // over (#71), reaches the check by the file it names.
+    let dir = crate_of("unread-link", &[("lib.rs", "#[path = \"gen\"]\nmod g;\n")]);
+    fs::write(dir.join("crates/a/extra"), fns).expect("write");
+    std::os::unix::fs::symlink("../extra", dir.join("crates/a/src/gen")).expect("ln");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("crates/a/extra, which the counter does not read"),
+        "link: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A head that turns verus/count.toml, or the directory above it, into a
 /// symlink to a configuration without `[reach]` or `[mints]` exits 2,
 /// rather than comparing a path the base does not have.

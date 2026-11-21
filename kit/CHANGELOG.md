@@ -27,6 +27,17 @@ where it reports drift.
   "could be any of 2 definitions", as the same pair under `cfg(unix)`
   does. No port's run changes (each port's counter output is identical
   before and after).
+- The counter fails the run (exit 1) when a module declaration names a
+  file it does not read (#124): a `#[path]` to a file not named `*.rs`
+  (`#[path = "gen"] mod gen;`) or to a `.rs` file outside the crate's
+  `src/`, under either reading of where the declaring file's modules
+  live (a main.rs or lib.rs that is a module declares them under
+  `stem/`). rustc builds that file's functions, and the counts left them
+  out, raising the verified share. A module only tests build is exempt:
+  one whose declaration, or every path of declarations to it from a
+  crate root (or from a file nothing declares), has a test-only step.
+  No port's run changes (each port's counter output is identical before
+  and after).
 
 ## 0.4.5
 
