@@ -5051,6 +5051,191 @@ fn a_macro_use_file_s_definition_is_in_scope_from_its_mod() {
     }
 }
 
+/// Two more shapes of a carried definition (#134). A file `mod` inside an
+/// inline `#[macro_use]` module carries its definition out through that
+/// module too, so it shadows an earlier one after the module; inside an
+/// inline module without `#[macro_use]` it does not. A `macro_rules!` an
+/// expansion writes at the top of a carried file is carried as one
+/// written there; when the counter reads that file after the declaring
+/// one, an invocation it may reach fails the run.
+#[test]
+fn a_carried_definition_passes_inline_macro_use_modules_and_expansions() {
+    let one = "macro_rules! m { () => { pub fn a() {} }; }\n";
+    let three = "macro_rules! m { () => { pub fn a() {} pub fn b() {} pub fn c() {} }; }\n";
+    let gen_three = "macro_rules! gen { () => { macro_rules! m { () => { pub fn a() {} pub fn b() {} pub fn c() {} }; } }; }\ngen!();\n";
+    // A `gen` that writes the three-function `m` inside `mod inner`, with
+    // `attr` on it.
+    let gen_in_inner = |attr: &str| {
+        format!(
+            "macro_rules! gen {{ () => {{ {attr} mod inner {{ macro_rules! m {{ () => {{ pub fn a() {{}} pub fn b() {{}} pub fn c() {{}} }}; }} }} }}; }}\n"
+        )
+    };
+    let in_outer = |macro_use: &str| {
+        format!("{one}{macro_use}mod outer {{\n#[macro_use]\nmod j;\n}}\nm!();\n")
+    };
+    for (case, lib, files, want) in [
+        (
+            "through an inline #[macro_use] module",
+            in_outer("#[macro_use]\n"),
+            vec![("outer/j.rs", three)],
+            &["a", "b", "c"][..],
+        ),
+        (
+            "not through an inline module without #[macro_use]",
+            in_outer(""),
+            vec![("outer/j.rs", three)],
+            &["a"][..],
+        ),
+        (
+            "through an inline #[macro_use] module of a carried file",
+            format!("{one}#[macro_use]\nmod j;\nm!();\n"),
+            vec![
+                (
+                    "j/mod.rs",
+                    "#[macro_use]\nmod inner {\n#[macro_use]\nmod k;\n}\n",
+                ),
+                ("j/inner/k.rs", three),
+            ],
+            &["a", "b", "c"][..],
+        ),
+        (
+            "emitted at the top of a carried file read first",
+            format!("{one}#[macro_use]\nmod j;\nm!();\n"),
+            vec![("j.rs", gen_three)],
+            &["a", "b", "c"][..],
+        ),
+        (
+            "emitted in a carried file read later, after the invocation",
+            format!("{one}m!();\n#[macro_use]\nmod z;\n"),
+            vec![("z.rs", gen_three)],
+            &["a"][..],
+        ),
+        (
+            "emitted in a carried file read later, outside its scope",
+            format!("{one}mod outer {{\n#[macro_use]\nmod z;\n}}\nm!();\n"),
+            vec![("outer/z.rs", gen_three)],
+            &["a"][..],
+        ),
+        // One an expansion writes in an inline `#[macro_use]` module is
+        // carried out of it, as one written there is; without the
+        // attribute its scope ends with the module.
+        (
+            "emitted in an inline #[macro_use] module",
+            format!("{one}{}gen!();\nm!();\n", gen_in_inner("#[macro_use]")),
+            vec![],
+            &["a", "b", "c"][..],
+        ),
+        (
+            "emitted in an inline module without #[macro_use]",
+            format!("{one}{}gen!();\nm!();\n", gen_in_inner("")),
+            vec![],
+            &["a"][..],
+        ),
+    ] {
+        let dir = crate_of("carried-shapes", &[("lib.rs", &lib)]);
+        let src = dir.join("crates/a/src");
+        for (path, text) in files {
+            let p = src.join(path);
+            fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+            fs::write(p, text).expect("write");
+        }
+        let (got, out, err) = count(&dir, &["--list"]);
+        let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+        assert!(
+            got == 0 && names == want,
+            "{case}: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // The carried file is read after the declaring one: the definition its
+    // expansion writes is not known when the invocation resolves. A `mod`
+    // on the invocation's line may carry it in too.
+    for (case, lib, line) in [
+        (
+            "after the mod",
+            format!("{one}#[macro_use]\nmod z;\nm!();\n"),
+            4,
+        ),
+        (
+            "on the mod's line",
+            format!("{one}#[macro_use] mod z; m!();\n"),
+            2,
+        ),
+    ] {
+        let dir = crate_of(
+            "carried-shapes-late",
+            &[("lib.rs", &lib), ("z.rs", gen_three)],
+        );
+        let (got, out, err) = count(&dir, &[]);
+        let want = format!(
+            "lib.rs:{line}: m! may expand the `macro_rules! m` that an expansion writes at crates/a/src/z.rs:2"
+        );
+        assert!(
+            got == 1 && err.contains(&want),
+            "read later, {case}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // An invocation in a sibling file the `mod` after it declares, read
+    // before the carried file: the resolution would reach the emitted
+    // definition as one of the others, so the run fails there too.
+    let dir = crate_of(
+        "carried-shapes-sibling",
+        &[
+            ("lib.rs", &format!("{one}#[macro_use]\nmod z;\nmod y;\n")),
+            ("y.rs", "m!();\n"),
+            ("z.rs", gen_three),
+        ],
+    );
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains(
+                "y.rs:1: m! may expand the `macro_rules! m` that an expansion writes at crates/a/src/z.rs:2"
+            ),
+        "sibling read earlier: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // Not carried at all: one an expansion writes at the top of z/mod.rs
+    // is in scope in z/a.rs, which `mod a;` after it declares and the
+    // counter reads first.
+    let dir = crate_of(
+        "carried-shapes-child",
+        &[("lib.rs", &format!("{one}mod z;\n"))],
+    );
+    fs::create_dir_all(dir.join("crates/a/src/z")).expect("mkdir");
+    fs::write(
+        dir.join("crates/a/src/z/mod.rs"),
+        format!("{gen_three}mod a;\n"),
+    )
+    .expect("write");
+    fs::write(dir.join("crates/a/src/z/a.rs"), "m!();\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains(
+                "z/a.rs:1: m! may expand the `macro_rules! m` that an expansion writes at crates/a/src/z/mod.rs:2"
+            ),
+        "child read earlier: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // An inline module declared twice under `cfg`s, with `#[macro_use]`
+    // in one build only: the file `mod` both hold is declared twice, so
+    // its definition is a candidate that ends no chain.
+    let lib = format!(
+        "{one}#[cfg(verus_keep_ghost)]\n#[macro_use]\nmod outer {{\n#[macro_use]\nmod j;\n}}\n#[cfg(not(verus_keep_ghost))]\nmod outer {{\n#[macro_use]\nmod j;\n}}\nm!();\n"
+    );
+    let dir = crate_of("carried-shapes-inline-twice", &[("lib.rs", &lib)]);
+    fs::create_dir_all(dir.join("crates/a/src/outer")).expect("mkdir");
+    fs::write(dir.join("crates/a/src/outer/j.rs"), three).expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("m! could be any of 2 definitions"),
+        "inline module declared twice: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A definition reaches an invocation in another file only along a path
 /// rustc resolves: an enclosing module's textual scope (not a sibling
 /// file's private definition), a `use NAME;` re-export named by a path
