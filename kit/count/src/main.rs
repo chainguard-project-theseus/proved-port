@@ -67,7 +67,12 @@
 //! invocation and the definition it came from. An item macro the crate
 //! does not define counts as one function outside `verus!`, named
 //! `NAME!`, so no function leaves the tally for being written by a macro;
-//! one the crate defines that does not expand fails the run. Fragments
+//! one the crate defines that does not expand fails the run. The
+//! exceptions are std's item macros that write no function
+//! (`compile_error!`, `thread_local!`), by `::std::` or bare where
+//! nothing may rebind the name, and a bare `thread_local!` that only a
+//! `*` or a `#[macro_use]` may rebind ([`Counter::other_thread_local`]),
+//! which counts nothing though it may be another crate's. Fragments
 //! match by the crate's edition ([`walked_editions`]): below 2024 an
 //! `expr` is an `expr_2021` (no `const` block, no `_`), and below 2021 a
 //! `pat` is a `pat_param` (no top-level `|`). A crate whose read targets
@@ -3191,8 +3196,10 @@ impl Counter {
                         && self.item_ships(&m.attrs) =>
                 {
                     inputs::statics_in(m.mac.tokens.clone(), true, &mut self.statics);
+                    // One not shown to be std's is read as any other macro
+                    // of its name ([`Counter::item_macro`]).
                     if !self.std_thread_local(&m.mac.path) {
-                        self.opaque.insert(self.module.clone());
+                        self.item_macro(&m.attrs, &m.mac, None);
                     }
                 }
                 Item::Macro(m)
@@ -3858,8 +3865,9 @@ impl Counter {
     /// crate does not define cannot be read, so the invocation counts as
     /// one function outside `verus!`, named `NAME!`, over the invocation's
     /// lines. A definition that resolves but does not expand, or an
-    /// expansion that does not parse, is an error. `thread_local!` writes
-    /// statics, not functions.
+    /// expansion that does not parse, is an error. std's `thread_local!`
+    /// ([`Counter::std_thread_local`]) writes statics, not functions; any
+    /// other macro of the name is read as above.
     fn item_macro(
         &mut self,
         attrs: &[Attribute],
@@ -3869,11 +3877,20 @@ impl Counter {
         let Some(name) = mac.path.segments.last().map(|s| s.ident.to_string()) else {
             return;
         };
+        // std's `thread_local!` writes statics alone. Any other may write
+        // any item, so its module's globs place no type
+        // ([`Counter::opaque`]); one shown to be another macro
+        // ([`Counter::other_thread_local`]) is read as any other macro:
+        // the crate's own expanded, another crate's counted as one
+        // function.
         if name == "thread_local" {
-            if !self.std_thread_local(&mac.path) {
-                self.opaque.insert(self.module.clone());
+            if self.std_thread_local(&mac.path) {
+                return;
             }
-            return;
+            self.opaque.insert(self.module.clone());
+            if !self.other_thread_local(&mac.path) {
+                return;
+            }
         }
         let built = self.built(attrs);
         if built == Built::Test {
@@ -4525,6 +4542,38 @@ impl Counter {
             })
             .collect();
         self.doubt(&either, kind, read, &self.module).is_none()
+    }
+
+    /// Whether the `thread_local` invoked by `path` is shown to be a macro
+    /// other than std's, so that it counts as one (#68): the bare name
+    /// where the crate defines a macro of that name, or where a `use` of
+    /// this module imports the name from a path that does not start at
+    /// `std` or `core`; or a path whose first segment is neither
+    /// (`elsewhere::thread_local!`, `crate::thread_local!`). A bare one
+    /// only a `*` or a `#[macro_use]` may bind to another is not shown to
+    /// be either: it places no glob type ([`Counter::std_thread_local`])
+    /// but counts nothing, since nearly every such one is std's, beside
+    /// `vstd::prelude::*`.
+    fn other_thread_local(&self, path: &verus_syn::Path) -> bool {
+        // `std` or `core`, unless a Cargo dependency is renamed to it.
+        let std = |first: Option<&String>| {
+            first.is_some_and(|f| {
+                matches!(f.as_str(), "std" | "core")
+                    && !self.renamed_deps.iter().any(|(n, _)| n == f)
+            })
+        };
+        let segs = segments(path);
+        if segs.len() == 1 && path.leading_colon.is_none() {
+            self.macros.contains_key("thread_local")
+                || self
+                    .imported("thread_local", false)
+                    .iter()
+                    .any(|p| !std(p.first()))
+        } else {
+            // A first segment that is a module of this crate (`mod core`)
+            // shadows the extern prelude's `std` or `core`.
+            !std(segs.first()) || self.local(&segs)
+        }
     }
 
     /// How item macro `name`, invoked by `path` and defined nowhere in the
