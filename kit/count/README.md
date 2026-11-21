@@ -183,7 +183,7 @@ not a source and is passed over.
 | `[crates]` | `dir` | each subdirectory with a `src/` is a crate, named for it |
 | | `members` | `{ name, path, ships }` crates named explicitly; `ships` overrides the `publish = false` rule (a crate ships unless its Cargo.toml, read as TOML, sets `[package]` `publish = false`; one under `[package.metadata]` does not count) |
 | | `test_cfgs` | `cfg` names only test builds set (default `test`, `kani`) |
-| | `test_features` | features only tests enable; a workspace build that enables one fails the run (`cargo tree`) |
+| | `test_features` | features only tests enable; a workspace build that enables one fails the run (read from the manifests and `Cargo.lock`, with no cargo; a form it does not read fails the run) |
 | | `verus_features` | features only Verus's build enables, as `verus_keep_ghost` |
 | | `verus_sets` | `cfg` atoms Verus's build is sure to set, which shipped builds may set too (`'feature = "jit"'` for a default feature the proof run keeps, `"unix"`): "Verus's build", below |
 | | `verus_never_sets` | `cfg` atoms Verus's build never sets (`"miri"`), so `not(miri)` is sure there |

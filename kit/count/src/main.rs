@@ -196,6 +196,7 @@ use std::path::{Path, PathBuf};
 
 mod config;
 mod expand;
+mod features;
 mod inputs;
 mod ledger;
 mod mints;
@@ -2126,22 +2127,15 @@ fn cfg_needs_test(tokens: &str, atoms: &Atoms) -> bool {
 }
 
 /// The packages that a build of the workspace at `root` compiles with one
-/// of the test-only `features` (the PCRE2 port's `test-util`), each with the
-/// feature, so that [`cfg_needs_test`] could not leave its
-/// items out, as cargo itself resolves them: `cargo tree` over every
-/// member (a plain `cargo build` builds them all and unifies their
-/// features), for every target, along normal and build edges only, once
-/// with the default features and once with every member's every other
-/// feature too ([`member_features`]), as a build such as
-/// `--features pcre2-capi/hardened` turns them on. Tests' dev-dependencies
-/// are the one place that may enable it, with a member's own `test-util`
-/// feature, which forwards it. Reading cargo's resolution rather than the
-/// manifests leaves no TOML form (quoting, tables, forwarding features,
-/// globbed members) to miss. cargo runs `--locked --offline`: the lockfile
-/// is checked in, and `make verus` has fetched every dependency before
-/// verus-count runs. Its failure, or no cargo at all, is an error rather
-/// than a pass.
-fn test_util_enablers(root: &Path, test: &[String]) -> Result<Vec<(String, String)>, String> {
+/// of the test-only `features`, each with the feature, as cargo itself
+/// resolves them: `cargo tree` over every member, for every target, along
+/// normal and build edges only, once with the default features and once
+/// with every member's every other feature too ([`member_features`]).
+/// The counter reads the manifests instead
+/// ([`features::test_util_enablers`], #136), so that it needs no cargo;
+/// the tests hold that reading to this one, cargo's.
+#[cfg(test)]
+fn cargo_enablers(root: &Path, test: &[String]) -> Result<Vec<(String, String)>, String> {
     let features = member_features(root, test)?;
     let mut enablers = Vec::new();
     for extra in [None, Some(features.join(","))] {
@@ -2180,6 +2174,7 @@ fn test_util_enablers(root: &Path, test: &[String]) -> Result<Vec<(String, Strin
 
 /// Every feature of every workspace member under `root` but the test-only
 /// ones (`test`), as `member/feature`, from `cargo metadata`.
+#[cfg(test)]
 fn member_features(root: &Path, test: &[String]) -> Result<Vec<String>, String> {
     let out = cargo(
         root,
@@ -2210,6 +2205,7 @@ fn member_features(root: &Path, test: &[String]) -> Result<Vec<String>, String> 
 
 /// `cargo args` in `root` (cargo from `$CARGO`, as `cargo run` and `cargo
 /// test` set it, or else from `PATH`): its standard output, or an error.
+#[cfg(test)]
 fn cargo(root: &Path, args: &[&str]) -> Result<String, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let out = std::process::Command::new(&cargo)
@@ -6260,7 +6256,7 @@ fn main() {
     // no build of the workspace may enable one, as cargo resolves the
     // features.
     if !cfg.crates.test_features.is_empty() {
-        let enablers = match test_util_enablers(&root, &cfg.crates.test_features) {
+        let enablers = match features::test_util_enablers(&root, &cfg.crates.test_features) {
             Ok(e) => e,
             Err(e) => {
                 eprintln!("FAIL test-util: {e}");
@@ -9072,6 +9068,203 @@ mod tests {
                 ],
                 true,
             ),
+            // The forms the manifests' reading (#136) must follow as cargo
+            // does: a renamed dependency, by its key in a feature, and
+            // through the workspace's entry.
+            (
+                vec![(
+                    DATA,
+                    data(
+                        "[dependencies]\nother = { path = \"../lib\", package = \"lib\", features = [\"test-util\"] }\n",
+                    ),
+                )],
+                true,
+            ),
+            (
+                vec![(
+                    DATA,
+                    data(
+                        "[dependencies]\nother = { path = \"../lib\", package = \"lib\" }\n\n[features]\nx = [\"other/test-util\"]\n",
+                    ),
+                )],
+                true,
+            ),
+            (
+                vec![
+                    (
+                        "Cargo.toml",
+                        format!(
+                            "{ROOT}\n[workspace.dependencies]\nother = {{ path = \"crates/lib\", package = \"lib\" }}\n"
+                        ),
+                    ),
+                    (DATA, data("[dependencies]\nother = { workspace = true, features = [\"test-util\"] }\n")),
+                ],
+                true,
+            ),
+            // A feature of a dev-dependency only, which only tests build.
+            (
+                vec![(
+                    DATA,
+                    data(
+                        "[dev-dependencies]\nlib = { path = \"../lib\" }\n\n[features]\nx = [\"lib/test-util\"]\n",
+                    ),
+                )],
+                false,
+            ),
+            // A path dependency that is no member: what it asks counts where
+            // a build compiles it, a member's normal dependency, and not
+            // where only tests do.
+            (
+                vec![
+                    ("Cargo.toml", format!("{ROOT}exclude = [\"helper\"]\n")),
+                    (DATA, data("[dependencies]\nhelper = { path = \"../../helper\" }\n")),
+                    (
+                        "helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../crates/lib\", features = [\"test-util\"] }\n".to_string(),
+                    ),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    ("Cargo.toml", format!("{ROOT}exclude = [\"helper\"]\n")),
+                    (DATA, data("[dev-dependencies]\nhelper = { path = \"../../helper\" }\n")),
+                    (
+                        "helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../crates/lib\", features = [\"test-util\"] }\n".to_string(),
+                    ),
+                ],
+                false,
+            ),
+            // A non-member's own feature that forwards it, which nothing
+            // turns on, is off; one its dependent asks for is on.
+            (
+                vec![
+                    ("Cargo.toml", format!("{ROOT}exclude = [\"helper\"]\n")),
+                    (DATA, data("[dependencies]\nhelper = { path = \"../../helper\" }\n")),
+                    (
+                        "helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../crates/lib\" }\n\n[features]\nx = [\"lib/test-util\"]\n".to_string(),
+                    ),
+                ],
+                false,
+            ),
+            (
+                vec![
+                    ("Cargo.toml", format!("{ROOT}exclude = [\"helper\"]\n")),
+                    (DATA, data("[dependencies]\nhelper = { path = \"../../helper\", features = [\"x\"] }\n")),
+                    (
+                        "helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../crates/lib\" }\n\n[features]\nx = [\"lib/test-util\"]\n".to_string(),
+                    ),
+                ],
+                true,
+            ),
+            // A path dependency inside the workspace's directory is a
+            // member, so its own features are on, even only a dev-dependency.
+            (
+                vec![
+                    (DATA, data("[dev-dependencies]\nhelper = { path = \"../helper\" }\n")),
+                    (
+                        "crates/helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../lib\" }\n\n[features]\nx = [\"lib/test-util\"]\n".to_string(),
+                    ),
+                ],
+                true,
+            ),
+            // An excluded directory is no member.
+            (
+                vec![
+                    (
+                        "Cargo.toml",
+                        format!("{ROOT}exclude = [\"crates/helper\"]\n"),
+                    ),
+                    (DATA, data("[dependencies]\nhelper = { path = \"../helper\" }\n")),
+                    (
+                        "crates/helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../lib\" }\n\n[features]\nx = [\"lib/test-util\"]\n".to_string(),
+                    ),
+                ],
+                false,
+            ),
+            // Resolver 1 (named, or a virtual manifest's with none named)
+            // unifies a member's dev-dependencies' features into its
+            // normal build (found in review).
+            (
+                vec![
+                    (
+                        "Cargo.toml",
+                        "[workspace]\nresolver = \"1\"\nmembers = [\"crates/lib\", \"crates/data\"]\n".to_string(),
+                    ),
+                    (
+                        DATA,
+                        data(
+                            "[dependencies]\nlib = { path = \"../lib\" }\n\n[dev-dependencies]\nlib = { path = \"../lib\", features = [\"test-util\"] }\n",
+                        ),
+                    ),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    (
+                        "Cargo.toml",
+                        "[workspace]\nmembers = [\"crates/lib\", \"crates/data\"]\n".to_string(),
+                    ),
+                    (
+                        DATA,
+                        data(
+                            "[dependencies]\nlib = { path = \"../lib\" }\n\n[dev-dependencies]\nlib = { path = \"../lib\", features = [\"test-util\"] }\n",
+                        ),
+                    ),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    (
+                        "Cargo.toml",
+                        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/lib\", \"crates/data\"]\n".to_string(),
+                    ),
+                    (
+                        DATA,
+                        data(
+                            "[dependencies]\nlib = { path = \"../lib\" }\n\n[dev-dependencies]\nlib = { path = \"../lib\", features = [\"test-util\"] }\n",
+                        ),
+                    ),
+                ],
+                false,
+            ),
+            // An optional dependency's implicit feature, which `dep:`
+            // suppresses (found in review).
+            (
+                vec![
+                    ("Cargo.toml", format!("{ROOT}exclude = [\"helper\"]\n")),
+                    (
+                        "crates/lib/Cargo.toml",
+                        "[package]\nname = \"lib\"\nedition = \"2024\"\n\n[dependencies]\ntest-util = { package = \"helper\", path = \"../../helper\", optional = true }\n\n[features]\nx = [\"test-util\"]\n".to_string(),
+                    ),
+                    (
+                        "helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n".to_string(),
+                    ),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    ("Cargo.toml", format!("{ROOT}exclude = [\"helper\"]\n")),
+                    (
+                        "crates/lib/Cargo.toml",
+                        "[package]\nname = \"lib\"\nedition = \"2024\"\n\n[dependencies]\ntest-util = { package = \"helper\", path = \"../../helper\", optional = true }\n\n[features]\nx = [\"dep:test-util\"]\n".to_string(),
+                    ),
+                    (
+                        "helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n".to_string(),
+                    ),
+                ],
+                false,
+            ),
         ];
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         for (i, (files, want)) in rows.into_iter().enumerate() {
@@ -9099,16 +9292,24 @@ mod tests {
                 "{files:?}: {}",
                 String::from_utf8_lossy(&lock.stderr)
             );
-            let got: Vec<String> = test_util_enablers(&root, &test_util())
-                .unwrap()
-                .iter()
-                .map(|(p, f)| {
-                    assert_eq!(f, "test-util");
-                    p.split(' ').next().unwrap_or_default().to_string()
-                })
-                .collect();
+            // The manifests' reading, and cargo's own resolution, which it
+            // must match.
+            let names = |e: Vec<(String, String)>| -> Vec<String> {
+                e.iter()
+                    .map(|(p, f)| {
+                        assert_eq!(f, "test-util");
+                        p.split(' ').next().unwrap_or_default().to_string()
+                    })
+                    .collect()
+            };
+            let got = names(features::test_util_enablers(&root, &test_util()).unwrap());
+            let cargo_got = names(cargo_enablers(&root, &test_util()).unwrap());
             let wanted: Vec<String> = if want { vec!["lib".into()] } else { Vec::new() };
-            assert_eq!(got, wanted, "{files:?}: got = {got:?}, wanted = {wanted:?}");
+            assert_eq!(
+                (&got, &cargo_got),
+                (&wanted, &wanted),
+                "{files:?}: (got, cargo's) = ({got:?}, {cargo_got:?}), wanted = {wanted:?}"
+            );
             let _ = fs::remove_dir_all(&root);
         }
     }
@@ -9193,6 +9394,284 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// The manifests' reading (#136) fails closed on each form it does not
+    /// read, and where the lockfile shows what the manifests do not.
+    #[test]
+    fn test_features_reading_fails_closed() {
+        const LIB: &str =
+            "[package]\nname = \"lib\"\nedition = \"2024\"\n\n[features]\ntest-util = []\n";
+        const DATA: &str = "[package]\nname = \"data\"\nedition = \"2024\"\n\n";
+        const LOCK: &str = "version = 4\n\n[[package]]\nname = \"data\"\nversion = \"0.0.0\"\ndependencies = [\"lib\"]\n\n[[package]]\nname = \"lib\"\nversion = \"0.0.0\"\n";
+        const ROOT: &str = "[workspace]\nmembers = [\"crates/lib\", \"crates/data\"]\n";
+        const EXT: &str = "\n[[package]]\nname = \"ext\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        let none = || Vec::<(&str, String)>::new();
+        for (case, root_toml, data, lock, extra, want) in [
+            (
+                "a glob other than a trailing /*",
+                "[workspace]\nmembers = [\"crates/l*\", \"crates/data\"]\n",
+                "",
+                LOCK.to_owned(),
+                none(),
+                "glob other than a trailing",
+            ),
+            (
+                "a lockfile package no manifest names",
+                "[workspace]\nmembers = [\"crates/lib\"]\n",
+                "",
+                LOCK.to_owned(),
+                none(),
+                "has the package data with no source",
+            ),
+            (
+                "a feature naming no dependency",
+                ROOT,
+                "[features]\nx = [\"nope/test-util\"]\n",
+                LOCK.to_owned(),
+                none(),
+                "has no dependency `nope`",
+            ),
+            (
+                "a dependency's features that are not a list",
+                ROOT,
+                "[dependencies]\nlib = { path = \"../lib\", features = \"test-util\" }\n",
+                LOCK.to_owned(),
+                none(),
+                "dependency `lib`'s `features` is not a list of strings",
+            ),
+            (
+                "a feature that is not a list",
+                ROOT,
+                "[features]\nx = \"lib/test-util\"\n",
+                LOCK.to_owned(),
+                none(),
+                "features.x is not a list of strings",
+            ),
+            (
+                "[features] that is not a table",
+                ROOT,
+                "features = [\"x\"]\n[package]\nname = \"data\"\n",
+                LOCK.to_owned(),
+                none(),
+                "[features] is not a table",
+            ),
+            (
+                "workspace = true with no entry",
+                ROOT,
+                "[dependencies]\nlib = { workspace = true }\n",
+                LOCK.to_owned(),
+                none(),
+                "the workspace has no such dependency",
+            ),
+            (
+                "a package with no name",
+                ROOT,
+                "[package]\nedition = \"2024\"\n",
+                LOCK.to_owned(),
+                none(),
+                "[package] has no name",
+            ),
+            (
+                "[target] that is not a table",
+                ROOT,
+                "target = 1\n[package]\nname = \"data\"\n",
+                LOCK.to_owned(),
+                none(),
+                "[target] is not a table",
+            ),
+            (
+                "a dependency section that is not a table",
+                ROOT,
+                "dependencies = 1\n[package]\nname = \"data\"\n",
+                LOCK.to_owned(),
+                none(),
+                "a dependency section is not a table",
+            ),
+            (
+                "a dependency that is neither a version nor a table",
+                ROOT,
+                "[dependencies]\nlib = 1\n",
+                LOCK.to_owned(),
+                none(),
+                "dependency `lib` is neither a version nor a table",
+            ),
+            (
+                "a workspace dependency that is neither a version nor a table",
+                "[workspace]\nmembers = [\"crates/lib\", \"crates/data\"]\n[workspace.dependencies]\nlib = 1\n",
+                "[dependencies]\nlib = { workspace = true }\n",
+                LOCK.to_owned(),
+                none(),
+                "dependency `lib` is neither a version nor a table",
+            ),
+            (
+                "a package that is not a string",
+                ROOT,
+                "[dependencies]\nlib = { path = \"../lib\", package = 1 }\n",
+                LOCK.to_owned(),
+                none(),
+                "`package` is not a string",
+            ),
+            (
+                "a path that is not a string",
+                ROOT,
+                "[dependencies]\nlib = { path = 1 }\n",
+                LOCK.to_owned(),
+                none(),
+                "`path` is not a string",
+            ),
+            (
+                "an optional that is not a boolean",
+                ROOT,
+                "[dependencies]\nlib = { path = \"../lib\", optional = 1 }\n",
+                LOCK.to_owned(),
+                none(),
+                "`optional` is not a boolean",
+            ),
+            (
+                "a resolver it does not read",
+                "[workspace]\nresolver = \"4\"\nmembers = [\"crates/lib\", \"crates/data\"]\n",
+                "",
+                LOCK.to_owned(),
+                none(),
+                "is not one verus-count reads",
+            ),
+            (
+                "a lockfile `package` that is not an array",
+                ROOT,
+                "",
+                "version = 4\npackage = 1\n".to_owned(),
+                none(),
+                "`package` is not an array",
+            ),
+            (
+                "a lockfile package with no name",
+                ROOT,
+                "",
+                format!("{LOCK}\n[[package]]\nversion = \"1.0.0\"\n"),
+                none(),
+                "a Cargo.lock package has no name",
+            ),
+            (
+                "a lockfile dependency that is not a string",
+                ROOT,
+                "",
+                format!("{LOCK}{EXT}dependencies = [1]\n"),
+                none(),
+                "a Cargo.lock dependency is not a string",
+            ),
+            (
+                "a package with a source that depends on one with a test-only feature",
+                ROOT,
+                "",
+                format!("{LOCK}{EXT}dependencies = [\"lib\"]\n"),
+                none(),
+                "a package with a source, depend on lib, which has the test-only feature `test-util`",
+            ),
+            (
+                "two manifests of one name",
+                ROOT,
+                "[dependencies]\nlib = { path = \"../lib\" }\nother = { path = \"../../dup\", package = \"lib\" }\n",
+                LOCK.to_owned(),
+                vec![("dup/Cargo.toml", LIB.to_owned())],
+                "two manifests name the package lib",
+            ),
+            (
+                "a member the lockfile does not have (a stale lockfile)",
+                "[workspace]\nmembers = [\"crates/lib\", \"crates/data\", \"crates/x\"]\n",
+                "",
+                LOCK.to_owned(),
+                vec![(
+                    "crates/x/Cargo.toml",
+                    "[package]\nname = \"x\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../lib\", features = [\"test-util\"] }\n".to_owned(),
+                )],
+                "a build compiles the package x, but Cargo.lock",
+            ),
+            ("no lockfile", ROOT, "", String::new(), none(), "cannot read"),
+        ] {
+            let root = std::env::temp_dir()
+                .join(format!("verus-count-fails-closed-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&root);
+            // A case that writes its own `[package]` replaces the whole
+            // manifest.
+            let data = match data.contains("[package]") {
+                true => data.to_owned(),
+                false => format!("{DATA}{data}"),
+            };
+            for (p, t) in [
+                ("Cargo.toml", root_toml.to_owned()),
+                ("crates/lib/Cargo.toml", LIB.to_owned()),
+                ("crates/data/Cargo.toml", data),
+            ]
+            .into_iter()
+            .chain(extra)
+            {
+                let f = root.join(p);
+                fs::create_dir_all(f.parent().unwrap()).unwrap();
+                fs::write(&f, t).unwrap();
+            }
+            if !lock.is_empty() {
+                fs::write(root.join("Cargo.lock"), lock).unwrap();
+            }
+            let got = features::test_util_enablers(&root, &test_util());
+            assert!(
+                got.as_ref().is_err_and(|e| e.contains(want)),
+                "{case}: got = {got:?}, wanted an error with {want:?}"
+            );
+            let _ = fs::remove_dir_all(&root);
+        }
+        // A package with a source that depends on a local one with no
+        // test-only feature of its own may ask for any of its features: one
+        // that forwards a test-only feature reaches it (found in review).
+        let root = std::env::temp_dir().join(format!("verus-count-patched-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for (p, t) in [
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"crates/lib\"]\n\n[patch.crates-io]\nmid = { path = \"mid\" }\n",
+            ),
+            ("crates/lib/Cargo.toml", LIB),
+            (
+                "mid/Cargo.toml",
+                "[package]\nname = \"mid\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../crates/lib\" }\n\n[features]\nx = [\"lib/test-util\"]\n",
+            ),
+        ] {
+            let f = root.join(p);
+            fs::create_dir_all(f.parent().unwrap()).unwrap();
+            fs::write(&f, t).unwrap();
+        }
+        fs::write(
+            root.join("Cargo.lock"),
+            format!("version = 4\n\n[[package]]\nname = \"lib\"\nversion = \"0.0.0\"\n\n[[package]]\nname = \"mid\"\nversion = \"0.0.0\"\ndependencies = [\"lib\"]\n{EXT}dependencies = [\"mid\"]\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            features::test_util_enablers(&root, &test_util()),
+            Ok(vec![("lib".to_owned(), "test-util".to_owned())])
+        );
+        // An optional dependency's implicit feature is a feature such a
+        // package may ask for, unless a `dep:` entry suppresses it.
+        for (x, want) in [("test-util", false), ("dep:test-util", true)] {
+            fs::write(
+                root.join("crates/lib/Cargo.toml"),
+                format!("[package]\nname = \"lib\"\nedition = \"2024\"\n\n[dependencies]\ntest-util = {{ package = \"helper\", path = \"../../helper\", optional = true }}\n\n[features]\nx = [\"{x}\"]\n"),
+            )
+            .unwrap();
+            fs::create_dir_all(root.join("helper")).unwrap();
+            fs::write(
+                root.join("helper/Cargo.toml"),
+                "[package]\nname = \"helper\"\nedition = \"2024\"\n",
+            )
+            .unwrap();
+            fs::write(
+                root.join("Cargo.lock"),
+                format!("version = 4\n\n[[package]]\nname = \"helper\"\nversion = \"0.0.0\"\n\n[[package]]\nname = \"lib\"\nversion = \"0.0.0\"\n\n[[package]]\nname = \"mid\"\nversion = \"0.0.0\"\ndependencies = [\"lib\"]\n{EXT}dependencies = [\"lib\"]\n"),
+            )
+            .unwrap();
+            let got = features::test_util_enablers(&root, &test_util());
+            assert_eq!(got.is_ok(), want, "{x}: got = {got:?}");
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// A workspace cargo cannot resolve (here, no lockfile under
     /// `--locked`) is an error, not a pass.
     #[test]
@@ -9207,7 +9686,8 @@ mod tests {
             "[package]\nname = \"lib\"\nedition = \"2024\"\n\n[workspace]\n",
         )
         .unwrap();
-        assert!(test_util_enablers(&root, &test_util()).is_err());
+        assert!(features::test_util_enablers(&root, &test_util()).is_err());
+        assert!(cargo_enablers(&root, &test_util()).is_err());
         let _ = fs::remove_dir_all(&root);
     }
 
