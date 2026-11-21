@@ -23,7 +23,9 @@ executable function before the table, and changes nothing else: every
 check the other options name still runs; `--floor` holds the `shipped` row to the FLOOR
 file; `--base-rev` also holds FLOOR (and REACH, RLIMIT and the
 configuration) to that revision's copies, and fails when the revision
-does not resolve. `--floor` needs one of the two base flags: with
+does not resolve. Each copy is read at its path relative to ROOT, also
+when ROOT is below the repository's top level (`REV:./PATH`, run in
+ROOT). `--floor` needs one of the two base flags: with
 neither the run fails (exit 1), so a CI run that loses its base fails
 rather than skip every base comparison. `--no-base` says there is no
 base to compare with: a local or development run, or the proof PR that

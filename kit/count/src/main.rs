@@ -6467,7 +6467,7 @@ fn base_limits(
         // The revision's root Cargo.toml, whose `[workspace]` tables a
         // crate inherits its edition and dependencies from
         // ([`crate_manifest`]), when the revision has one.
-        let shown = git(&["show", &format!("{rev}:Cargo.toml")])?;
+        let shown = git(&["show", &in_rev(rev, "Cargo.toml")])?;
         if shown.status.success() {
             fs::create_dir_all(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
             fs::write(scratch.join("Cargo.toml"), &shown.stdout)
@@ -6475,9 +6475,12 @@ fn base_limits(
         }
         for (krate, src) in &srcs {
             let kdir = src.parent().unwrap_or(Path::new("")).to_path_buf();
+            // -z gives each path verbatim; ls-tree lists them relative to
+            // ROOT, as [`in_rev`] reads them.
             let listed = git(&[
                 "ls-tree",
                 "-r",
+                "-z",
                 "--name-only",
                 rev,
                 "--",
@@ -6490,11 +6493,17 @@ fn base_limits(
                     String::from_utf8_lossy(&listed.stderr).trim()
                 ));
             }
-            for path in String::from_utf8_lossy(&listed.stdout).lines() {
+            for entry in listed.stdout.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+                let path = std::str::from_utf8(entry).map_err(|_| {
+                    format!(
+                        "git ls-tree {rev}: {:?} is not a UTF-8 path, so the base's crate cannot be read",
+                        String::from_utf8_lossy(entry)
+                    )
+                })?;
                 if !path.ends_with(".rs") && !path.ends_with("Cargo.toml") {
                     continue;
                 }
-                let shown = git(&["show", &format!("{rev}:{path}")])?;
+                let shown = git(&["show", &in_rev(rev, path)])?;
                 if !shown.status.success() {
                     return Err(format!(
                         "git show {rev}:{path}: {}",
@@ -6570,6 +6579,14 @@ fn print_row(name: &str, t: &Tally) {
     );
 }
 
+/// The object name of `path` in `rev`, with `path` relative to ROOT (the
+/// directory `git -C` runs in): `REV:./PATH`, which Git resolves from
+/// there, where `REV:PATH` resolves from the repository's top level and
+/// so misses every file when ROOT is below it.
+fn in_rev(rev: &str, path: &str) -> String {
+    format!("{rev}:./{}", path.trim_start_matches("./"))
+}
+
 /// `REV:FILE` under `root`'s repository (FILE verus/FLOOR or
 /// verus/RLIMIT), failing closed: a
 /// revision that does not resolve to a commit (a shallow clone, another
@@ -6577,7 +6594,7 @@ fn print_row(name: &str, t: &Tally) {
 /// resolved commit without the file is `None`.
 fn base_file(root: &Path, rev: &str, file: &str) -> Result<Option<String>, String> {
     let commit = base_commit(root, rev, file)?;
-    let path = format!("{commit}:{file}");
+    let path = in_rev(&commit, file);
     if !git_in(root, &["cat-file", "-e", &path])?.status.success() {
         return Ok(None);
     }
@@ -6597,11 +6614,17 @@ fn base_file(root: &Path, rev: &str, file: &str) -> Result<Option<String>, Strin
 fn base_dir_crates(root: &Path, rev: &str, dir: &str) -> Result<Vec<String>, String> {
     let commit = base_commit(root, rev, dir)?;
     let dir = config::normal(dir).to_string_lossy().into_owned();
-    let tree = format!("{commit}:{dir}");
+    let tree = in_rev(&commit, &dir);
     if !git_in(root, &["cat-file", "-e", &tree])?.status.success() {
         return Ok(Vec::new());
     }
-    let listed = git_in(root, &["ls-tree", "-z", "-d", "--name-only", &tree])?;
+    // Run below the top level, ls-tree keeps only the entries under the
+    // working directory's path, even of a tree named by `REV:./DIR`;
+    // `--full-tree` lists the whole tree it is given.
+    let listed = git_in(
+        root,
+        &["ls-tree", "--full-tree", "-z", "-d", "--name-only", &tree],
+    )?;
     if !listed.status.success() {
         return Err(format!(
             "git ls-tree {tree}: {}",
@@ -6616,11 +6639,7 @@ fn base_dir_crates(root: &Path, rev: &str, dir: &str) -> Result<Vec<String>, Str
         let src = Path::new(&dir).join(name).join("src");
         let kind = git_in(
             root,
-            &[
-                "cat-file",
-                "-t",
-                &format!("{commit}:{}", src.to_string_lossy()),
-            ],
+            &["cat-file", "-t", &in_rev(&commit, &src.to_string_lossy())],
         )?;
         if kind.status.success() && String::from_utf8_lossy(&kind.stdout).trim() == "tree" {
             out.push(name.to_owned());

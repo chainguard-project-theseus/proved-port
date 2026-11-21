@@ -188,6 +188,232 @@ fn a_gate_dropped_since_the_base_fails_the_run() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A ROOT below the repository's top level reads the base at ROOT's
+/// paths: a gate the base's verus/count.toml there runs, dropped at the
+/// head, fails the run, and an unchanged configuration passes. Before
+/// the base reads resolved from ROOT, both read nothing and passed.
+#[test]
+fn a_root_below_the_top_level_reads_its_base() {
+    let top = std::env::temp_dir().join(format!("verus-count-cli-subroot-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&top);
+    let dir = top.join("sub");
+    fs::create_dir_all(dir.join("crates/a/src")).expect("mkdir");
+    fs::create_dir_all(dir.join("verus")).expect("mkdir");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n",
+    )
+    .expect("write");
+    fs::write(dir.join("crates/a/src/lib.rs"), "pub fn f() {}\n").expect("write");
+    fs::write(dir.join("verus/count.toml"), GATED).expect("write");
+    git(&top, &["init", "-q"]);
+    git(&top, &["add", "sub"]);
+    git(&top, &["commit", "-q", "-m", "gated"]);
+    git(&top, &["tag", "gated"]);
+    fs::write(dir.join("verus/count.toml"), PLAIN).expect("write");
+    let (got, out, err) = count(&dir, &["--base-rev", "gated"]);
+    let want = "FAIL configuration: verus/count.toml: the [mints] section is gone, so its gate no longer runs, where gated:verus/count.toml runs it";
+    assert!(
+        got == 1 && err.contains(want),
+        "dropped gate: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+    );
+    git(&top, &["commit", "-q", "-a", "-m", "plain"]);
+    git(&top, &["tag", "plain"]);
+    let (got, out, err) = count(&dir, &["--base-rev", "plain"]);
+    let want = "ok configuration: verus/count.toml keeps every gate plain:verus/count.toml runs";
+    assert!(
+        got == 0 && out.contains(want),
+        "unchanged: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&top);
+}
+
+/// A repository whose port is in `sub/`: its commit tagged `base` holds
+/// `files` (path under `sub/`, bytes), each a path Git may quote. Returns
+/// the top level and ROOT (`sub/`).
+fn sub_repository(name: &str, files: &[(&[u8], &str)]) -> (PathBuf, PathBuf) {
+    use std::os::unix::ffi::OsStrExt;
+    let top =
+        std::env::temp_dir().join(format!("verus-count-cli-sub-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&top);
+    let dir = top.join("sub");
+    for (path, text) in files {
+        let p = dir.join(std::ffi::OsStr::from_bytes(path));
+        fs::create_dir_all(p.parent().expect("a parent")).expect("mkdir");
+        fs::write(p, text).expect("write");
+    }
+    git(&top, &["init", "-q"]);
+    git(&top, &["add", "-A"]);
+    git(&top, &["commit", "-q", "-m", "base"]);
+    git(&top, &["tag", "base"]);
+    (top, dir)
+}
+
+/// Every base read resolves from a ROOT below the top level (#114): the
+/// crates of a base `dir` (a crate the head deletes is a narrowing), the
+/// base's FLOOR (a lowered figure fails), the base crate's sources (a
+/// raised `rlimit` fails) and its workspace manifest (an inherited edition
+/// reads the same on both sides), and the base sources' names, verbatim
+/// (one Git quotes reads back; one that is not UTF-8 fails, exit 2).
+#[test]
+#[cfg(unix)]
+fn a_root_below_the_top_level_reads_every_base_file() {
+    let manifest = |name: &str| {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n"
+        )
+    };
+    let check = |what: &str, got: i32, out: &str, err: &str, code: i32, want: &str| {
+        assert!(
+            got == code && (out.contains(want) || err.contains(want)),
+            "{what}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+        );
+    };
+    // A crate of `dir` the head deletes.
+    let (ma, mb) = (manifest("a"), manifest("b"));
+    let (top, dir) = sub_repository(
+        "deleted",
+        &[
+            (b"verus/count.toml", PLAIN),
+            (b"crates/a/Cargo.toml", &ma),
+            (b"crates/a/src/lib.rs", "pub fn f() {}\n"),
+            (b"crates/b/Cargo.toml", &mb),
+            (b"crates/b/src/lib.rs", "pub fn g() {}\n"),
+        ],
+    );
+    fs::remove_dir_all(dir.join("crates/b")).expect("rm");
+    let (got, out, err) = count(&dir, &["--base-rev", "base"]);
+    check(
+        "deleted crate",
+        got,
+        &out,
+        &err,
+        1,
+        "[crates] crate \"b\" at \"crates/b\" is no longer read",
+    );
+    let _ = fs::remove_dir_all(&top);
+    // A lowered FLOOR, and a limit raised in the base crate's source, in a
+    // file Git quotes beside the one it reads.
+    let split =
+        |attr: &str| format!("use vstd::prelude::*;\nverus! {{\n{attr} pub fn f() {{}}\n}}\n");
+    let lib = "mod split;\npub fn o() {}\n";
+    let (top, dir) = sub_repository(
+        "ratchets",
+        &[
+            (b"verus/count.toml", RATCHET_CONFIG),
+            (b"verus/FLOOR", RATCHET_FLOOR),
+            (b"verus/RLIMIT", RATCHET_RLIMIT),
+            (b"crates/a/Cargo.toml", &ma),
+            (b"crates/a/src/lib.rs", lib),
+            (b"crates/a/src/split.rs", &split("#[verifier::rlimit(5)]")),
+            ("crates/a/src/café.rs".as_bytes(), "// No functions.\n"),
+        ],
+    );
+    let stats = top.join("stats.json");
+    fs::write(&stats, stats_naming(&[("a::split::f", 1_000_000)])).expect("write");
+    let args = |floor: &Path| {
+        vec![
+            "--floor".to_owned(),
+            floor.to_string_lossy().into_owned(),
+            "--rlimit".to_owned(),
+            stats.to_string_lossy().into_owned(),
+            "--base-rev".to_owned(),
+            "base".to_owned(),
+        ]
+    };
+    let run_at = |a: Vec<String>| {
+        let a: Vec<&str> = a.iter().map(String::as_str).collect();
+        count(&dir, &a)
+    };
+    let (got, out, err) = run_at(args(&dir.join("verus/FLOOR")));
+    check(
+        "as committed",
+        got,
+        &out,
+        &err,
+        0,
+        "ok rlimit headroom: 1 functions",
+    );
+    fs::write(
+        dir.join("verus/FLOOR"),
+        RATCHET_FLOOR.replace("functions 50.0\nlines", "functions 40.0\nlines"),
+    )
+    .expect("write");
+    let (got, out, err) = run_at(args(&dir.join("verus/FLOOR")));
+    check(
+        "lowered floor",
+        got,
+        &out,
+        &err,
+        1,
+        "lowers functions from 50.0% to 40.0%",
+    );
+    fs::write(dir.join("verus/FLOOR"), RATCHET_FLOOR).expect("write");
+    fs::write(dir.join("crates/a/src/split.rs"), split("")).expect("write");
+    let (got, out, err) = run_at(args(&dir.join("verus/FLOOR")));
+    check(
+        "raised rlimit",
+        got,
+        &out,
+        &err,
+        1,
+        "raises a::split::f's rlimit from 5 to 10",
+    );
+    let _ = fs::remove_dir_all(&top);
+    // A base source whose name is not UTF-8 cannot be read back.
+    let (top, dir) = sub_repository(
+        "bytes",
+        &[
+            (b"verus/count.toml", RATCHET_CONFIG),
+            (b"verus/FLOOR", RATCHET_FLOOR),
+            (b"verus/RLIMIT", RATCHET_RLIMIT),
+            (b"crates/a/Cargo.toml", &ma),
+            (b"crates/a/src/lib.rs", lib),
+            (b"crates/a/src/split.rs", &split("#[verifier::rlimit(5)]")),
+            (b"crates/a/src/\xff.rs", "// No functions.\n"),
+        ],
+    );
+    let stats = top.join("stats.json");
+    fs::write(&stats, stats_naming(&[("a::split::f", 1_000_000)])).expect("write");
+    let s = stats.to_string_lossy().into_owned();
+    let floor = dir.join("verus/FLOOR").to_string_lossy().into_owned();
+    let (got, out, err) = count(
+        &dir,
+        &["--floor", &floor, "--rlimit", &s, "--base-rev", "base"],
+    );
+    check("not UTF-8", got, &out, &err, 2, "is not a UTF-8 path");
+    let _ = fs::remove_dir_all(&top);
+    // The edition a crate inherits from the workspace at the base.
+    let (top, dir) = sub_repository(
+        "workspace",
+        &[
+            (
+                b"Cargo.toml",
+                "[workspace]\nmembers = [\"crates/a\"]\n[workspace.package]\nedition = \"2024\"\n",
+            ),
+            (
+                b"crates/a/Cargo.toml",
+                "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition.workspace = true\n[package.metadata.verus]\nverify = true\n",
+            ),
+            (
+                b"crates/a/src/lib.rs",
+                "::vstd::prelude::verus! {\n#[verifier::rlimit(10)]\npub fn f() {}\n}\n",
+            ),
+            (
+                b"verus/count.toml",
+                &format!("{PLAIN}[rlimit]\npath = \"verus/RLIMIT\"\n"),
+            ),
+            (b"verus/RLIMIT", "max-share 65\n"),
+        ],
+    );
+    let stats = top.join("stats.json");
+    fs::write(&stats, ratchet_stats(3_000_000).replace("a::v", "a::f")).expect("write");
+    let s = stats.to_string_lossy().into_owned();
+    let (got, out, err) = count(&dir, &["--rlimit", &s, "--base-rev", "base"]);
+    check("workspace", got, &out, &err, 0, "ok rlimit headroom");
+    let _ = fs::remove_dir_all(&top);
+}
+
 /// A narrowing named by a `[[narrowed]]` line with a reason passes, and the
 /// run prints the reason. Negative: a line that names no narrowing of the
 /// base fails, and so does a narrowing left unnamed beside a named one.
