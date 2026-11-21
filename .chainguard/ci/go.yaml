@@ -59,6 +59,25 @@ checks:
         f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
         go vet ./... && go test -count=1 ./...
 
+  stats-test:
+    description: >-
+      kit/perf/stats, the bench stats tool (PLAN step 6, the Go
+      replacement for a port's awk medians, comparison and tallies):
+      gofmt lists no file, go vet passes, and go test passes (its
+      medians, comparisons and tallies against goldens the reference awk
+      in testdata/ref wrote, hand-worked bands and comparison lines, and
+      the input and usage it refuses).
+    trigger: [presubmit, postsubmit]
+    timeout: 10m
+    cmd:
+      - sh
+      - -c
+      - >-
+        export GOTOOLCHAIN=local GOFLAGS=-mod=mod;
+        cd kit/perf/stats;
+        f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
+        go vet ./... && go test -count=1 ./...
+
   codegen-test:
     description: >-
       kit/codegen-test.sh: kit/make/codegen.sh (make codegen,
