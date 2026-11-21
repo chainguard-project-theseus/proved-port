@@ -99,10 +99,15 @@ without a reason all fail.
 
 ## The known-differences ledger
 
-`docs/abi-changes.md` holds every deliberate, observable difference. A
-difference without an entry is a bug. IDs are `ABI-nnn`, assigned in
-order and never reused. The format is fixed so an agent can turn an
-entry into a distro package patch without other context:
+`docs/abi/` holds every deliberate, observable difference, one file per
+entry (`docs/abi/ABI-nnn.md`, whose first line is the entry's heading),
+with the format and ID rules in `docs/abi/README.md` (the kit's
+`kit/templates/docs/abi/`). Two pull requests that each add an entry then
+touch different files; two that pick the same ID meet as an add/add
+conflict, and the second to rebase takes the next ID. A difference
+without an entry is a bug. IDs are `ABI-nnn`, assigned in order and
+never reused. The format is fixed so an agent can turn an entry into a
+distro package patch without other context:
 
 ```markdown
 ### ABI-nnn: one-line summary

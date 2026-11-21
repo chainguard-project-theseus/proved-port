@@ -13,7 +13,7 @@
 # self-test.
 # known-citations, on every pull request and merge, checks only that
 # each row of the differential fuzzer's known-differences table
-# (fuzz/diff/known.c, or known.rs) cites an active docs/abi-changes.md
+# (fuzz/diff/known.c, or known.rs) cites an active docs/abi/ABI-nnn.md
 # entry or an open issue (`ci/fuzz-diff.sh --check-known`).
 version: 1
 
@@ -58,7 +58,7 @@ checks:
 
   known-citations:
     description: >-
-      Every known-differences row of fuzz/diff cites an active docs/abi-changes.md entry
+      Every known-differences row of fuzz/diff cites an active docs/abi/ABI-nnn.md entry
       or an issue that neither this pull request's description nor a
       commit since the row's citation closes (Fixes #n, ...): a fix
       deletes its row. ci/fuzz-diff.sh --check-known.

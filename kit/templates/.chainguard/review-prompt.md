@@ -17,8 +17,9 @@ a change cites. The checks below are what a change must not get wrong.
 - The C ABI. Check anything a consumer can observe: the headers under
   `include/`, the exported names and their version nodes, the sonames,
   struct layouts, error codes and texts. A difference from {LIBRARY}
-  {UPSTREAM_VERSION} needs an `ABI-nnn` entry in `docs/abi-changes.md` in
-  the same pull request. An undocumented difference is Blocking. Name what
+  {UPSTREAM_VERSION} needs an `ABI-nnn` entry, a file of its own
+  `docs/abi/ABI-nnn.md` in `docs/abi/README.md`'s format, in the same
+  pull request. An undocumented difference is Blocking. Name what
   pins the behaviour (`ci/abi.sh`, the conformance ratchet, the
   differential fuzzer, a consumer case); if none does, say so.
 - The conformance ratchet. `tests/upstream/deviations.txt` only loses
