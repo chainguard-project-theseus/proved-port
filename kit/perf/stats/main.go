@@ -14,6 +14,12 @@
 //	stats med REPS
 //	stats cmp -t ARM -r ARM [-per GROUP=N,...] [-insns-floor PCT] REPS
 //	stats ahead -pairs ARM:REF,... [-skip ROW,...] MED
+//	stats relabel -map MAP REPS
+//	stats check [-same ARM,...]... REPS
+//	stats md5 LOG...
+//
+// relabel, check and md5 are a pull's generic checks; pull.go documents
+// them.
 //
 // med prints group, row, arm, median instructions, median cycles. The
 // median of an even count is the lower middle value.
@@ -74,6 +80,9 @@ const usage = `usage:
   stats med REPS
   stats cmp -t ARM -r ARM [-per GROUP=N,...] [-insns-floor PCT] REPS
   stats ahead -pairs ARM:REF,... [-skip ROW,...] MED
+  stats relabel -map MAP REPS
+  stats check [-same ARM,...]... REPS
+  stats md5 LOG...
 `
 
 // errUsage marks an error that exits 2.
@@ -88,6 +97,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	var lines []string
 	var err error
+	// fileOrder keeps the lines as the command returns them; findings
+	// makes any line exit 1 once printed.
+	fileOrder, findings := false, false
 	switch args[0] {
 	case "med":
 		lines, err = runMed(args[1:])
@@ -95,6 +107,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		lines, err = runCmp(args[1:], stderr)
 	case "ahead":
 		lines, err = runAhead(args[1:])
+	case "relabel":
+		lines, err = runRelabel(args[1:])
+		fileOrder = true
+	case "check":
+		lines, err = runCheck(args[1:])
+		findings = true
+	case "md5":
+		lines, err = runMD5(args[1:])
+		findings = true
 	default:
 		err = errUsage{fmt.Sprintf("stats: unknown command %q", args[0])}
 	}
@@ -107,7 +128,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
-	sort.Strings(lines)
+	if !fileOrder {
+		sort.Strings(lines)
+	}
 	w := bufio.NewWriter(stdout)
 	for _, l := range lines {
 		w.WriteString(l)
@@ -115,6 +138,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if err := w.Flush(); err != nil {
 		fmt.Fprintf(stderr, "stats: write: %v\n", err)
+		return 1
+	}
+	if findings && len(lines) > 0 {
+		fmt.Fprintf(stderr, "stats %s: %d findings\n", args[0], len(lines))
 		return 1
 	}
 	return 0

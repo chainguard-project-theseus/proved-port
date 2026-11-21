@@ -366,10 +366,14 @@ is deleted in that PR.
    **Status:** the stats tool is `kit/perf/stats` (Go, #176): `med`
    (per-row medians), `cmp` (an arm against a reference with
    half-split noise bands and marks) and `ahead` (rows each arm is
-   ahead of its reference), checked by the go.yaml check `stats-test`
-   against goldens the reference awk in `kit/perf/stats/testdata/ref`
-   writes. The package does not install it yet. Still to come: the noise-baseline verdicts,
-   the table join, the box skeleton and pull.
+   ahead of its reference), and the pull's generic checks (#178):
+   `relabel` (box labels to arms through a map file), `check` (bad
+   counters, empty outputs, outputs that differ within a set of arms)
+   and `md5` (a file with more than one md5 across the logs), checked
+   by the go.yaml check `stats-test` against goldens the reference awk
+   in `kit/perf/stats/testdata/ref` writes. The package does not
+   install it yet. Still to come: the noise-baseline verdicts, the
+   table join, the box skeleton and the pull's fetch.
 7. **Emulator, codegen diff, fast-path budget, noalias check.**
    Emulator: the three variants reconciled into `kit/perf/emu/` (no port
    had it in tree). challoc: `scripts/codegen-diff.sh`, `ci/codegen.sh`,
