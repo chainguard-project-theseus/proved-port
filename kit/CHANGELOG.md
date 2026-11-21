@@ -115,6 +115,28 @@ where it reports drift.
   module, or for an import in a 2015 crate at the root too. It counted
   nothing. No port's run changes (each port's counter output, `--list`
   included, is identical before and after).
+- `[crates] test_features` no longer runs cargo (#136): the counter
+  reads which builds may turn a test-only feature on from the
+  workspace's manifests and `Cargo.lock`, so the check runs in a job
+  with no cargo and in one where offline resolution fails (a `vstd`
+  pin cargo cannot see from crates.io's index). It reads what `cargo
+  tree` over the workspace's normal and build edges, with every
+  member's other features on, read before: renamed and workspace
+  dependencies, `name/feature` and `name?/feature`, target-specific
+  sections, path dependencies that are not members, members by a
+  trailing `/*`, and `exclude`; an optional dependency's implicit
+  feature; under resolver 1, a member's dev-dependencies' features,
+  which it unifies into normal builds; and any feature but a test-only
+  one of a local package that a package with a source depends on (as a
+  `[patch]` may make it). It fails the run on a form it does not read
+  (another member glob, a malformed entry, a feature naming no
+  dependency, an unknown resolver), on a package with no source in
+  `Cargo.lock` whose manifest it does not find, on a compiled package
+  `Cargo.lock` does not have (a stale lockfile), and on a package with
+  a source that depends on one with a test-only feature.
+  The kit's tests hold it to cargo's own answer on every case. No
+  port's run changes (each port's counter output, `--list` included,
+  is identical before and after).
 
 ## 0.4.5
 
