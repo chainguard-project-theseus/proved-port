@@ -1,0 +1,20 @@
+functions old 2 new 2: exact 0, reloc-only 0, padding-only 0, erratum-stub 0, changed 2
+insns old 4 new 4
+### changed: f (2 insns) vs baseline f (2 insns)
+### changed: g (2 insns) vs baseline g (2 insns)
+
+--- diff of f, immediates masked
+   --- old
+   +++ new
+   @@ -1,2 +1,2 @@
+   -add x0, x0, x1
+   +sub x0, x0, x1
+    ret
+
+--- diff of g, immediates masked
+   --- old
+   +++ new
+   @@ -1,2 +1,2 @@
+   -sub x0, x0, x1
+   +add x0, x0, x1
+    ret

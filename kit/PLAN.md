@@ -378,8 +378,14 @@ is deleted in that PR.
    **Status:** the noalias check is `kit/make/noalias.sh` (`make
    noalias`, #159), with challoc's fixtures as its self-test and
    `noalias-test` running it with cargo over a fixture crate; challoc's
-   switch to it is to come. The codegen diff, the fast-path budget and
-   the emulator are still to come.
+   switch to it is to come. The comparer is `kit/perf/codegen/fncmp`
+   (Go, #164), with challoc's fixtures as its tests and `go.yaml`'s
+   `fncmp-test` running them. Its reports are byte-identical to
+   `codegen-fncmp.py`'s, with three exceptions. A name that demangles
+   on one side only still pairs by its mangled key, and a dump with no
+   functions or a failed write exits 1. How a port runs it, and the rest of the codegen
+   diff (`codegen-diff.sh`, `ci/codegen.sh`), are to come, as are the
+   fast-path budget and the emulator.
 8. **CI templates and the Makefile include**, once the above have
    stable interfaces. pcre3 and challoc `include` the kit's
    `proved-port.mk` for the `verus`, `kani` and `bench` recipes and
