@@ -6920,11 +6920,13 @@ fn badge_line(floor: &Floor) -> String {
 
 /// Whether `rendered`, the part of a line Markdown renders, holds a Verus
 /// badge in any form: `verus` in any case, with `shields.io` or an image
-/// (`![`). The match is wide on purpose: a line it takes for a badge that
-/// is not one fails the gate, while a second badge it missed would pass.
+/// (`![`, or an HTML `<img`, from any host). The match is wide on purpose:
+/// a line it takes for a badge that is not one fails the gate, while a
+/// second badge it missed would pass.
 fn is_badge(rendered: &str) -> bool {
     let lower = rendered.to_lowercase();
-    lower.contains("verus") && (lower.contains("shields.io") || lower.contains("!["))
+    lower.contains("verus")
+        && (lower.contains("shields.io") || lower.contains("![") || lower.contains("<img"))
 }
 
 /// The fence a line opens or closes: its character (`` ` `` or `~`) and
@@ -6941,47 +6943,250 @@ fn fence(line: &str) -> Option<(char, usize)> {
     (n >= 3 && !(c == '`' && rest[n..].contains('`'))).then_some((c, n))
 }
 
-/// Each line of `text`, numbered from 1, with the part Markdown renders:
-/// a line inside a fenced code block renders as none, and the spans
-/// inside HTML comments (`<!--` to `-->`, across lines) are dropped. A
-/// badge on a line that does not render is neither the badge nor a second
-/// one.
-fn rendered_lines(text: &str) -> Vec<(usize, &str, String)> {
-    let mut open: Option<(char, usize)> = None;
-    let mut comment = false;
+/// Each line of `text`, numbered from 1, with the part Markdown renders,
+/// in two readings ([`Rendered`]). In both, a line inside a fenced code
+/// block renders as none, and the spans inside HTML comments (`<!--` to
+/// `-->`, across lines; `<!-->` and `<!--->` are whole comments, as
+/// CommonMark reads them) are dropped. The strict reading hides a fence
+/// or a comment never closed to the end of the file. The lenient reading
+/// reads its opener as text instead; reads as text a `<!--` in a backtick
+/// code span, escaped (`\<!--`), on a line indented 4 or more spaces, or
+/// whose container ends before its `-->` ([`Ends`]: an inline comment's
+/// paragraph, a list item, a block quote); and ends a fence
+/// indented by k > 0 spaces at the first non-blank line indented less (a
+/// list item's fence ends with the item), since a renderer may read the
+/// file either way.
+fn rendered_lines(text: &str) -> Vec<Rendered<'_>> {
+    let (strict, _) = rendered_scan(text, &[], false);
+    // The openers (line index, byte offset) the lenient reading takes as
+    // text, not as the start of a fence or comment, because it found them
+    // unclosed.
+    let mut ignored: Vec<(usize, usize)> = Vec::new();
+    let lenient = loop {
+        match rendered_scan(text, &ignored, true) {
+            (out, None) => break out,
+            (_, Some(opener)) => ignored.push(opener),
+        }
+    };
+    strict
+        .into_iter()
+        .zip(lenient)
+        .map(|((n, line, s), (_, _, l))| (n, line, s, l))
+        .collect()
+}
+
+/// A line of [`rendered_lines`]: its number from 1, its text, and the
+/// part of it Markdown renders in the strict and the lenient reading.
+type Rendered<'t> = (usize, &'t str, String, String);
+
+/// What [`rendered_scan`] gives: each line (its number, text and rendered
+/// part), and the unclosed opener (line index, byte offset), if any.
+type Scan<'t> = (Vec<(usize, &'t str, String)>, Option<(usize, usize)>);
+
+/// The byte ranges of `line`'s backtick code spans: a run of n backticks
+/// up to the next run of exactly n on the line.
+fn code_spans(line: &str) -> Vec<(usize, usize)> {
+    let b = line.as_bytes();
+    let run = |at: usize| b[at..].iter().take_while(|c| **c == b'`').count();
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'`' {
+            i += 1;
+            continue;
+        }
+        let n = run(i);
+        let mut j = i + n;
+        let mut end = None;
+        while j < b.len() {
+            if b[j] == b'`' {
+                let m = run(j);
+                if m == n {
+                    end = Some(j + m);
+                    break;
+                }
+                j += m;
+            } else {
+                j += 1;
+            }
+        }
+        match end {
+            Some(e) => {
+                spans.push((i, e));
+                i = e;
+            }
+            None => i += n,
+        }
+    }
+    spans
+}
+
+/// What ends a comment's container before its `-->`, in the lenient
+/// reading of [`rendered_scan`], by what precedes its `<!--` on its line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Ends {
+    /// `<!--` at the start of a line (after up to 3 spaces) opens an HTML
+    /// block, which only its `-->` ends.
+    Closer,
+    /// After a list marker, an HTML block in the item, whose content
+    /// starts at this column: a non-blank line indented less ends the
+    /// item (an HTML block has no lazy continuation).
+    Item(usize),
+    /// After `>`, an HTML block in a block quote: a line that does not
+    /// start with `>` ends the quote.
+    Quote,
+    /// Anywhere else, an inline comment: a blank line or a line that
+    /// starts a block ends its paragraph.
+    Paragraph,
+}
+
+impl Ends {
+    /// The container of a `<!--` that `before` precedes on its line.
+    fn of(before: &str) -> Ends {
+        let rest = before.trim_start_matches(' ');
+        if before.len() - rest.len() > 3 {
+            return Ends::Paragraph;
+        }
+        if rest.is_empty() {
+            return Ends::Closer;
+        }
+        if list_marker(rest).is_some_and(|n| rest[n..].trim().is_empty()) {
+            return Ends::Item(before.len());
+        }
+        if rest.starts_with('>') && rest.chars().all(|c| c == '>' || c == ' ') {
+            return Ends::Quote;
+        }
+        Ends::Paragraph
+    }
+
+    /// Whether `line`, after the opener's, ends the container.
+    fn ends_at(self, line: &str) -> bool {
+        let blank = line.trim().is_empty();
+        let rest = line.trim_start_matches(' ');
+        let indent = line.len() - rest.len();
+        match self {
+            Ends::Closer => false,
+            Ends::Item(k) => !blank && indent < k,
+            Ends::Quote => !(indent <= 3 && rest.starts_with('>')),
+            Ends::Paragraph => {
+                blank
+                    || (indent <= 3
+                        && (rest.starts_with('#')
+                            || rest.starts_with('>')
+                            || fence(line).is_some()
+                            || list_marker(rest).is_some_and(|n| n < rest.len())
+                            || ['-', '*', '_', '='].iter().any(|c| {
+                                rest.chars().all(|x| x == *c || x == ' ')
+                                    && rest.chars().filter(|x| x == c).count() >= 3
+                            })))
+            }
+        }
+    }
+}
+
+/// The length of the list marker `rest` starts with (`-`, `*`, `+`, or
+/// up to 9 digits and `.` or `)`), followed by a space, if it has one.
+fn list_marker(rest: &str) -> Option<usize> {
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let n = match rest.as_bytes().first()? {
+        b'-' | b'*' | b'+' => 1,
+        _ if (1..=9).contains(&digits)
+            && matches!(rest.as_bytes().get(digits), Some(b'.' | b')')) =>
+        {
+            digits + 1
+        }
+        _ => return None,
+    };
+    rest[n..].starts_with(' ').then_some(n + 1)
+}
+
+/// One pass of [`rendered_lines`], strict or `lenient`, with the openers
+/// in `ignored` read as text: each line with the part of it that renders,
+/// and the opener (line index, byte offset) of the fence or comment still
+/// open at the end of `text`, if one is.
+fn rendered_scan<'t>(text: &'t str, ignored: &[(usize, usize)], lenient: bool) -> Scan<'t> {
+    let indent = |l: &str| l.len() - l.trim_start_matches(' ').len();
+    // An open fence: its character, length, indent and line index.
+    let mut open: Option<(char, usize, usize, usize)> = None;
+    // An open comment: its opener (line index, byte offset), and what ends
+    // its container before its `-->` ([`Ends`]).
+    let mut comment: Option<(usize, usize, Ends)> = None;
     let mut out = Vec::new();
     for (i, line) in text.lines().enumerate() {
-        if let Some((c, n)) = open {
-            if fence(line)
-                .is_some_and(|(d, m)| d == c && m >= n && line.trim().chars().all(|x| x == c))
-            {
+        // The lenient reading takes a comment's opener as text when its
+        // container ends before its `-->`: a paragraph at a blank line or
+        // a line that starts a block, a list item at a line indented less,
+        // a block quote at a line without `>`.
+        if lenient
+            && let Some((ci, co, ends)) = comment
+            && ends.ends_at(line)
+        {
+            return (out, Some((ci, co)));
+        }
+        if let Some((c, n, k, _)) = open {
+            if lenient && k > 0 && !line.trim().is_empty() && indent(line) < k {
                 open = None;
+            } else {
+                if fence(line)
+                    .is_some_and(|(d, m)| d == c && m >= n && line.trim().chars().all(|x| x == c))
+                {
+                    open = None;
+                }
+                out.push((i + 1, line, String::new()));
+                continue;
             }
+        }
+        if comment.is_none()
+            && !ignored.contains(&(i, 0))
+            && let Some((c, n)) = fence(line)
+        {
+            open = Some((c, n, indent(line), i));
             out.push((i + 1, line, String::new()));
             continue;
         }
-        if !comment && let Some(f) = fence(line) {
-            open = Some(f);
-            out.push((i + 1, line, String::new()));
-            continue;
-        }
+        let spans = if lenient {
+            code_spans(line)
+        } else {
+            Vec::new()
+        };
+        // The lenient reading also takes as text a `<!--` that renders as
+        // text: in a backtick code span, escaped (`\<!--`), or on a line
+        // indented 4 or more spaces (an indented code block).
+        let text_at = |pos: usize| {
+            ignored.contains(&(i, pos))
+                || (lenient
+                    && (spans.iter().any(|(s, e)| *s < pos && pos < *e)
+                        || line[..pos].ends_with('\\')
+                        || indent(line) >= 4))
+        };
         let mut shown = String::new();
-        let mut rest = line;
+        let mut at = 0;
         loop {
-            if comment {
+            let rest = &line[at..];
+            if comment.is_some() {
                 match rest.find("-->") {
                     Some(end) => {
-                        comment = false;
-                        rest = &rest[end + 3..];
+                        comment = None;
+                        at += end + 3;
                     }
                     None => break,
                 }
             } else {
                 match rest.find("<!--") {
+                    Some(start) if text_at(at + start) => {
+                        shown += &rest[..start + 4];
+                        at += start + 4;
+                    }
                     Some(start) => {
                         shown += &rest[..start];
-                        comment = true;
-                        rest = &rest[start + 4..];
+                        let after = &rest[start + 4..];
+                        // `<!-->` and `<!--->` end where they start.
+                        if let Some(close) = [">", "->"].iter().find(|c| after.starts_with(**c)) {
+                            at += start + 4 + close.len();
+                        } else {
+                            comment = Some((i, at + start, Ends::of(&line[..at + start])));
+                            at += start + 4;
+                        }
                     }
                     None => {
                         shown += rest;
@@ -6992,27 +7197,34 @@ fn rendered_lines(text: &str) -> Vec<(usize, &str, String)> {
         }
         out.push((i + 1, line, shown));
     }
-    out
+    let unclosed = match (open, comment) {
+        (Some((_, _, _, i)), _) => Some((i, 0)),
+        (None, opener) => opener.map(|(i, at, _)| (i, at)),
+    };
+    (out, unclosed)
 }
 
 /// Holds `text`, the badge file `name`, to `want`, the line
-/// [`badge_line`] gives for the FLOOR file `floor`: exactly one rendered
-/// line holds a Verus badge ([`is_badge`], [`rendered_lines`]), and it is
-/// `want`. The report line, or the failure.
+/// [`badge_line`] gives for the FLOOR file `floor`: exactly one line holds
+/// a Verus badge ([`is_badge`]) in either reading of [`rendered_lines`],
+/// and it is `want`, rendered in both. The report line, or the failure.
 fn badge_report(text: &str, name: &str, floor: &str, want: &str) -> Result<String, String> {
-    let found: Vec<(usize, &str)> = rendered_lines(text)
+    let found: Vec<(usize, &str, bool)> = rendered_lines(text)
         .into_iter()
-        .filter(|(_, _, shown)| is_badge(shown))
-        .map(|(n, l, _)| (n, l))
+        .filter(|(_, _, s, l)| is_badge(s) || is_badge(l))
+        .map(|(n, line, s, l)| (n, line, is_badge(&s) && is_badge(&l)))
         .collect();
     match found.as_slice() {
         [] => Err(format!(
             "FAIL badge: {name} has no Verus badge; add this line, which gives {floor}'s functions and lines figures:\n{want}"
         )),
-        [(n, line)] if *line == want => Ok(format!(
+        [(n, line, true)] if *line == want => Ok(format!(
             "ok badge: {name}:{n} gives {floor}'s functions and lines figures"
         )),
-        [(n, _)] => Err(format!(
+        [(n, line, false)] if *line == want => Err(format!(
+            "FAIL badge: {name}:{n} is the badge but may not render: one reading of the file has it inside a fence or an HTML comment (one never closed, `<!--` in inline code, or a list item's fence); move it above that opener, keeping this line:\n{want}"
+        )),
+        [(n, _, _)] => Err(format!(
             "FAIL badge: {name}:{n} is not the badge {floor}'s functions and lines figures give; replace it with this line:\n{want}"
         )),
         _ => Err(format!(
@@ -7020,7 +7232,7 @@ fn badge_report(text: &str, name: &str, floor: &str, want: &str) -> Result<Strin
             found.len(),
             found
                 .iter()
-                .map(|(n, _)| n.to_string())
+                .map(|(n, _, _)| n.to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
         )),
@@ -8106,6 +8318,8 @@ mod tests {
             format!("~~~\n{alt}\n~~~"),
             format!("<!--\n{alt}\n-->"),
             format!("<!-- {alt} -->"),
+            // An HTML block at the start of a line crosses blank lines.
+            format!("<!--\n\n{alt}\n-->"),
         ] {
             assert_eq!(
                 badge_report(
@@ -8233,6 +8447,131 @@ mod tests {
             (
                 readme(&format!("```x``` {want}")),
                 "FAIL badge: README.md:3 is not the badge",
+            ),
+            // An `<img>` badge from a host other than shields.io.
+            (
+                readme(&format!(
+                    "{want}\n<img alt=\"Verus\" src=\"https://badgen.net/badge/Verus/99%25/green\">"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4)",
+            ),
+            // A fence or a comment never closed hides nothing: a list
+            // item's fence that the renderer ends with the item, `<!--` in
+            // inline code, and `<!-->`, a whole comment.
+            (
+                readme(&format!(
+                    "{want}\n- step one\n  ```\n  example\nStale: ![Verus](https://img.shields.io/badge/Verus-99%25-green)"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 7)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nWrite `<!--` to start a comment.\nStale: ![Verus](https://img.shields.io/badge/Verus-99%25-green)"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // The later `-->` would close `<!-->` or `<!--->` read as an
+            // opener, hiding the stale badge in both readings, so these
+            // rows hold only while they are whole comments.
+            (
+                readme(&format!(
+                    "{want}\n<!--> Stale: ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n<!-- note -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n<!---> Stale: ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n<!-- note -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4)",
+            ),
+            // The strict reading keeps a fence indented 1 to 3 spaces open
+            // across a line indented less, as CommonMark does: only the
+            // lenient reading ends it, so the canonical line is not
+            // credited.
+            (
+                readme(&format!("  ```\n{want}\n  ```")),
+                "FAIL badge: README.md:4 is the badge but may not render",
+            ),
+            // A `<!--` that renders as text, with a `-->` later: escaped,
+            // in an indented code block, and mid-line with a blank line
+            // before its `-->` (an inline comment cannot cross one).
+            (
+                readme(&format!(
+                    "{want}\n\nUse \\<!-- here.\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n<!-- x -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n\n    <!-- example\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n<!-- x -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n\nText <!-- here.\n\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n\n<!-- x -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 7)",
+            ),
+            // A comment whose container ends before its `-->`: an HTML
+            // block in a list item or a block quote (no lazy continuation),
+            // and an inline comment whose paragraph a list item or a
+            // heading ends.
+            (
+                readme(&format!(
+                    "{want}\n- <!--\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n> <!--\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n- ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n# ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // A closed comment still hides, and an unclosed opener later
+            // in the file does not reopen it.
+            (
+                readme(&format!("<!--\n{want}\n-->\n{alt}\nWrite `<!--` here.")),
+                "FAIL badge: README.md:6 is not the badge",
+            ),
+            // The canonical line only after an opener never closed: the
+            // strict reading hides it, so it is not credited.
+            (
+                readme(&format!("<!--\n{want}\n")),
+                "FAIL badge: README.md:4 is the badge but may not render",
+            ),
+            (
+                readme(&format!("```\n{want}\n")),
+                "FAIL badge: README.md:4 is the badge but may not render",
+            ),
+            // Closers later in the file: `<!--` in inline code closed by
+            // `-->` in inline code, and a list item's fence that a later
+            // top-level fence would close. The stale badge renders.
+            (
+                readme(&format!(
+                    "{want}\nWrite `<!--` to open a comment.\nStale: ![Verus](https://img.shields.io/badge/Verus-99%25-green)\nEnd it with `-->`."
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n- step\n  ```\n  ex\nStale: ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n```\ncode\n```"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 7)",
             ),
         ] {
             let got = badge_report(&text, "README.md", "verus/FLOOR", &want);
