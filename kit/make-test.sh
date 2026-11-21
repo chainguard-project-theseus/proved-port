@@ -11,6 +11,8 @@
 #     that nothing builds the counter, even for a port that still has a
 #     verus/count or includes a verus/make copy of proved-port.mk, and
 #     that verify runs VERIFY_TARGETS in order and stops at a failure;
+#   - with a stub cargo, the clean runs before cargo verus, and `make
+#     verus` stops when the proofs fail, with no counter run;
 #   - the PROVED_PORT_VERSION and counter-version guards fail a target
 #     before it runs anything;
 #   - kani.sh runs with a stub cargo: crate selection, one harness,
@@ -310,6 +312,43 @@ for metadata in '{"packages":[],"workspace_default_members":[],"version":1}' '{"
   expect "no default members (${metadata:-empty}) fails before any clean" "$(tr -s ' ' < "$tmp/cargo.log" | sed 's/ $//')" \
     "cargo metadata --locked --no-deps --format-version 1"
 done
+rm -rf "$port/target"
+
+# Failing proofs stop `make verus` before the counter: a stub cargo whose
+# verus call writes a statistics file and exits 1, and a stub counter
+# that logs each call but --version. make must exit non-zero with no
+# counter run, so a recipe change that loses cargo verus's exit status
+# (a pipe, a `|| true`) fails here, not only in a port's red check.
+mkdir -p "$tmp/failbin"
+# shellcheck disable=SC2016
+printf '#!/bin/sh\necho "cargo $*" >> "%s"\nif [ "$1" = verus ]; then echo "{\\"verification-results\\": {\\"success\\": false}}"; echo "error: assertion failed" >&2; exit 1; fi\n' \
+  "$tmp/cargo.log" > "$tmp/failbin/cargo"
+chmod +x "$tmp/failbin/cargo"
+# shellcheck disable=SC2016
+printf '#!/bin/sh\nif [ "${1-}" = --version ]; then echo "verus-count %s"; exit 0; fi\necho "verus-count $*" >> "%s"\n' \
+  "$version" "$tmp/count.log" > "$tmp/failbin/verus-count"
+chmod +x "$tmp/failbin/verus-count"
+: > "$tmp/cargo.log"
+: > "$tmp/count.log"
+if PATH="$tmp/failbin:$PATH" make -s -C "$port" CARGO_TARGET_DIR= VERUS_BASE=none VERUS_COUNT="$tmp/failbin/verus-count" verus > /dev/null 2>&1; then
+  fail "make verus with failing proofs: got = success, want = failure"
+fi
+expect "make verus with failing proofs runs cargo verus" "$(tr -s ' ' < "$tmp/cargo.log" | sed 's/ $//')" \
+  "cargo clean --locked -p alpha -p beta --target-dir target/verus-partial
+cargo verus focus --locked -p alpha -p beta -j 1 -- --time-expanded --output-json"
+expect "make verus with failing proofs runs no counter after them" "$(cat "$tmp/count.log")" ""
+[ -s "$port/target/verus-stats.json" ] ||
+  fail "make verus with failing proofs: got = no statistics file, want = the stub's (so the counter had one to read)"
+# The same stubs with proofs that pass run the counter, so the row
+# above fails on the order, not on a counter stub that never runs.
+# shellcheck disable=SC2016
+printf '#!/bin/sh\necho "cargo $*" >> "%s"\n[ "$1" != verus ] || echo "{}"\n' \
+  "$tmp/cargo.log" > "$tmp/failbin/cargo"
+: > "$tmp/count.log"
+PATH="$tmp/failbin:$PATH" make -s -C "$port" CARGO_TARGET_DIR= VERUS_BASE=none VERUS_COUNT="$tmp/failbin/verus-count" verus > /dev/null 2>&1 ||
+  fail "make verus with passing proofs and a passing counter: got = failure, want = success"
+expect "make verus with passing proofs runs the counter" "$(tr -s ' ' < "$tmp/count.log" | sed 's/ $//')" \
+  "verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --no-base ."
 rm -rf "$port/target"
 
 # Verify mode cleans VERUS_TARGET_DIR itself, which a fresh checkout's
