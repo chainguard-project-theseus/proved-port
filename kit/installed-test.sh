@@ -204,10 +204,18 @@ expect "make verus-count-test runs no cargo test" \
   "verus-count-test: verus-count is not built here; its package tests it"
 expect "make -n kani-list: the package's kani.sh" \
   "$(shows "$installed" kani-list)" "sh $home/make/kani.sh --list"
+expect "make -n lint-unsafe: the package's lint-unsafe.sh" \
+  "$(shows "$installed" lint-unsafe UNSAFE_CRATES=c)" \
+  "UNSAFE_CRATES='c' UNSAFE_WORKSPACE_LINTS='yes' UNSAFE_MANIFEST='' UNSAFE_CHECK_FLAGS='' sh $home/make/lint-unsafe.sh ."
+if [ ! -f "$home/make/lint-unsafe.sh" ] || ! sh "$home/make/lint-unsafe.sh" --self-test > "$tmp/out"; then
+  cat "$tmp/out" >&2 || true
+  fail "the installed lint-unsafe.sh: got = missing or a failing self-test, want = its self-test passes"
+fi
+echo "ok the installed lint-unsafe.sh passes its self-test"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular verify; do
-  make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe verify; do
+  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
     || { cat "$tmp/err" >&2; fail "make -n $t, PROVED_PORT_VERSION=$version (KIT's): got = failure, want = success"; }
   if make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$other" > "$tmp/out" 2> "$tmp/err"; then
     fail "make -n $t, PROVED_PORT_VERSION=$other: got = success, want = failure"

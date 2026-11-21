@@ -316,9 +316,14 @@ is deleted in that PR.
      Kani runner is `kit/make/kani.sh` (`make kani`), installed with the
      counter: pcre3's crate halves, chainz's one harness per
      instance and challoc's weighted shards with a fail pattern, each
-     as variables (`make-template` tests it with a stub cargo). Still
-     to come in this step: the unsafe/assume lint, and the pcre3 and
-     challoc PRs that switch to the package's counter.
+     as variables (`make-template` tests it with a stub cargo). The
+     unsafe lint's shared rule is `kit/make/lint-unsafe.sh` (`make
+     lint-unsafe`, #150): crate roots, workspace lints and a
+     command-line forbid for every member but `UNSAFE_CRATES`
+     (`lint-unsafe-test` runs it with cargo); the `assume_new` seam list
+     and other port-specific rules stay in each port's script. Still to
+     come in this step: the pcre3 and challoc PRs that switch to the
+     package's counter, and the ports' switches to `make lint-unsafe`.
 3. **Seam ledger generator** (Go rewrite of challoc's `verus/seams.sh`,
    with `verus/seams-mutants.sh` as its tests). challoc: the Makefile's
    `sh verus/seams.sh --check` runs the kit generator; the generated

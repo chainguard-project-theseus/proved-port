@@ -8,7 +8,8 @@
 # repository to read a base revision from. apk-tools and wolfi-keys let
 # the deps agent's guest, which runs in this environment, install a new
 # stream and read Wolfi's index. count-installed tests kit/make as the
-# package installs it, against the counter built here.
+# package installs it, against the counter built here. lint-unsafe-test
+# runs kit/make/lint-unsafe.sh with this toolchain's cargo.
 version: 1
 
 environment:
@@ -61,3 +62,15 @@ checks:
       packages: [rust-1.99, build-base, busybox, git, make]
     network: *crates
     cmd: [sh, kit/installed-test.sh]
+
+  lint-unsafe-test:
+    description: >-
+      kit/lint-unsafe-test.sh: kit/make/lint-unsafe.sh (make lint-unsafe)
+      over a fixture workspace with cargo: it passes, and each planted
+      change (unsafe code in a module, test, build script or example, a
+      root without the forbid, half the Verus pair, a misspelt
+      UNSAFE_CRATES, missing workspace lints) fails it. The fixture has
+      no dependencies, so it needs no network.
+    trigger: [presubmit, postsubmit]
+    timeout: 10m
+    cmd: [sh, kit/lint-unsafe-test.sh]

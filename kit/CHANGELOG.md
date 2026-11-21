@@ -13,6 +13,40 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.8
+
+### Changes
+
+- `make lint-unsafe` (#150, `lint-unsafe.sh`, installed beside kani.sh):
+  the unsafe-code rule each port's `ci/lint-unsafe.sh` carries a copy
+  of. Every workspace member but the packages `UNSAFE_CRATES` names (the
+  C API crate, and any other fence crate) forbids unsafe code at each
+  crate root (`#![forbid(unsafe_code)]`, or both lines of the Verus
+  pair, read as inner attributes, so the text in a comment or a string
+  does not count), and every target of each checks with `-Funsafe_code`
+  on rustc's command line, through a `RUSTC_WORKSPACE_WRAPPER` that
+  leaves the fence crates as they are (so another member may depend on
+  one). With `UNSAFE_WORKSPACE_LINTS = yes`, the default, the root
+  manifest also denies or forbids `unsafe_code` in
+  `[workspace.lints.rust]` and every other member inherits it.
+  `UNSAFE_MANIFEST` (by default `KANI_MANIFEST`) and
+  `UNSAFE_CHECK_FLAGS` cover a workspace below the root and features.
+  It is a new target: no existing target or check changes.
+
+### Porting notes
+
+1. Nothing is required. A port may replace the shared part of its
+   `ci/lint-unsafe.sh` with `make lint-unsafe`: set `UNSAFE_CRATES` (and
+   `UNSAFE_WORKSPACE_LINTS = no` if its manifests have no workspace
+   lints) before the include, run `make lint-unsafe` from the script or
+   the check, and keep only the rules of its own (a mint seam list, an
+   unsafe budget, a SAFETY: comment per block) in the script. Paste
+   both scripts' verdicts on the switching commit in the pull request.
+   A port whose Makefile has the no-kit guard (kit/count/README.md,
+   "Adopting: the package") adds `lint-unsafe` to its
+   `PROVED_PORT_TARGETS`, so the target fails with the kit's message
+   where the package is missing.
+
 ## 0.4.7
 
 ### Changes
