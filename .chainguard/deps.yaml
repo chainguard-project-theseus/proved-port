@@ -31,7 +31,8 @@ updates:
   merge: manual
   prompt: >-
     Move the Wolfi rust-1.NN stream .chainguard/ci/count.yaml installs,
-    in its environment and in the count-installed check's packages, the
+    in its environment and in the count-installed and perf-budget-test
+    checks' packages, the
     one .chainguard/ci/go.yaml's codegen-test check installs, and the
     one .chainguard/develop.yaml installs, all together, to the newest
     stream Wolfi ships, keeping count.yaml's header comment, which names

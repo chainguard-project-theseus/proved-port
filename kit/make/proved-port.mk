@@ -1,6 +1,7 @@
 # proved-port.mk: the proof targets every proved port shares. The
 # theseus-proved-port package installs it, with kani.sh, headers.sh,
-# lint-unsafe.sh, noalias.sh, codegen.sh and VERUS-FILES, in
+# lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs
+# and VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
@@ -77,6 +78,12 @@
 #   codegen-capture   codegen.sh capture CODEGEN_DIR, and
 #   codegen-compare   codegen.sh compare CODEGEN_DIR: the same in two
 #                     steps, around a local change.
+#   perf-budget       perf-budget.sh check: for each build
+#                     PERF_BUDGET_BUILDS names, the hot exports'
+#                     fast-path counts in the x86_64 release library
+#                     against the build's table, after a self-test
+#                     (challoc's perf-budget).
+#   perf-budget-print perf-budget.sh print: the measured table lines.
 #   verify           every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
@@ -292,7 +299,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -431,6 +438,40 @@ codegen-compare: ## compare the release library's machine code with CODEGEN_DIR'
 	$(if $(strip $(CODEGEN_DIR)),,$(error $(codegen_dir_empty)))
 	$(codegen_env) sh $(PROVED_PORT_MAKE)codegen.sh compare '$(strip $(CODEGEN_DIR))'
 
+# --- perf-budget -----------------------------------------------------------
+# perf-budget.sh reads these from its environment; its header says what
+# each does. PERF_BUDGET_LIB is the release library's file name
+# (libchalloc.so); both targets fail while it is empty. PERF_BUDGET_BUILDS
+# names the builds (by default one, default); each needs its table in
+# PERF_BUDGET_TABLE_<name>, and PERF_BUDGET_FLAGS_<name> holds its own
+# cargo flags, so challoc's two quanta are
+#   PERF_BUDGET_BUILDS = q16 q8
+#   PERF_BUDGET_TABLE_q16 = verus/perf-budget.txt
+#   PERF_BUDGET_TABLE_q8 = verus/perf-budget-q8.txt
+#   PERF_BUDGET_FLAGS_q8 = --no-default-features --features quantum8
+# PERF_BUDGET_CARGO_FLAGS go to every build. PERF_BUDGET_SELFTEST_EXPORT
+# names the export the self-test mutates (by default the table's first).
+PERF_BUDGET_LIB ?=
+PERF_BUDGET_BUILDS ?= default
+PERF_BUDGET_CARGO_FLAGS ?=
+PERF_BUDGET_SELFTEST_EXPORT ?=
+perf_budget_lib_empty = PERF_BUDGET_LIB is empty: the port's Makefile names its release library's file (libchalloc.so)
+perf_budget_builds_empty = PERF_BUDGET_BUILDS is empty: the port's Makefile names its builds (by default default)
+perf_budget_env = PERF_BUDGET_LIB='$(strip $(PERF_BUDGET_LIB))' PERF_BUDGET_BUILDS='$(strip $(PERF_BUDGET_BUILDS))' $(foreach b,$(PERF_BUDGET_BUILDS),PERF_BUDGET_TABLE_$(b)='$(strip $(PERF_BUDGET_TABLE_$(b)))' PERF_BUDGET_FLAGS_$(b)='$(strip $(PERF_BUDGET_FLAGS_$(b)))' )PERF_BUDGET_CARGO_FLAGS='$(strip $(PERF_BUDGET_CARGO_FLAGS))' PERF_BUDGET_TARGET_DIR='$(or $(CARGO_TARGET_DIR),target)' PERF_BUDGET_SELFTEST_EXPORT='$(strip $(PERF_BUDGET_SELFTEST_EXPORT))'
+define perf_budget_check
+$(proved_port_version_check)
+$(if $(strip $(PERF_BUDGET_LIB)),,$(error $(perf_budget_lib_empty)))
+$(if $(strip $(PERF_BUDGET_BUILDS)),,$(error $(perf_budget_builds_empty)))
+endef
+
+perf-budget: ## the hot exports' fast-path counts in the x86_64 release library against each build's table, after a self-test (perf-budget.sh check)
+	$(perf_budget_check)
+	$(perf_budget_env) sh $(PROVED_PORT_MAKE)perf-budget.sh check
+
+perf-budget-print: ## the measured fast-path table lines of each build, to update its table after a deliberate change (perf-budget.sh print)
+	$(perf_budget_check)
+	$(perf_budget_env) sh $(PROVED_PORT_MAKE)perf-budget.sh print
+
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
 # order `make verify` runs them, each in its own make. A package build
@@ -454,7 +495,7 @@ codegen-compare: ## compare the release library's machine code with CODEGEN_DIR'
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

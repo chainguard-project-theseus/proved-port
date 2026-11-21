@@ -233,10 +233,24 @@ if [ "$rc" -ne 2 ] || ! grep -qF 'CODEGEN_LIB is empty' "$tmp/out"; then
   fail "the installed codegen.sh, no CODEGEN_LIB: got = exit $rc, want = exit 2 naming CODEGEN_LIB"
 fi
 echo "ok the installed codegen.sh refuses a run with no CODEGEN_LIB"
+expect "make -n perf-budget: the package's perf-budget.sh" \
+  "$(shows "$installed" perf-budget PERF_BUDGET_LIB=libc.so PERF_BUDGET_TABLE_default=t.txt)" \
+  "PERF_BUDGET_LIB='libc.so' PERF_BUDGET_BUILDS='default' PERF_BUDGET_TABLE_default='t.txt' PERF_BUDGET_FLAGS_default='' PERF_BUDGET_CARGO_FLAGS='' PERF_BUDGET_TARGET_DIR='target' PERF_BUDGET_SELFTEST_EXPORT='' sh $home/make/perf-budget.sh check"
+# perf-budget.sh builds its checker from the perf-budget.rs installed
+# beside it, and refuses a run with no PERF_BUDGET_LIB before any build.
+for f in perf-budget.sh perf-budget.rs; do
+  [ -f "$home/make/$f" ] || fail "the installed $f: got = missing, want = installed"
+done
+if sh "$home/make/perf-budget.sh" check > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 2 ] || ! grep -qF 'PERF_BUDGET_LIB is empty' "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed perf-budget.sh, no PERF_BUDGET_LIB: got = exit $rc, want = exit 2 naming PERF_BUDGET_LIB"
+fi
+echo "ok the installed perf-budget.sh and perf-budget.rs; the script refuses a run with no PERF_BUDGET_LIB"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare verify; do
-  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print verify; do
+  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
     || { cat "$tmp/err" >&2; fail "make -n $t, PROVED_PORT_VERSION=$version (KIT's): got = failure, want = success"; }
   if make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$other" > "$tmp/out" 2> "$tmp/err"; then
     fail "make -n $t, PROVED_PORT_VERSION=$other: got = success, want = failure"

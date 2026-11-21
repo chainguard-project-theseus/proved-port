@@ -1,0 +1,10 @@
+
+libpbfixture.so:     file format elf64-x86-64
+
+SYMBOL TABLE:
+0000000000001040 l     F .text	0000000000000013              _RNvCsaz7uz35pbR2_9pbfixture4slow
+0000000000004009 l     O .bss	0000000000000001              _RNvCsaz7uz35pbR2_9pbfixture5FLAGS.0
+0000000000001140 g     F .text	0000000000000013              fx_pick
+0000000000001160 g     F .text	0000000000000008              fx_set
+0000000000001120 g     F .text	000000000000001b              fx_load
+

@@ -10,7 +10,8 @@
 # stream and read Wolfi's index. count-installed tests kit/make as the
 # package installs it, against the counter built here. lint-unsafe-test
 # and noalias-test run kit/make/lint-unsafe.sh and kit/make/noalias.sh
-# with this toolchain's cargo.
+# with this toolchain's cargo, and perf-budget-test runs
+# kit/make/perf-budget.sh with it and binutils' objdump.
 version: 1
 
 environment:
@@ -87,3 +88,24 @@ checks:
     trigger: [presubmit, postsubmit]
     timeout: 10m
     cmd: [sh, kit/noalias-test.sh]
+
+  perf-budget-test:
+    description: >-
+      kit/perf-budget-test.sh: kit/make/perf-budget.sh (make perf-budget
+      and perf-budget-print) over a fixture library with cargo: the
+      settings it refuses, print measuring a table, check passing it
+      after a self-test that rejects every mutation, a count off by one,
+      a self-test mutation that does not apply, a table with no cell, two
+      builds with their own tables (and swapped), a failed build and an
+      unwritten library. It pins no counts, so it holds for this file's
+      rust stream whatever code it emits. The fixture has no
+      dependencies, so it needs no network.
+    trigger: [presubmit, postsubmit]
+    # The checker reads x86_64 code only, as challoc's perf-budget check,
+    # whose runner this is.
+    resources: medium-amd64
+    timeout: 10m
+    environment:
+      # The file's packages, and binutils for objdump.
+      packages: [rust-1.99, build-base, busybox, binutils]
+    cmd: [sh, kit/perf-budget-test.sh]
