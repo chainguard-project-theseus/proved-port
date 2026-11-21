@@ -7101,15 +7101,7 @@ fn base_limits(
             (k.name.clone(), rel)
         })
         .collect();
-    let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(["-c", "safe.directory=*"])
-            .args(args)
-            .output()
-            .map_err(|e| format!("git: {e}"))
-    };
+    let git = |args: &[&str]| git_in(root, args);
     let mut c = Counter::new(
         false,
         Atoms::of(cfg),
@@ -7340,6 +7332,13 @@ fn git_in(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
         .arg("-C")
         .arg(root)
         .args(["-c", "safe.directory=*"])
+        // These change how git reads every pathspec the counter gives it
+        // (`*.toml` taken literally, `*` no longer matching `/`), so a
+        // search would find nothing and compare nothing (#117).
+        .env_remove("GIT_LITERAL_PATHSPECS")
+        .env_remove("GIT_GLOB_PATHSPECS")
+        .env_remove("GIT_NOGLOB_PATHSPECS")
+        .env_remove("GIT_ICASE_PATHSPECS")
         .args(args)
         .output()
         .map_err(|e| format!("git: {e}"))
