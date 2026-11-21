@@ -524,7 +524,9 @@ the file sits, so keep the file at the root.
   status says whether its seam is discharged, partly checked or
   trusted. The report is challoc's two tables, the second the combined
   share. The marker is refused in this mode, so a function cannot be
-  discharged twice.
+  discharged twice; that includes a function
+  `exec_allows_no_decreases_clause` covers (#169), though it counts as
+  trusted.
 
 ## Functions with no termination proof
 
@@ -555,7 +557,18 @@ differ only in why a function they write is trusted (the attribute
 alone, or `external_body` too) count differently and fail the run. One
 at an `impl`, trait or
 module line matches no function, so each function the attribute covers
-there needs its own entry or warns.
+there needs its own entry or warns. A function seam (`external_body`,
+`external_body proof`, `axiom`) at the `fn` line of a trusted function
+the attribute covers is its entry, but does not make it discharged or
+partly checked, whatever its status: the function counts unchecked,
+and the run warns ("FILE:LINE: #[verifier::exec_allows_no_decreases_clause]
+covers the trusted function here, ...") when the seam says discharged
+or partly checked (#169). At a macro invocation's line, that holds for
+every function there when the attribute covers one of them, and the
+warning is printed once. Candidate definitions of a macro that differ
+only in whether the attribute covers an `external_body` function they
+write, or only in the Kani marker on a function the attribute covers,
+count differently and fail the run, with or without a ledger.
 
 ## Nested loops
 

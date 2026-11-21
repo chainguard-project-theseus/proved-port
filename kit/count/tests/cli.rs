@@ -4278,16 +4278,16 @@ fn a_no_decreases_row_is_the_entry_of_a_function_trusted_for_it_alone() {
             .collect()
     };
     // Functions in a verus! block, each with a row: one trusted for the
-    // attribute alone, one `external_body` too, and one `external_body`
-    // with the Kani marker too, which a ledger does not take as
-    // discharging it, so it is trusted for its body as well.
-    let lib = "verus! {\n#[verifier::exec_allows_no_decreases_clause]\nfn alone() {}\n#[verifier::exec_allows_no_decreases_clause]\n#[verifier::external_body]\nfn body() {}\n#[verifier::exec_allows_no_decreases_clause]\n#[cfg_attr(any(), discharged_by = \"kani\")]\n#[verifier::external_body]\nfn marked() {}\n}\n";
+    // attribute alone, and one `external_body` too. (One with the Kani
+    // marker as well fails the run in this mode:
+    // the_ledger_refuses_the_kani_marker_on_a_function_the_termination_attribute_covers.)
+    let lib = "verus! {\n#[verifier::exec_allows_no_decreases_clause]\nfn alone() {}\n#[verifier::exec_allows_no_decreases_clause]\n#[verifier::external_body]\nfn body() {}\n}\n";
     let dir = crate_of("no-decreases-row", &[("lib.rs", lib)]);
-    ledger_of(&dir, &[3, 6, 10]);
+    ledger_of(&dir, &[3, 6]);
     let (got, out, err) = count(&dir, &[]);
     assert!(
-        got == 0 && warnings(&err) == [warning(6), warning(10)],
-        "verus! block: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, warnings at 6 and 10"
+        got == 0 && warnings(&err) == [warning(6)],
+        "verus! block: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, a warning at 6"
     );
     let _ = fs::remove_dir_all(&dir);
     // A macro invocation writing both: the row at its line stands for
@@ -4317,16 +4317,109 @@ fn a_no_decreases_row_is_the_entry_of_a_function_trusted_for_it_alone() {
     }
 }
 
+/// With a generated ledger, a discharged function seam at a function
+/// `exec_allows_no_decreases_clause` covers does not make it discharged:
+/// it counts unchecked and the run warns, while the same seam at a
+/// function the attribute does not cover still counts (#169).
+#[test]
+fn a_function_seam_does_not_discharge_a_function_the_termination_attribute_covers() {
+    let lib = "verus! {\nfn v() {}\n#[verifier::exec_allows_no_decreases_clause]\n#[verifier::external_body]\nfn body() {}\n#[verifier::external_body]\nfn plain() {}\n}\n";
+    let dir = crate_of("no-decreases-fn-seam", &[("lib.rs", lib)]);
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}[ledger]\ndir = \"verus/ledger\"\n"),
+    )
+    .expect("write");
+    fs::create_dir_all(dir.join("verus/ledger")).expect("mkdir");
+    let row = |l: u32| {
+        format!(
+            "crates/a/src/lib.rs:{l}. Kind: external_body. Category: x.\nTool: Kani. Status: discharged (Kani: h).\n"
+        )
+    };
+    fs::write(
+        dir.join("verus/ledger/lib.rs.md"),
+        format!("{}\n{}", row(5), row(7)),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    let warning = "warning: crates/a/src/lib.rs:5: #[verifier::exec_allows_no_decreases_clause] covers the trusted function here, so its discharged external_body seam counts it unchecked: nothing checks that it ends";
+    // v verified, plain discharged; body unchecked.
+    let row = "a\t2\t1\t0\t66.6%\t2\t1\t0\t66.6%";
+    assert!(
+        got == 0
+            && err
+                .lines()
+                .filter(|l| l.starts_with("warning:"))
+                .eq([warning])
+            && out.lines().any(|l| l == row),
+        "got = exit {got}, {out:?}, {err:?}; wanted = exit 0, {warning:?}, {row:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// With `[ledger]`, the Kani marker is refused (exit 1) on a function
+/// `exec_allows_no_decreases_clause` covers, as on any other, though
+/// such a function counts as trusted, not discharged (#169). Without the
+/// marker the run passes.
+#[test]
+fn the_ledger_refuses_the_kani_marker_on_a_function_the_termination_attribute_covers() {
+    let marked = "verus! {\n#[verifier::exec_allows_no_decreases_clause]\n#[cfg_attr(any(), discharged_by = \"kani\")]\n#[verifier::external_body]\nfn marked() {}\n}\n";
+    let bare = marked.replace("#[cfg_attr(any(), discharged_by = \"kani\")]\n", "");
+    for (lib, refused) in [(marked, true), (bare.as_str(), false)] {
+        let dir = crate_of("no-decreases-marker", &[("lib.rs", lib)]);
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!("{PLAIN}[ledger]\ndir = \"verus/ledger\"\n"),
+        )
+        .expect("write");
+        fs::create_dir_all(dir.join("verus/ledger")).expect("mkdir");
+        fs::write(
+            dir.join("verus/ledger/lib.rs.md"),
+            "crates/a/src/lib.rs:5. Kind: external_body. Category: x.\nTool: none. Status: trusted.\n",
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        let fail = "FAIL discharged: crates/a/src/lib.rs: `marked` has the discharged_by = \"kani\" marker, but with [ledger] configured the ledger, not the marker, says what is discharged";
+        let ok = if refused {
+            got == 1 && err.lines().any(|l| l == fail)
+        } else {
+            got == 0 && !err.contains("FAIL")
+        };
+        assert!(
+            ok,
+            "refused {refused}: got = exit {got}, {out:?}, {err:?}; wanted = {}",
+            if refused { fail } else { "exit 0" }
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 /// Candidate definitions of a macro that differ only in why a function
 /// they write is trusted (`exec_allows_no_decreases_clause` alone, or
-/// `external_body` too) count differently, so the run fails rather than
-/// let the first candidate decide whether a `no_decreases` ledger row
-/// stands for the function. Candidates that agree pass.
+/// `external_body` too), or in whether the attribute covers an
+/// `external_body` one, or in the Kani marker on a function the
+/// attribute covers, count differently, so the run fails rather than let
+/// the first candidate decide whether a `no_decreases` ledger row stands
+/// for the function, a function seam classes it, or its marker is
+/// refused. Candidates that agree pass. None of this needs `[ledger]`.
 #[test]
 fn candidates_that_differ_in_why_a_function_is_trusted_fail() {
     let only = "macro_rules! m { () => { verus! {\n#[verifier::exec_allows_no_decreases_clause]\nfn f() {}\n} }; }\n";
     let body = "macro_rules! m { () => { verus! {\n#[verifier::exec_allows_no_decreases_clause]\n#[verifier::external_body]\nfn f() {}\n} }; }\n";
-    for (unix, other) in [(only, body), (body, only)] {
+    let plain =
+        "macro_rules! m { () => { verus! {\n#[verifier::external_body]\nfn f() {}\n} }; }\n";
+    let marked = "macro_rules! m { () => { verus! {\n#[verifier::exec_allows_no_decreases_clause]\n#[cfg_attr(any(), discharged_by = \"kani\")]\n#[verifier::external_body]\nfn f() {}\n} }; }\n";
+    for (unix, other) in [
+        (only, body),
+        (body, only),
+        (body, plain),
+        (plain, body),
+        // The Kani marker on a covered function, in one candidate only:
+        // with `[ledger]` it is refused, so it is not the first
+        // candidate's to decide.
+        (body, marked),
+        (marked, body),
+    ] {
         let lib = format!("#[cfg(unix)]\n{unix}#[cfg(not(unix))]\n{other}m!();\n");
         let dir = crate_of("no-decreases-macro-differs", &[("lib.rs", &lib)]);
         let (got, _, err) = count(&dir, &[]);
@@ -4336,7 +4429,7 @@ fn candidates_that_differ_in_why_a_function_is_trusted_fail() {
         );
         let _ = fs::remove_dir_all(&dir);
     }
-    for same in [only, body] {
+    for same in [only, body, plain, marked] {
         let lib = format!("#[cfg(unix)]\n{same}#[cfg(not(unix))]\n{same}m!();\n");
         let dir = crate_of("no-decreases-macro-same", &[("lib.rs", &lib)]);
         let (got, _, err) = count(&dir, &[]);
