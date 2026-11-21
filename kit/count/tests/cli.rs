@@ -4705,7 +4705,7 @@ fn every_invocation_shape_is_counted() {
     for (invocation, want) in [
         (
             "diff!();",
-            "diff! could be any of 2 definitions (crates/a/src/pairs.rs:6, crates/a/src/pairs.rs:8), which count differently",
+            "diff! could be any of 2 definitions (crates/a/src/pairs.rs:8, crates/a/src/pairs.rs:6), which count differently",
         ),
         (
             "#[cfg(unix)]\nmacro_rules! pm { () => { pub fn ma() {} pub fn mb() {} }; }\n#[cfg(not(unix))]\nmacro_rules! pm { () => { pub fn ma() {} }; }\npm!();",
@@ -4726,6 +4726,214 @@ fn every_invocation_shape_is_counted() {
         );
     }
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// A definition at the top of a file a `#[macro_use] mod name;` declares
+/// is in the declaring file's textual scope from that `mod` on, as rustc
+/// reads it (#128): after an earlier definition there it shadows it, and
+/// before a later one it is shadowed, also two files out (`j` carrying
+/// `k`). An invocation before the `mod` does not see it.
+#[test]
+fn a_macro_use_file_s_definition_is_in_scope_from_its_mod() {
+    let one = "macro_rules! m { () => { pub fn a() {} }; }\n";
+    let three = "macro_rules! m { () => { pub fn a() {} pub fn b() {} pub fn c() {} }; }\n";
+    let carry_k = "#[macro_use]\nmod k;\n";
+    // `j`'s definition after its `mod k;`, and before it; `k`'s on a later
+    // line of its own file than `j`'s, so the lines alone would misorder.
+    let j_after_k = format!("{carry_k}{three}");
+    let j_before_k = format!("{three}{carry_k}");
+    let k_late = format!("{}{one}", "\n".repeat(9));
+    let inline = format!("#[macro_use]\nmod inner {{\n{three}}}\n");
+    let in_verus = format!("verus! {{\n{three}}}\n");
+    for (case, lib, j, k, want) in [
+        (
+            "after an earlier one",
+            format!("{one}#[macro_use]\nmod j;\nm!();\n"),
+            three,
+            None,
+            &["a", "b", "c"][..],
+        ),
+        (
+            "before a later one",
+            format!("#[macro_use]\nmod j;\n{one}m!();\n"),
+            three,
+            None,
+            &["a"][..],
+        ),
+        (
+            "an invocation before the mod",
+            format!("{one}m!();\n#[macro_use]\nmod j;\n"),
+            three,
+            None,
+            &["a"][..],
+        ),
+        (
+            "two files out",
+            format!("{one}#[macro_use]\nmod j;\nm!();\n"),
+            carry_k,
+            Some(three),
+            &["a", "b", "c"][..],
+        ),
+        (
+            "j's after its mod k shadows k's",
+            "#[macro_use]\nmod j;\nm!();\n".to_owned(),
+            &j_after_k,
+            Some(&k_late),
+            &["a", "b", "c"][..],
+        ),
+        (
+            "k's shadows j's before its mod k",
+            "#[macro_use]\nmod j;\nm!();\n".to_owned(),
+            &j_before_k,
+            Some(&k_late),
+            &["a"][..],
+        ),
+        (
+            "in an inline #[macro_use] module of the carried file",
+            format!("{one}#[macro_use]\nmod j;\nm!();\n"),
+            &inline,
+            None,
+            &["a", "b", "c"][..],
+        ),
+        (
+            "in a verus! block of the carried file",
+            format!("{one}#[macro_use]\nmod j;\nm!();\n"),
+            &in_verus,
+            None,
+            &["a", "b", "c"][..],
+        ),
+    ] {
+        let dir = crate_of("macro-use-mod", &[("lib.rs", &lib)]);
+        let src = dir.join("crates/a/src");
+        match k {
+            None => fs::write(src.join("j.rs"), j).expect("write"),
+            Some(k) => {
+                fs::create_dir_all(src.join("j")).expect("mkdir");
+                fs::write(src.join("j/mod.rs"), j).expect("write");
+                fs::write(src.join("j/k.rs"), k).expect("write");
+            }
+        }
+        let (got, out, err) = count(&dir, &["--list"]);
+        let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+        assert!(
+            got == 0 && names == want,
+            "{case}: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A definition on the line of the `mod` that carries the other in: the
+    // order on the line is not read, so both are candidates, and as they
+    // count differently the run fails.
+    let dir = crate_of(
+        "macro-use-mod-line",
+        &[
+            (
+                "lib.rs",
+                &format!("{} #[macro_use] mod j;\nm!();\n", one.trim_end()),
+            ),
+            ("j.rs", three),
+        ],
+    );
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("m! could be any of 2 definitions"),
+        "same line: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // Two `mod`s on one line carry two files in: their order on the line
+    // is not read, whatever lines the definitions sit on in their own
+    // files, so both are candidates.
+    let dir = crate_of(
+        "macro-use-mod-siblings",
+        &[
+            ("lib.rs", "#[macro_use] mod j; #[macro_use] mod k;\nm!();\n"),
+            ("j.rs", &format!("{}{one}", "\n".repeat(9))),
+            ("k.rs", three),
+        ],
+    );
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("m! could be any of 2 definitions"),
+        "sibling mods: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // A `mod` on the invocation's own line: its order against the
+    // invocation is not read either, so j's is a candidate beside the
+    // earlier one.
+    let dir = crate_of(
+        "macro-use-mod-invocation-line",
+        &[
+            ("lib.rs", &format!("{one}#[macro_use] mod j; m!();\n")),
+            ("j.rs", three),
+        ],
+    );
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("m! could be any of 2 definitions"),
+        "mod on the invocation's line: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // One module declared by two `mod`s under `cfg`s, one before a
+    // definition and one after: each build places the carried file at
+    // its own `mod`, so the two are not ordered, and as they count
+    // differently the run fails. Also when only one `mod` carries, when
+    // the definition is inside an inline `#[macro_use]` module or a
+    // `verus!` block of the carried file, and when the module declared
+    // twice is one file further in (`k`, carried out through `j`).
+    let ghost = "#[cfg(verus_keep_ghost)]";
+    let real = "#[cfg(not(verus_keep_ghost))]";
+    let twice = format!("{ghost} #[macro_use] mod j;\n{one}{real} #[macro_use] mod j;\nm!();\n");
+    let k_twice = format!("{ghost} #[macro_use] mod k;\n{one}{real} #[macro_use] mod k;\n");
+    for (case, lib, files) in [
+        (
+            "the carried one is the larger",
+            twice.clone(),
+            vec![("j.rs", three.to_owned())],
+        ),
+        (
+            "the written one is the larger",
+            format!("{real} #[macro_use] mod j;\n{three}{ghost} #[macro_use] mod j;\nm!();\n"),
+            vec![("j.rs", one.to_owned())],
+        ),
+        (
+            "one mod after the invocation",
+            format!("{one}{ghost} #[macro_use] mod j;\nm!();\n{real} #[macro_use] mod j;\n"),
+            vec![("j.rs", three.to_owned())],
+        ),
+        (
+            "only one mod carries",
+            format!("{ghost} #[macro_use] mod j;\n{one}{real} mod j;\nm!();\n"),
+            vec![("j.rs", three.to_owned())],
+        ),
+        (
+            "in an inline #[macro_use] module",
+            twice.clone(),
+            vec![("j.rs", inline.clone())],
+        ),
+        (
+            "in a verus! block",
+            twice.clone(),
+            vec![("j.rs", in_verus.clone())],
+        ),
+        (
+            "one file further in",
+            "#[macro_use]\nmod j;\nm!();\n".to_owned(),
+            vec![("j/mod.rs", k_twice), ("j/k.rs", three.to_owned())],
+        ),
+    ] {
+        let dir = crate_of("macro-use-mod-twice", &[("lib.rs", &lib)]);
+        for (path, text) in files {
+            let p = dir.join("crates/a/src").join(path);
+            fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+            fs::write(p, text).expect("write");
+        }
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 1 && err.contains("m! could be any of 2 definitions"),
+            "declared twice, {case}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
 
 /// A definition reaches an invocation in another file only along a path
@@ -4809,7 +5017,7 @@ fn a_definition_reaches_an_invocation_as_rustc_resolves_it() {
             ][..],
             1,
             &[
-                "m! could be any of 2 definitions (crates/a/src/defs.rs:1, crates/a/src/defs.rs:2), and one of them does not count",
+                "m! could be any of 2 definitions (crates/a/src/defs.rs:2, crates/a/src/defs.rs:1), and one of them does not count",
             ][..],
         ),
         (

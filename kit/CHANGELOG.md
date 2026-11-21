@@ -38,6 +38,26 @@ where it reports drift.
   crate root (or from a file nothing declares), has a test-only step.
   No port's run changes (each port's counter output is identical before
   and after).
+- A `macro_rules!` at the top of a file that `#[macro_use] mod name;`
+  declares is in the declaring file's textual scope from that `mod`'s
+  line on, as rustc reads it (#128). It did not shadow an earlier
+  definition of its name there, so an invocation after the `mod` took
+  the earlier one, and what the later one writes was in no count. It
+  now orders against the declaring file's definitions at that line,
+  also through a chain of such files (by each `mod`'s line along the
+  chain, then its own). The order within one line is not read: one on
+  the line of the `mod` that carries the other in, or two carried in by
+  two `mod`s on one line, are candidates beside each other, and so is
+  one a `mod` on the invocation's own line carries in. A module that
+  several `mod`s declare (under `cfg`s, one with `#[macro_use]` and one
+  in another place, or one without) has no one line: a definition it
+  carries in is a candidate from the first such `mod` on and ends no
+  chain, so where the builds' readings count differently the run fails.
+  A message
+  naming several candidates from one carried file now lists them
+  latest first, as it does for one file's own. No port's run changes
+  (each port's counter output, `--list` included, is identical before
+  and after).
 
 ## 0.4.5
 

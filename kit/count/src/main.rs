@@ -433,6 +433,15 @@ struct MacroDef {
     /// or for one in a `#[macro_use]` module (inline, or a file declared
     /// `#[macro_use] mod name;`), the module that one is in.
     scope: Vec<String>,
+    /// For one at the top of a file a `#[macro_use] mod name;` declares
+    /// (and of a file that one's file so declares, outward), each declaring
+    /// file and the line of its `mod`: in that file it is in scope from
+    /// that line on, as a definition written there would be.
+    carried_at: Vec<(PathBuf, usize)>,
+    /// Whether a module along [`MacroDef::carried_at`] is declared by more
+    /// than one `mod` (under `cfg`s): in another file its place is then
+    /// not one line, so it is a candidate there that ends no chain.
+    split: bool,
     /// Whether it has `#[macro_export]`, which puts it at the crate root.
     exported: bool,
     rules: Result<expand::Rules, String>,
@@ -3386,6 +3395,8 @@ impl Counter {
                             },
                             guards: self.guards.clone(),
                             scope: self.module.clone(),
+                            carried_at: Vec::new(),
+                            split: false,
                         },
                         &self.atoms,
                         true,
@@ -3473,7 +3484,7 @@ impl Counter {
         self.uses.clear();
         // The modules a `#[macro_use] mod name;` declares, whose textual
         // scope carries on into the module that declares them.
-        let mut carried = std::collections::BTreeSet::new();
+        let mut carried = Carried::new();
         self.modules.clear();
         self.macro_use.clear();
         (self.edition, self.renamed_deps) = crate_manifest(root, k);
@@ -3495,7 +3506,12 @@ impl Counter {
             let Some(Ok(file)) = p else { continue };
             let module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
             self.modules.insert(module.clone());
-            macro_use_mods(&file.items, &module, (&mut carried, &mut self.modules));
+            macro_use_mods(
+                &file.items,
+                &module,
+                f.strip_prefix(root).unwrap_or(f),
+                (&mut carried, &mut self.modules),
+            );
             if class(i) == Built::Test {
                 continue;
             }
@@ -3518,7 +3534,16 @@ impl Counter {
             let Some(Ok(file)) = p else { continue };
             let module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
             let mut scope = module.clone();
-            while carried.contains(&scope) {
+            let mut carried_at = Vec::new();
+            // A module declared by more than one `mod` (under `cfg`s) has
+            // no one place in its parent: its definitions are not ordered
+            // against the others there.
+            let mut split = false;
+            while let Some(decls) = carried.get(&scope)
+                && let Some(c) = decls.iter().flatten().min_by_key(|(_, l)| *l)
+            {
+                carried_at.push(c.clone());
+                split |= decls.len() > 1;
                 scope.pop();
             }
             let at = DefsAt {
@@ -3527,6 +3552,8 @@ impl Counter {
                 module,
                 built: class(i),
                 guards: classes[i].1.clone(),
+                carried_at,
+                split,
             };
             macro_defs(
                 &file.items,
@@ -4246,25 +4273,86 @@ impl Counter {
         // Latest first: by line, an emitted definition after any written
         // on its line, and among equals (the definitions one expansion
         // writes, all at its invocation's line) the one registered later.
-        let mut before: Vec<(usize, &MacroDef)> = defs
+        // One a `#[macro_use] mod name;` here carries out of its file is
+        // placed by its path: that `mod`'s line here, then the line of each
+        // `mod` inward along the chain, then its own line, compared in that
+        // order, so a definition in `j` after its `mod k;` shadows one in
+        // `k`, and one in `k` shadows one in `j` before it.
+        // Each step of a place is a line and, for a `mod`, the file it
+        // leads into (`None` for the definition's own line).
+        let here = |d: &MacroDef| -> Option<DefPlace> {
+            if d.file == self.file {
+                return Some(vec![(d.line, None)]);
+            }
+            let i = d.carried_at.iter().position(|(f, _)| *f == self.file)?;
+            let mut place: DefPlace = (0..=i)
+                .rev()
+                .map(|k| {
+                    let into = if k == 0 {
+                        d.file.clone()
+                    } else {
+                        d.carried_at[k - 1].0.clone()
+                    };
+                    (d.carried_at[k].1, Some(into))
+                })
+                .collect();
+            place.push((d.line, None));
+            Some(place)
+        };
+        let lines = |p: &[(usize, Option<PathBuf>)]| p.iter().map(|(l, _)| *l).collect::<Vec<_>>();
+        let mut before: Vec<(usize, DefPlace, &MacroDef)> = defs
             .iter()
             .enumerate()
             .filter(|(_, d)| active(d) && visible(d))
-            .filter(|(_, d)| d.file == self.file && (d.line < at || (d.emitted && d.line == at)))
+            .filter_map(|(i, d)| here(d).map(|l| (i, l, d)))
+            .filter(|(.., d)| !(d.split && d.file != self.file))
+            .filter(|(_, l, d)| l[0].0 < at || (d.emitted && d.file == self.file && d.line == at))
             .collect();
-        before.sort_by_key(|(i, d)| std::cmp::Reverse((d.line, d.emitted, *i)));
-        let before: Vec<&MacroDef> = before.into_iter().map(|(_, d)| d).collect();
+        // One a `mod` on the invocation's own line carries in is not
+        // ordered against the invocation, so it is a candidate, but it
+        // ends no chain. So is one carried in through a module several
+        // `mod`s declare, from the first of them on.
+        let on_line: Vec<&MacroDef> = defs
+            .iter()
+            .filter(|d| active(d) && visible(d) && d.file != self.file)
+            .filter(|d| here(d).is_some_and(|l| l[0].0 == at || (d.split && l[0].0 < at)))
+            .collect();
+        before.sort_by(|(i, l, d), (j, m, e)| {
+            (lines(m), e.emitted, j).cmp(&(lines(l), d.emitted, i))
+        });
+        // Two places that reach one line and go on from it differently (a
+        // definition on the line of a `mod` that carries the other in, or
+        // two `mod`s on one line into different files) are not ordered:
+        // the order on a line is not read, so both stay candidates.
+        let unordered = |a: &[(usize, Option<PathBuf>)], b: &[(usize, Option<PathBuf>)]| {
+            for (x, y) in a.iter().zip(b) {
+                if x.0 != y.0 {
+                    return false;
+                }
+                if x.1 != y.1 {
+                    return true;
+                }
+            }
+            false
+        };
         // When every one is under such a `cfg`, a build may compile none of
         // them, and then the definitions below are rustc's: they join.
         // In shipped code, one a shipped build may skip does not end them
         // either, though Verus's build is sure to compile it.
-        let shadows = |d: &&MacroDef| {
+        let shadows = |d: &MacroDef| {
             !d.unsure && !(self.shipped && shipped_may_skip(&d.guards, &self.guards, &self.atoms))
         };
-        let textual: Vec<&MacroDef> = match before.iter().position(shadows) {
-            Some(i) => return Ok(before[..=i].to_vec()),
-            None => before,
-        };
+        if let Some(i) = before.iter().position(|(_, _, d)| shadows(d)) {
+            let key = &before[i].1;
+            let chain: Vec<&MacroDef> = before
+                .iter()
+                .enumerate()
+                .filter(|(k, (_, l, _))| *k <= i || unordered(l, key))
+                .map(|(_, (_, _, d))| *d)
+                .collect();
+            return Ok(joined(chain, on_line));
+        }
+        let textual: Vec<&MacroDef> = joined(before.iter().map(|(.., d)| *d).collect(), on_line);
         let others: Vec<&MacroDef> = defs
             .iter()
             .filter(active)
@@ -4844,6 +4932,10 @@ struct DefsAt<'a> {
     /// [`Counter::guards`] holds them).
     guards: Vec<String>,
     scope: Vec<String>,
+    /// [`MacroDef::carried_at`] for a definition here.
+    carried_at: Vec<(PathBuf, usize)>,
+    /// [`MacroDef::split`] for a definition here.
+    split: bool,
 }
 
 /// Whether `attrs` has `#[name]` itself, not through a `cfg_attr`: the
@@ -5225,24 +5317,25 @@ pub(crate) fn verus_path(path: &verus_syn::Path) -> bool {
 }
 
 /// The modules among `items` (in `module`, and in its inline modules)
-/// that `#[macro_use] mod name;` declares in a file of their own, into
-/// `carried`: the textual scope of a definition at such a file's top
-/// carries on into the module that declares it. Every module `items`
+/// that `mod name;` declares in a file of their own, into `carried`, each
+/// declaration with `#[macro_use]` with the declaring `file` and the line
+/// of its `mod`: the textual scope of a definition at such a file's top
+/// carries on into the module that declares it, from that line on. One
+/// without is kept too, as a declaration that does not carry. Every
+/// module `items`
 /// declares goes into `all`, one declared inside a `verus!` block too.
 fn macro_use_mods(
     items: &[Item],
     module: &[String],
-    (carried, all): (
-        &mut std::collections::BTreeSet<Vec<String>>,
-        &mut std::collections::BTreeSet<Vec<String>>,
-    ),
+    file: &Path,
+    (carried, all): (&mut Carried, &mut std::collections::BTreeSet<Vec<String>>),
 ) {
     for item in items {
         if let Item::Macro(v) = item
             && verus_path(&v.mac.path)
             && let Ok(f) = parse2::<verus_syn::File>(v.mac.tokens.clone())
         {
-            macro_use_mods(&f.items, module, (carried, all));
+            macro_use_mods(&f.items, module, file, (carried, all));
             continue;
         }
         let Item::Mod(m) = item else { continue };
@@ -5250,11 +5343,11 @@ fn macro_use_mods(
         inner.push(m.ident.to_string());
         all.insert(inner.clone());
         match &m.content {
-            None if has_attr(&m.attrs, "macro_use") => {
-                carried.insert(inner);
-            }
-            Some((_, items)) => macro_use_mods(items, &inner, (carried, all)),
-            None => {}
+            None => carried.entry(inner).or_default().push(
+                has_attr(&m.attrs, "macro_use")
+                    .then(|| (file.to_path_buf(), m.mod_token.span.start().line)),
+            ),
+            Some((_, items)) => macro_use_mods(items, &inner, file, (carried, all)),
         }
     }
 }
@@ -5327,6 +5420,8 @@ fn macro_def(m: &verus_syn::ItemMacro, at: &DefsAt, atoms: &Atoms, emitted: bool
         unsure: built == Built::Unsure,
         guards: [&at.guards[..], &cfg_predicates(&m.attrs)].concat(),
         scope: at.scope.clone(),
+        carried_at: at.carried_at.clone(),
+        split: at.split,
         exported: has_attr(&m.attrs, "macro_export"),
         rules: expand::Rules::parse(m.mac.tokens.clone()),
     }
@@ -5334,6 +5429,17 @@ fn macro_def(m: &verus_syn::ItemMacro, at: &DefsAt, atoms: &Atoms, emitted: bool
 
 /// The crate's `macro_rules!` definitions, by name.
 type MacroDefs = BTreeMap<String, Vec<MacroDef>>;
+
+/// The modules a `#[macro_use] mod name;` declares in a file of their own
+/// ([`macro_use_mods`]), each with every `mod` declaring it in a file of
+/// its own (under `cfg`s, one module may have several): the file and the
+/// line of each with `#[macro_use]`, `None` for each without.
+type Carried = BTreeMap<Vec<String>, Vec<Option<(PathBuf, usize)>>>;
+
+/// Where a definition stands in an invocation's file
+/// ([`Counter::resolve`]): each `mod` step's line with the file it leads
+/// into, then the definition's own line (`None`).
+type DefPlace = Vec<(usize, Option<PathBuf>)>;
 
 /// Each module's `use` paths.
 type Uses = BTreeMap<Vec<String>, Vec<UsePath>>;
@@ -5384,6 +5490,8 @@ fn macro_defs(
                         built: built(&m.attrs),
                         guards: guards(&m.attrs),
                         scope: at.scope.clone(),
+                        carried_at: at.carried_at.clone(),
+                        split: at.split,
                     };
                     macro_defs(&f.items, &inner_at, atoms, (out, uses));
                 }
@@ -5392,10 +5500,10 @@ fn macro_defs(
                 if let Some((_, inner)) = &m.content {
                     let mut module = at.module.clone();
                     module.push(m.ident.to_string());
-                    let scope = if has_attr(&m.attrs, "macro_use") {
-                        at.scope.clone()
+                    let (scope, carried_at, split) = if has_attr(&m.attrs, "macro_use") {
+                        (at.scope.clone(), at.carried_at.clone(), at.split)
                     } else {
-                        module.clone()
+                        (module.clone(), Vec::new(), false)
                     };
                     let inner_at = DefsAt {
                         file: at.file,
@@ -5403,6 +5511,8 @@ fn macro_defs(
                         built: built(&m.attrs),
                         guards: guards(&m.attrs),
                         scope,
+                        carried_at,
+                        split,
                     };
                     macro_defs(inner, &inner_at, atoms, (out, uses));
                 }
