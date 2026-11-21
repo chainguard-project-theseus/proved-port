@@ -389,8 +389,13 @@ is deleted in that PR.
    `codegen-compare`, #168), calling fncmp, with `go.yaml`'s
    `codegen-test` running it over a fixture library. The package does
    not install fncmp, so a port builds it with go from the kit's tree
-   and names it in `CODEGEN_FNCMP`. challoc's switch to both is to come,
-   as are the fast-path budget and the emulator.
+   and names it in `CODEGEN_FNCMP`. The fast-path budget is
+   `kit/make/perf-budget.sh` with challoc's checker as
+   `kit/make/perf-budget.rs` (`make perf-budget` and
+   `perf-budget-print`, #173), with `count.yaml`'s `perf-budget-test`
+   running it over a fixture library; on challoc 053c930 its output is
+   challoc's script's. challoc's switch to these is to come, as is the
+   emulator.
 8. **CI templates and the Makefile include**, once the above have
    stable interfaces. pcre3 and challoc `include` the kit's
    `proved-port.mk` for the `verus`, `kani` and `bench` recipes and

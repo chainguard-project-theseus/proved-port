@@ -1,0 +1,39 @@
+
+libpbfixture.so:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000001040 <_RNvCsaz7uz35pbR2_9pbfixture4slow>:
+    1040:	48 31 f7             	xor    rdi,rsi
+    1043:	48 89 7c 24 f8       	mov    QWORD PTR [rsp-0x8],rdi
+    1048:	48 8d 44 24 f8       	lea    rax,[rsp-0x8]
+    104d:	48 8b 44 24 f8       	mov    rax,QWORD PTR [rsp-0x8]
+    1052:	c3                   	ret
+    1053:	66 2e 0f 1f 84 00 00 00 00 00 	cs nop WORD PTR [rax+rax*1+0x0]
+    105d:	0f 1f 00             	nop    DWORD PTR [rax]
+
+0000000000001120 <fx_load>:
+    1120:	0f b6 0d e2 2e 00 00 	movzx  ecx,BYTE PTR [rip+0x2ee2]        # 4009 <_RNvCsaz7uz35pbR2_9pbfixture5FLAGS.0>
+    1127:	48 8b 07             	mov    rax,QWORD PTR [rdi]
+    112a:	f6 c1 01             	test   cl,0x1
+    112d:	75 04                	jne    1133 <fx_load+0x13>
+    112f:	48 ff c0             	inc    rax
+    1132:	c3                   	ret
+    1133:	48 89 c7             	mov    rdi,rax
+    1136:	e9 05 ff ff ff       	jmp    1040 <_RNvCsaz7uz35pbR2_9pbfixture4slow>
+    113b:	0f 1f 44 00 00       	nop    DWORD PTR [rax+rax*1+0x0]
+
+0000000000001140 <fx_pick>:
+    1140:	0f b6 05 c2 2e 00 00 	movzx  eax,BYTE PTR [rip+0x2ec2]        # 4009 <_RNvCsaz7uz35pbR2_9pbfixture5FLAGS.0>
+    1147:	84 c0                	test   al,al
+    1149:	0f 85 f1 fe ff ff    	jne    1040 <_RNvCsaz7uz35pbR2_9pbfixture4slow>
+    114f:	48 89 f0             	mov    rax,rsi
+    1152:	c3                   	ret
+    1153:	66 2e 0f 1f 84 00 00 00 00 00 	cs nop WORD PTR [rax+rax*1+0x0]
+    115d:	0f 1f 00             	nop    DWORD PTR [rax]
+
+0000000000001160 <fx_set>:
+    1160:	40 88 3d a2 2e 00 00 	mov    BYTE PTR [rip+0x2ea2],dil        # 4009 <_RNvCsaz7uz35pbR2_9pbfixture5FLAGS.0>
+    1167:	c3                   	ret
+    1168:	0f 1f 84 00 00 00 00 00 	nop    DWORD PTR [rax+rax*1+0x0]

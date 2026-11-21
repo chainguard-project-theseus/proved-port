@@ -1,0 +1,18 @@
+# kit/perf-budget-test.sh's frozen case: objdump.sh's dumps of
+# kit/perf/budget/fixture, with counts worked out by hand, not measured.
+#
+# fx_pick, with the flag clear: movzx (loads FLAGS), test, jne (not
+# taken), mov, ret. 5 instructions, 1 load, 0 stores, 1 branch, and 1
+# cache line (FLAGS's). The taken jne is an exit edge to slow.
+# fx_load, with flag bit 0 clear: movzx (FLAGS), mov from [rdi] (an
+# aligned 8-byte load: 1 line whatever rdi is), test, jne, inc, ret. 6
+# instructions, 2 loads, 0 stores, 1 branch, 2 cache lines.
+cell flags pbfixture::FLAGS 0 1
+export fx_pick pbfixture::slow
+export fx_load pbfixture::slow
+budget fx_pick - 5 1 0 1 1
+paths  fx_pick - 5/1/0/1/1
+budget fx_pick flags=0 5 1 0 1 1
+paths  fx_pick flags=0 5/1/0/1/1
+budget fx_load - 6 2 0 1 2
+paths  fx_load - 6/2/0/1/2

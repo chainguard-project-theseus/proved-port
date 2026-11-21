@@ -42,6 +42,39 @@ where it reports drift.
   count differently and fail the run (exit 1, "m! could be any of N
   definitions"), as candidates that differ in the marker on any other
   function already do (#169).
+- `make perf-budget` and `make perf-budget-print` (#173,
+  `perf-budget.sh` and its checker `perf-budget.rs`, installed beside
+  codegen.sh): challoc's fast-path budget check (`scripts/perf-budget.sh`
+  and `scripts/perf-budget.rs`) as kit targets. For each build
+  `PERF_BUDGET_BUILDS` names (by default one, `default`, each with its
+  table in `PERF_BUDGET_TABLE_<name>` and its own cargo flags in
+  `PERF_BUDGET_FLAGS_<name>`), it builds the release library
+  `PERF_BUDGET_LIB` in its own target directory and checks every fast
+  path of each hot export the table names against its instruction,
+  load, store, branch and cache-line counts, with no atomic RMW, fence,
+  call, syscall or indirect jump in the export's body and no back edge.
+  The checker is challoc's, changed only in its text, and reads the same
+  table format, so challoc's tables stay as they are; `perf-budget-print`
+  prints the measured lines (the checker's `--print`). The script builds
+  the checker with `rustc -O` from the installed source, so the package
+  recipe needs no change. Unlike challoc's script:
+  - the library, the builds, their tables and flags are settings, not
+    challoc's two quanta, and each build has its own target directory;
+  - the self-test mutates the first `export` the table names (or
+    `PERF_BUDGET_SELFTEST_EXPORT`) and the table's first `budget`,
+    `paths` and named `cell` lines, not `malloc` and challoc's lines; a
+    mutation that changes nothing fails the run, and with no cell a
+    budget line names, the cell mutation is skipped, saying so;
+  - the stale-cell mutation moves the cell 1 MiB into its static rather
+    than to offset 0, and the path mutation rewrites the first count
+    rather than deleting it, so neither can coincide with a real one;
+  - a failed build fails the run (exit 1) with cargo's output, and a
+    setting missing or malformed exits 2 before any build.
+
+  It is a new target: no existing target or check changes. The no-kit
+  guard in `kit/count/README.md` lists the two; a port that copied the
+  guard adds them to its `PROVED_PORT_TARGETS` when it starts to use
+  them.
 
 ### Porting notes
 
@@ -64,6 +97,21 @@ where it reports drift.
 3. Checked here: `verus-count .` over challoc 053c930 and 60db24a7
    (both with `[ledger]`) prints the same output, byte for byte, with
    the same exit status, at 0.4.11 and 0.4.10.
+4. Nothing is required for `make perf-budget`. A port with a fast-path
+   budget check like challoc's may replace its scripts with it: set
+   `PERF_BUDGET_LIB`, `PERF_BUDGET_BUILDS` and a
+   `PERF_BUDGET_TABLE_<name>` (and `PERF_BUDGET_FLAGS_<name>` where a
+   build needs its own flags) before the include; give the check the
+   kit pinned, `make` and `binutils` beside its pinned rust stream; and
+   add the two targets to the no-kit guard's `PROVED_PORT_TARGETS` if
+   the Makefile has one. challoc's settings are
+   `PERF_BUDGET_BUILDS = q16 q8`,
+   `PERF_BUDGET_TABLE_q16 = verus/perf-budget.txt`,
+   `PERF_BUDGET_TABLE_q8 = verus/perf-budget-q8.txt`,
+   `PERF_BUDGET_FLAGS_q8 = --no-default-features --features quantum8`
+   and `PERF_BUDGET_CARGO_FLAGS = --locked`; with them, at challoc
+   053c930 and rustc 1.99.1, both builds pass and the checker's output
+   is the same as challoc's script's, line for line.
 
 ## 0.4.10
 
