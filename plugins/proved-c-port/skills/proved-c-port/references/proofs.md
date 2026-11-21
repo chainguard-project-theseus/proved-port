@@ -229,7 +229,11 @@ Rules:
 - A drop is closed by verifying more code, in the PR or in a small PR
   that lands first. A `lowered` line is the last resort, and its reason
   names exactly which functions or lines became trusted or outside, with
-  counts (pcre3's FLOOR has examples).
+  counts (pcre3's FLOOR has examples). Deleting verified code, whole
+  functions or lines of one, lowers a share with nothing becoming
+  trusted or outside; that reason names the functions removed or
+  shortened, says nothing became trusted or outside, and gives the same
+  counts (the FLOOR template's header).
 - Code built only for the verifier still counts if it is trusted: a
   shipped proof can rest on it.
 

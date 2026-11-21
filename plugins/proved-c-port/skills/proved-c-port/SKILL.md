@@ -140,7 +140,9 @@ whose equality is "tested on the corpus".
 
 Correct: a PR that drops a share closes the gap by verifying more code;
 a `lowered FIGURE P REASON` line is the last resort and names exactly
-what became trusted.
+what became trusted or outside, or, when verified code was deleted
+(whole functions or lines of one), the functions removed or shortened
+and that nothing became trusted or outside.
 
 Wrong: asking a maintainer to lower the floor when more verification is
 possible.
