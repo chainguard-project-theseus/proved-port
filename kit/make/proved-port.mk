@@ -1,7 +1,7 @@
 # proved-port.mk: the proof targets every proved port shares. The
 # theseus-proved-port package installs it, with kani.sh, headers.sh,
 # lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs,
-# skip-summary.sh, glibc-max.sh and VERUS-FILES, in
+# skip-summary.sh, glibc-max.sh, known-failures.sh and VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
@@ -91,6 +91,9 @@
 #   glibc-max         glibc-max.sh: the library GLIBC_MAX_LIB needs no
 #                     GLIBC_ symbol version above GLIBC_MAX (challoc's
 #                     glibc-max).
+#   known-failures    known-failures.sh: after a failed test run, every
+#                     failure in KNOWN_FAILURES_LOG must be listed in
+#                     KNOWN_FAILURES_LIST (challoc's known-failures).
 #   verify           every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
@@ -306,7 +309,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -511,6 +514,28 @@ glibc-max: ## the library GLIBC_MAX_LIB needs no GLIBC_ symbol version above GLI
 	$(if $(strip $(GLIBC_MAX_LIB)),,$(error $(glibc_max_lib_empty)))
 	$(if $(strip $(GLIBC_MAX)),,$(error $(glibc_max_empty)))
 	sh $(PROVED_PORT_MAKE)glibc-max.sh '$(strip $(GLIBC_MAX_LIB))' '$(strip $(GLIBC_MAX))'
+# --- known-failures --------------------------------------------------------
+# known-failures.sh LOG LIST [EXTRA]; its header says what it does.
+# KNOWN_FAILURES_LOG is the failed test run's log and KNOWN_FAILURES_LIST
+# the failures it may have (challoc's ci/known-failures.txt); the target
+# fails while either is empty. KNOWN_FAILURES_EXTRA, optional, is a
+# port's sh script that prints more failure keys from the log (challoc's
+# cgroup verdicts). CI_CELL in the environment names the cell for the
+# list's cell-scoped entries. It does not check that every test binary
+# finished: one that crashed prints no FAILED line, so the port checks
+# that itself (as challoc's ci/test-cell.sh does) or reports it from
+# EXTRA.
+KNOWN_FAILURES_LOG ?=
+KNOWN_FAILURES_LIST ?=
+KNOWN_FAILURES_EXTRA ?=
+known_failures_log_empty = KNOWN_FAILURES_LOG is empty: name the failed test run's log (make known-failures KNOWN_FAILURES_LOG=test.log)
+known_failures_list_empty = KNOWN_FAILURES_LIST is empty: name the list of failures the run may have (ci/known-failures.txt)
+
+known-failures: ## after a failed test run, every failure in KNOWN_FAILURES_LOG must be listed in KNOWN_FAILURES_LIST (known-failures.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(KNOWN_FAILURES_LOG)),,$(error $(known_failures_log_empty)))
+	$(if $(strip $(KNOWN_FAILURES_LIST)),,$(error $(known_failures_list_empty)))
+	sh $(PROVED_PORT_MAKE)known-failures.sh '$(strip $(KNOWN_FAILURES_LOG))' '$(strip $(KNOWN_FAILURES_LIST))'$(if $(strip $(KNOWN_FAILURES_EXTRA)), '$(strip $(KNOWN_FAILURES_EXTRA))')
 
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
@@ -535,7 +560,7 @@ glibc-max: ## the library GLIBC_MAX_LIB needs no GLIBC_ symbol version above GLI
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

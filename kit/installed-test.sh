@@ -272,10 +272,23 @@ if [ "$rc" -ne 1 ] || ! grep -qxF "error: $tmp/no.so missing" "$tmp/out"; then
   fail "the installed glibc-max.sh, a missing library: got = exit $rc, want = exit 1 naming it"
 fi
 echo "ok the installed glibc-max.sh fails a missing library"
+expect "make -n known-failures: the package's known-failures.sh" \
+  "$(shows "$installed" known-failures KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=known.txt)" \
+  "sh $home/make/known-failures.sh 'test.log' 'known.txt'"
+# The installed script runs: a log whose one failure the list knows.
+[ -f "$home/make/known-failures.sh" ] || fail "the installed known-failures.sh: got = missing, want = installed"
+printf 'test api::x ... FAILED\n' > "$tmp/kf.log"
+printf 'api::x\n' > "$tmp/known.txt"
+if sh "$home/make/known-failures.sh" "$tmp/kf.log" "$tmp/known.txt" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qxF "warning: known failure ($tmp/known.txt): api::x" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed known-failures.sh, a known failure: got = exit $rc, want = exit 0 with its warning"
+fi
+echo "ok the installed known-failures.sh passes a known failure"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max verify; do
-  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so SKIP_LOG=test.log SKIP_MANIFEST=skips.txt GLIBC_MAX_LIB=libc.so GLIBC_MAX=2.44 PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures verify; do
+  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so SKIP_LOG=test.log SKIP_MANIFEST=skips.txt GLIBC_MAX_LIB=libc.so GLIBC_MAX=2.44 KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=known.txt PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
     || { cat "$tmp/err" >&2; fail "make -n $t, PROVED_PORT_VERSION=$version (KIT's): got = failure, want = success"; }
   if make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$other" > "$tmp/out" 2> "$tmp/err"; then
     fail "make -n $t, PROVED_PORT_VERSION=$other: got = success, want = failure"

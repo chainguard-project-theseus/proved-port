@@ -5,7 +5,8 @@
 # commands verus, kani and the other targets run for each port's
 # settings and that the guards fail them; runs kani.sh with a stub cargo
 # and headers.sh over the filled templates; kit/skip-summary-test.sh
-# runs skip-summary.sh on its own, and kit/glibc-max-test.sh runs
+# and kit/known-failures-test.sh run skip-summary.sh and
+# known-failures.sh on their own, and kit/glibc-max-test.sh runs
 # glibc-max.sh on its own, in its own environment. No Verus or Kani
 # runs. busybox for the tools a port's checks have, make (GNU) for the
 # snippet. Blocks.
@@ -37,6 +38,7 @@ checks:
     trigger: [presubmit, postsubmit]
     timeout: 5m
     cmd: [sh, kit/skip-summary-test.sh]
+
   glibc-max-test:
     description: >-
       kit/glibc-max-test.sh: kit/make/glibc-max.sh (make glibc-max) on
@@ -53,3 +55,18 @@ checks:
       # real libraries, and binutils for readelf.
       packages: [busybox, build-base, binutils]
     cmd: [sh, kit/glibc-max-test.sh]
+
+  known-failures-test:
+    description: >-
+      kit/known-failures-test.sh: kit/make/known-failures.sh (make
+      known-failures) on hand-written test logs and lists, each output
+      spelled out: every failure known, an unlisted one, none at all,
+      lines that are not failures, names with blanks (should_panic
+      tests and doctests), the failures blocks (a FAILED on a line of
+      its own, fewer names than failures), the list's comments and blanks,
+      cell-scoped entries, an EXTRA command, a missing log or list, a
+      log or list it cannot read or a tool that fails on one (stub grep,
+      sed and awk) and usage, with BusyBox's tools.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [sh, kit/known-failures-test.sh]

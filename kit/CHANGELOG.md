@@ -138,6 +138,51 @@ where it reports drift.
   `verus!`: the harness, one record per source file
   (`kani-<crate>-<path under src/, / as ->.md`) covering every marked
   function in it, and the marker, with no seam row.
+- `make known-failures` (#196, `known-failures.sh`, installed beside
+  perf-budget.sh): challoc's known-failures check
+  (`ci/known-failures.sh`) as a kit target, in POSIX sh. After a failed
+  test run, a port names the log in `KNOWN_FAILURES_LOG` and the
+  failures it may have in `KNOWN_FAILURES_LIST` (both required; `#`
+  comments, and ` @GLOB` scopes an entry to the cells `CI_CELL` names).
+  A failure is a libtest `test NAME ... FAILED` line, listed by its
+  whole NAME, blanks included (a should_panic test's `tests::boom -
+  should panic`, a doctest's `src/lib.rs - parse (line 12)`), or a name
+  in libtest's last `failures:` block before its `test result: FAILED.`
+  line, which also catches a FAILED that landed on a line of its own
+  (one thread, with output libtest does not capture before it). The
+  block gives the bare name, without a FAILED line's ` - should panic`:
+  where a FAILED line names the test it adds nothing, so the whole name
+  stays the key; a test named only in the block is keyed by its bare
+  name. A block that names fewer tests than its result line's `M
+  failed` fails the run. Or a key printed
+  by the port's optional `KNOWN_FAILURES_EXTRA` script, run as `sh
+  EXTRA LOG` (challoc's cgroup verdicts move there). Every failure listed
+  passes, each as a warning line; an unlisted one fails (exit 1), as do
+  no failure at all (a build or other step failed), a missing log or
+  list, one it cannot read, a tool that fails on one, and an EXTRA that
+  fails. It does not check that the tests ran or finished: a test binary
+  that crashed (a signal or an abort) prints no FAILED line, so beside a
+  listed failure the run passes; a port checks that every test group
+  finished itself, as challoc's `ci/test-cell.sh` does, or prints a key
+  for such a crash from its EXTRA script. A key is the test's name
+  alone, not its test binary (two files' `fn roundtrip()` share one
+  key), and a listed test that fails for another reason passes as
+  known; an entry in scope that did not fail is printed as a notice
+  (`notice: listed but did not fail, drop it from LIST once fixed`),
+  which challoc's did not print, and does not change the exit status.
+  The log must be uncoloured: a `test result:` line that is neither
+  `ok.` nor `FAILED.` (libtest's `--color=always`) fails the run.
+  With challoc's OUTCOME parsing as EXTRA, its output and exit status
+  are challoc's script's on the same inputs, but for the notices, the
+  no-failure line, which names no cgroup programs ("no test did"); a
+  missing log, which names it (challoc's gave the no-failure line); a
+  missing list, which fails with a line of its own (challoc's exited
+  with sed's status); a failing test whose name has a blank (a
+  should_panic test or a doctest), and one whose FAILED is not on its
+  test's line, neither of which challoc's counted, so an unlisted one
+  beside a listed failure passed there and fails here; and a failures
+  block naming fewer tests than its result line counts, which fails
+  here. No existing target or check changes.
 
 ### Porting notes
 
@@ -191,6 +236,19 @@ where it reports drift.
    verus/FLOOR's header as drifted, since the template's "add the
    trusted functions Kani discharges" is now "add the functions Kani
    discharges". Take the kit's text there.
+7. Optional: a port with its own copy of challoc's
+   `ci/known-failures.sh` can call `make known-failures
+   KNOWN_FAILURES_LOG=LOG KNOWN_FAILURES_LIST=LIST` in its place, moving
+   any failure source of its own besides libtest's FAILED lines into a
+   script it names in `KNOWN_FAILURES_EXTRA`, and delete the copy. It
+   keeps its own check that every test group finished (challoc's
+   `ci/test-cell.sh` counts `test result:` lines): the target does not
+   see a test binary that crashed. Its list's keys name tests, not
+   test binaries, and a notice now names each entry in scope that did
+   not fail, to drop once its test is fixed. A port that copied the
+   no-kit guard in `kit/count/README.md` adds `known-failures` to its
+   `PROVED_PORT_TARGETS` when it starts to use it. A port that does
+   neither changes nothing.
 
 ## 0.4.11
 
