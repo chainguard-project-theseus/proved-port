@@ -385,6 +385,28 @@ if [ "$rc" -ne 0 ] || ! grep -qxF "SKIP one: $home/make/consumers.sh" "$tmp/out"
   fail "make consumers-run with the installed consumers.sh, a skipping consumer: got = exit $rc, want = exit 0 with its SKIP line"
 fi
 echo "ok make consumers-run with the installed consumers.sh skips a consumer that skips"
+# The differential fuzzer's driver shell: a driver built from the
+# installed fuzz-diff.c with -I the installed make/ refuses a relative
+# library path (kit/fuzz-diff-test.sh tests the rest).
+for f in fuzz-diff.h fuzz-diff.c; do
+  [ -f "$home/make/$f" ] || fail "the installed $f: got = missing, want = installed"
+done
+cat > "$tmp/fd.c" <<'EOF'
+#include "fuzz-diff.h"
+int main(void) {
+  struct ppd_lib l = {"port", "lib.so", 0, 0, 0};
+  ppd_init("fd", "FD");
+  ppd_open(&l);
+  return 0;
+}
+EOF
+cc -I"$home/make" -o "$tmp/fd" "$tmp/fd.c" "$home/make/fuzz-diff.c" -ldl
+if "$tmp/fd" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 1 ] || [ "$(cat "$tmp/out")" != "fd: port: lib.so is not an absolute path" ]; then
+  cat "$tmp/out" >&2
+  fail "a driver on the installed fuzz-diff.c, a relative path: got = exit $rc, want = exit 1 naming it"
+fi
+echo "ok a driver built on the installed fuzz-diff.c refuses a relative library path"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
 for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run verify; do

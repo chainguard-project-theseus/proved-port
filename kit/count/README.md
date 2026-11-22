@@ -1217,7 +1217,8 @@ takes the kit. It installs:
   `perf-budget.sh`, `perf-budget.rs`, `skip-summary.sh`,
   `glibc-max.sh`, `known-failures.sh`, `header-check.sh`, `abi-elf.sh`,
   `kani-quotes.sh`, `deviations.sh`, `ledger-active.sh`,
-  `known-cites.sh`, `consumers.sh` and `VERUS-FILES` (`kit/make`);
+  `known-cites.sh`, `consumers.sh`, `fuzz-diff.h`, `fuzz-diff.c` and
+  `VERUS-FILES` (`kit/make`);
 - `/usr/share/proved-port/templates/`: all of `kit/templates`, under
   their own names;
 - `/usr/share/proved-port/CHANGELOG.md`: `kit/CHANGELOG.md`, each

@@ -10,7 +10,8 @@
 # skip-summary.sh, known-failures.sh, header-check.sh, kani-quotes.sh
 # and deviations.sh on their own, kit/known-cites-test.sh runs
 # known-cites.sh and ledger-active.sh (with git), kit/consumers-test.sh
-# runs consumers.sh (with cc and curl),
+# runs consumers.sh (with cc and curl), kit/fuzz-diff-test.sh builds
+# fuzz-diff.c into a test driver (with cc),
 # and kit/glibc-max-test.sh and kit/abi-elf-test.sh run glibc-max.sh
 # and abi-elf.sh on their own, in their own environments. No Verus or Kani
 # runs. busybox for the tools a port's checks have, make (GNU) for the
@@ -194,3 +195,21 @@ checks:
       # fetch.
       packages: [busybox, build-base, curl]
     cmd: [sh, kit/consumers-test.sh]
+
+  fuzz-diff-test:
+    description: >-
+      kit/fuzz-diff-test.sh: kit/make/fuzz-diff.c, the differential
+      fuzzer's driver shell, in a test driver built with cc over stub
+      shared libraries, each output spelled out: the preflight's
+      refusals (no path, a relative path, a file that does not load, a
+      missing symbol, a symbol from a library the library needs, one
+      object twice or through a link), PREFLIGHT, CONTINUE and the
+      abort, another prefix, the known log, units at 8, 16 and 32 bits,
+      base64 against BusyBox's, and the init refusals.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      # BusyBox's tools as a port's checks have, and a C compiler with
+      # glibc (dladdr1, dlinfo) for the libraries and the driver.
+      packages: [busybox, build-base]
+    cmd: [sh, kit/fuzz-diff-test.sh]

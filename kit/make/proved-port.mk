@@ -3,7 +3,9 @@
 # lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs,
 # skip-summary.sh, glibc-max.sh, known-failures.sh, header-check.sh,
 # abi-elf.sh, kani-quotes.sh, deviations.sh, ledger-active.sh,
-# known-cites.sh, consumers.sh and VERUS-FILES, in
+# known-cites.sh, consumers.sh, fuzz-diff.h, fuzz-diff.c (the
+# differential fuzzer's driver shell, which a port compiles into its
+# driver; no target) and VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
