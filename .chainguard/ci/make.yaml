@@ -8,7 +8,8 @@
 # kit/known-failures-test.sh, kit/header-check-test.sh,
 # kit/kani-quotes-test.sh and kit/deviations-test.sh run
 # skip-summary.sh, known-failures.sh, header-check.sh, kani-quotes.sh
-# and deviations.sh on their own,
+# and deviations.sh on their own, kit/known-cites-test.sh runs
+# known-cites.sh and ledger-active.sh (with git),
 # and kit/glibc-max-test.sh and kit/abi-elf-test.sh run glibc-max.sh
 # and abi-elf.sh on their own, in their own environments. No Verus or Kani
 # runs. busybox for the tools a port's checks have, make (GNU) for the
@@ -148,3 +149,25 @@ checks:
     trigger: [presubmit, postsubmit]
     timeout: 5m
     cmd: [sh, kit/deviations-test.sh]
+
+  known-cites-test:
+    description: >-
+      kit/known-cites-test.sh: kit/make/known-cites.sh (make known-cites)
+      and kit/make/ledger-active.sh on hand-written tables and ABI
+      ledgers (one file, a directory), each output spelled out: rows
+      citing active entries, entries removed, planned or missing, cites
+      of no known form, the macro in another form, no row, another macro,
+      a cite joined with what follows it, CRLF tables, TODO(#n) cites
+      against a stand-in gh (open, closed, no such issue, unreachable,
+      KNOWN_CITES_OFFLINE),
+      a pull request description's closing keywords and look-alikes,
+      the history in a full clone (a second row, a gap), a shallow one
+      and outside git, a
+      malformed ledger, names with `=`, missing inputs and usage.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      # BusyBox's tools as a port's checks have, and git for the history
+      # part's clones.
+      packages: [busybox, git]
+    cmd: [sh, kit/known-cites-test.sh]

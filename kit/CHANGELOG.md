@@ -380,6 +380,32 @@ where it reports drift.
   target. Each kind prints at most 50 lines; `DEVIATIONS_OUT`
   names a directory for the full lists. No existing target or check
   changes.
+- `make known-cites` (#211, `known-cites.sh`, installed beside
+  deviations.sh): the citation check of the PCRE2 port's differential
+  fuzzer. Each row of the known-divergence table `KNOWN_CITES_FILE`, a
+  line whose first non-blank is `KNOWN("<cite>"` (`KNOWN_CITES_MACRO`
+  names another macro, `known!` say), the cite one string literal then
+  `,` or `)`, cites `ABI-nnn`, an active entry
+  of `KNOWN_CITES_LEDGER` (by default `docs/abi`), or `TODO(#n)`, an
+  issue of `KNOWN_CITES_REPO` (`owner/name`, then any names it had
+  before it moved) that is not closed: by its live state where `gh`
+  reaches the repository (there an issue gh cannot view, no such
+  issue, fails too; where gh is missing or cannot reach it, the run
+  fails naming the issues it could not check, unless
+  `KNOWN_CITES_OFFLINE=1` makes that a NOTE for a local run), by the
+  pull request's description in `KNOWN_CITES_PR_BODY` where the port's
+  check binds it, or by a commit since the one from which the table
+  has held the cite without a gap, in a full clone (a NOTE says when it is
+  skipped). Any other cite fails, as does any use of the macro but a
+  row at a line's start and the name a `#define` defines or an `#undef`
+  undefines (another form, the `(` on a later line or after a comment,
+  `[` or `{` for a Rust macro, blanks around its `!`, a second row on
+  a line, an alias `#define` or Rust `use known as k`; a carriage
+  return counts as a blank), a
+  table with no row and a malformed ledger. The ledger reader moves
+  out of deviations.sh into `ledger-active.sh`, installed beside both,
+  so the two read a ledger the same way; `make deviations`' behaviour
+  and output do not change. No existing target or check changes.
 
 ### Porting notes
 
@@ -527,6 +553,27 @@ where it reports drift.
     port that copied the no-kit guard in `kit/count/README.md` adds
     `deviations` to its `PROVED_PORT_TARGETS` when it starts to use
     it. A port that does neither changes nothing.
+13. Optional: a port with a known-divergence table (the PCRE2 port's
+    `fuzz/diff/known.c`) can call `make known-cites
+    KNOWN_CITES_FILE=... KNOWN_CITES_REPO=...` (with
+    `KNOWN_CITES_LEDGER=docs/abi-changes.md` where its ledger is one
+    file, and the repository's earlier names after its own) in place of
+    its own citation check, binding the pull request's description to
+    `KNOWN_CITES_PR_BODY` as it did its own variable. The check's
+    environment needs busybox, git for the history part (skipped with
+    a NOTE where missing or shallow), and, where the table has a
+    `TODO(#n)` row, gh with a credential that reaches the repository:
+    without it the check fails (set `KNOWN_CITES_OFFLINE=1` only for a
+    local run). Before it
+    switches it checks what may now fail: a ledger the kit's reader
+    finds malformed (note 12 lists the forms), a row whose cite is
+    written another way than `ABI-nnn` or `TODO(#n)`, a `TODO(#n)`
+    whose issue does not exist, and a use of the macro that is no row
+    (a row split over lines, two on a line, the macro's name as the
+    last word of a comment line, an `#ifdef` of it). A
+    port that copied the no-kit guard in `kit/count/README.md` adds
+    `known-cites` to its `PROVED_PORT_TARGETS` when it starts to use it.
+    A port that does neither changes nothing.
 
 ## 0.4.11
 
