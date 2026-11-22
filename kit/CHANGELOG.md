@@ -580,6 +580,21 @@ where it reports drift.
   occurs once fails. The go.yaml check `seams-mutants` runs it after
   `kit/seams-mutants-test.sh`. Nothing is installed; ports see no
   change.
+- The seam ledger generator's citations (#229): `seams -cites` prints
+  one line per citation a status makes (overrides file, source file,
+  line, the overrides line's name, tag, and the check as written,
+  escaped as `-entries` escapes), parsed as seams.sh's `cites()` parsed
+  them, so a port's citation checks read these lines in place of its own
+  parse of the statuses. `-check` also fails a `TAG: ` that names
+  nothing (`Kani: ;`, seams.sh's `none`), on any status, and a
+  discharged status that cites a tag the rules mark `partial`
+  (`cite-tag TAG partial`, a check that covers only part of a contract:
+  challoc's loom and GenMC, its `loomdischarged` and `genmcdischarged`);
+  the template rules mark loom and GenMC so. A `cite-tag` line with a
+  third field other than `partial`, a tag given twice, or a tag holding
+  `;`, `)` or `:` is a rules error. On challoc's overrides at 7d10fca,
+  `-cites` gives seams.sh's `cites()` lines (its forms put together)
+  and `-check` passes. Nothing is installed; ports see no change.
 
 ### Porting notes
 

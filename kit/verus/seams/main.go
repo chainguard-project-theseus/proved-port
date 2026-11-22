@@ -8,6 +8,8 @@
 //	seams [-C DIR] [-rules FILE] -check     exit 1 if the ledger is stale
 //	                                        or an overrides line disagrees
 //	seams [-C DIR] [-rules FILE] -entries   one tab-separated line per seam
+//	seams [-C DIR] [-rules FILE] -cites     one tab-separated line per
+//	                                        citation a status makes
 //
 // -C is the tree's root (default .); -rules is the rules file, relative
 // to the root unless absolute (default verus/seams.rules).
@@ -45,7 +47,23 @@
 // requires, ensures, returns or _recursive_types attribute, a reason, no
 // cited check, the assumption tool, not a `tracked` type, and no `unsafe
 // impl` of Send or Sync for the type anywhere in the source directory,
-// test files included.
+// test files included. On the citations: -check fails a discharged or
+// partly checked status that cites no check, a `TAG: ` (on any status)
+// that names nothing, and a discharged status that cites a tag the
+// rules mark partial.
+//
+// A status cites a check with `TAG: ` for a cite tag: the citation list
+// runs from there to the first `;` or `)` (or the status's end), split
+// at a comma and the blanks after it and at ` and ` (with or without a
+// comma before it), each nonempty part a citation, up to a part that
+// holds `: ` (the next tag, read at its own place). It is seams.sh's
+// cites(). -cites prints one line per citation: overrides file, source
+// file, line, the overrides line's name, tag, and the part as written,
+// escaped as -entries escapes; seams in -entries order, each status's
+// citations in the order they stand in it (a name that serves several
+// seams prints its citations once per seam). A port's checks resolve
+// each line (challoc's Isla citation reads `NAME in TARGET`, its
+// emptyasm, loom and GenMC ones `NAME @ TARGET`).
 //
 // -entries prints, per seam: source file, line, kind, id (the name, with
 // #N when shared in its file), category, tool, status, overrides file (or
@@ -72,7 +90,12 @@
 //	tool<TAB>NAME              a tool, in table order
 //	category<TAB>NAME<TAB>TOOL a category and its default tool, in table order
 //	assumption-tool<TAB>TOOL   the tool of a seam no check applies to (required)
-//	cite-tag<TAB>TAG           a status holding `TAG: ` cites a check
+//	cite-tag<TAB>TAG[<TAB>partial]
+//	                           a status holding `TAG: ` cites a check;
+//	                           `partial`: one that checks only part of a
+//	                           contract, which a discharged status may not
+//	                           cite. TAG holds no `;`, `)` or `:` and is
+//	                           given once
 //	guess<TAB>CAT|-<TAB>COND.. a category heuristic: the first guess whose
 //	                           conditions all hold names the category (-
 //	                           for none); COND is FIELD=RE or FIELD!RE,
@@ -142,14 +165,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	write := fl.Bool("write", false, "regenerate the ledger")
 	check := fl.Bool("check", false, "exit 1 if the ledger is stale or an overrides line disagrees")
 	entries := fl.Bool("entries", false, "print one tab-separated line per seam")
+	cites := fl.Bool("cites", false, "print one tab-separated line per citation a status makes")
 	fl.Usage = func() {
-		fmt.Fprintln(stderr, "usage: seams [-C DIR] [-rules FILE] [-write | -check | -entries]")
+		fmt.Fprintln(stderr, "usage: seams [-C DIR] [-rules FILE] [-write | -check | -entries | -cites]")
 	}
 	if err := fl.Parse(args); err != nil {
 		return 2
 	}
 	n := 0
-	for _, b := range []bool{*write, *check, *entries} {
+	for _, b := range []bool{*write, *check, *entries, *cites} {
 		if b {
 			n++
 		}
@@ -172,7 +196,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "seams: %v\n", err)
 		return 2
 	}
-	res := generate(r, in, *write || *check || *entries)
+	res := generate(r, in, *write || *check || *entries || *cites)
 	for _, e := range res.errs {
 		fmt.Fprintln(stderr, e)
 	}
@@ -191,6 +215,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case *check:
 		return checkLedger(*root, r, in, res, stdout, stderr)
+	case *cites:
+		x := entryField.Replace
+		// A seam with no overrides line is `trusted` and cites nothing.
+		for _, e := range res.entries {
+			of := path.Join(r.Ledger, e.file) + ".overrides"
+			name := strings.TrimPrefix(e.okey, e.file+":")
+			cs, _ := r.citations(e.stat)
+			for _, c := range cs {
+				fmt.Fprintf(stdout, "%s\t%s\t%d\t%s\t%s\t%s\n", x(of), x(e.file), e.line, x(name), x(c.tag), x(c.target))
+			}
+		}
+		return 0
 	case *entries:
 		for _, e := range res.entries {
 			of := "-"

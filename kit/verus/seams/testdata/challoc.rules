@@ -33,8 +33,8 @@ cite-tag	Kani
 cite-tag	const assert
 cite-tag	Isla
 cite-tag	emptyasm
-cite-tag	loom
-cite-tag	GenMC
+cite-tag	loom	partial
+cite-tag	GenMC	partial
 cite-tag	callers
 guess	termination	kind=^no_decreases$
 guess	C ABI export	kind=^unsupported-attribute$
