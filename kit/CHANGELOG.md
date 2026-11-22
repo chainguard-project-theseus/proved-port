@@ -299,6 +299,32 @@ where it reports drift.
   blank after `#`, so the two spellings differed and its diff's hunk
   offsets can differ from this one's). A prefix that is no C identifier
   is a usage error (exit 2). No existing target or check changes.
+- `make abi-elf` (#205, `abi-elf.sh`, installed beside
+  perf-budget.sh): the per-library ELF checks of the PCRE2 port's
+  `ci/abi.sh` (its checks 1 to 3) as a kit target, in POSIX sh with
+  binutils' readelf, reading the port's linker version script in place
+  of the PCRE2 names written into that script. `make abi-elf
+  ABI_ELF_LIB=SO ABI_ELF_MAP=MAP ABI_ELF_SONAME=NAME` checks that SO's
+  SONAME is NAME; that each library it needs is one of `ABI_ELF_NEEDED`
+  (by default `libc.so.6` and the x86_64 and aarch64 loaders); with
+  `ABI_ELF_TLS_MAX` (bytes), that its thread-locals fit; that its
+  version definitions (but the file's own BASE entry) are exactly MAP's
+  nodes (names compared as text), each with MAP's parent; and that its
+  exports (defined global, weak or unique dynamic symbols, an absolute
+  one too, but each version node's own symbol) are exactly MAP's
+  `global:` names, each at its node's version (a name in two nodes at
+  both), each with exactly one default version (`@@`, the one a new
+  link binds): at its node, or, for a name MAP lists in more than one
+  node, at the node `ABI_ELF_DEFAULTS` gives it (`foo@V2`, written
+  from the C library's own `foo@@V2`; the order of MAP's nodes does
+  not set it, and a name in more than one node with no entry fails).
+  MAP is read for the forms
+  a C library's map uses (named nodes,
+  `global:`/`local:`, one parent, `#` and `/* */` comments, each only
+  outside the other); a wildcard in `global:`, an `extern` block, an
+  anonymous node or a second parent fails naming it (exit 1). A failed
+  check prints a `FAIL:` line and exits 1; usage exits 2. No existing
+  target or check changes.
 
 ### Porting notes
 
@@ -391,6 +417,16 @@ where it reports drift.
    copied the no-kit guard in `kit/count/README.md` adds `header-check`
    to its `PROVED_PORT_TARGETS` when it starts to use it. A port that
    does neither changes nothing.
+10. Optional: a port whose ABI check reads its library's SONAME, needs,
+    thread-locals, version nodes and exports (the PCRE2 port's
+    `ci/abi.sh` checks 1 to 3) can call `make abi-elf` once per library
+    in their place, with binutils in that check's environment, and keep
+    its own C tests and consumer checks. Where its map lists a name in
+    more than one node, it sets `ABI_ELF_DEFAULTS` from the C library's
+    `readelf --dyn-syms` (`foo@V2` for `foo@@V2`). A port that copied the no-kit
+    guard in `kit/count/README.md` adds `abi-elf` to its
+    `PROVED_PORT_TARGETS` when it starts to use it. A port that does
+    neither changes nothing.
 
 ## 0.4.11
 

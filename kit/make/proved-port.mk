@@ -1,8 +1,8 @@
 # proved-port.mk: the proof targets every proved port shares. The
 # theseus-proved-port package installs it, with kani.sh, headers.sh,
 # lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs,
-# skip-summary.sh, glibc-max.sh, known-failures.sh, header-check.sh and
-# VERUS-FILES, in
+# skip-summary.sh, glibc-max.sh, known-failures.sh, header-check.sh,
+# abi-elf.sh and VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
@@ -99,6 +99,10 @@
 #                     names in the port's headers HEADER_CHECK_HEADERS
 #                     equal the C library's in HEADER_CHECK_UPSTREAM
 #                     (the PCRE2 port's header-check).
+#   abi-elf           abi-elf.sh: the shared library ABI_ELF_LIB's SONAME,
+#                     needs, thread-locals, version nodes and exports
+#                     are the ones its version script ABI_ELF_MAP
+#                     declares (the PCRE2 port's abi checks 1 to 3).
 #   verify           every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
@@ -314,7 +318,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -564,6 +568,38 @@ header-check: ## the macros HEADER_CHECK_PREFIXES names in the port's headers HE
 	$(if $(strip $(HEADER_CHECK_PREFIXES)),,$(error $(header_check_prefixes_empty)))
 	$(if $(strip $(HEADER_CHECK_UPSTREAM)),,$(error $(header_check_upstream_empty)))
 	sh $(PROVED_PORT_MAKE)header-check.sh '$(strip $(HEADER_CHECK_UPSTREAM))' '$(strip $(HEADER_CHECK_PREFIXES))' $(foreach h,$(HEADER_CHECK_HEADERS),'$(h)')
+# --- abi-elf ---------------------------------------------------------------
+# abi-elf.sh SO MAP SONAME NEEDED [TLS_MAX [DEFAULTS]]; its header says
+# what it does.
+# ABI_ELF_LIB is the built shared library (target/release/libfoo.so.1),
+# ABI_ELF_MAP its linker version script (maps/libfoo.map) and
+# ABI_ELF_SONAME the C library's SONAME; the target fails while any is
+# empty. ABI_ELF_NEEDED lists the libraries it may need (by default libc
+# and the x86_64 and aarch64 loaders), and ABI_ELF_TLS_MAX, optional,
+# bounds its thread-locals in bytes (512, glibc's default optional static
+# TLS). ABI_ELF_DEFAULTS, needed only for a name the map lists in more
+# than one node, gives each such name's default version as the C
+# library exports it (foo@V2 for its foo@@V2). Run it once per library.
+# The script runs binutils' readelf, which the port's check environment
+# provides.
+ABI_ELF_LIB ?=
+ABI_ELF_MAP ?=
+ABI_ELF_SONAME ?=
+ABI_ELF_NEEDED ?= libc.so.6 ld-linux-x86-64.so.2 ld-linux-aarch64.so.1
+ABI_ELF_TLS_MAX ?=
+ABI_ELF_DEFAULTS ?=
+abi_elf_lib_empty = ABI_ELF_LIB is empty: name the built shared library (make abi-elf ABI_ELF_LIB=target/release/libfoo.so.1)
+abi_elf_map_empty = ABI_ELF_MAP is empty: name the library's linker version script (ABI_ELF_MAP=maps/libfoo.map)
+abi_elf_soname_empty = ABI_ELF_SONAME is empty: name the C library's SONAME (ABI_ELF_SONAME=libfoo.so.1)
+abi_elf_needed_empty = ABI_ELF_NEEDED is empty: list the libraries the library may need (by default libc and the loaders)
+
+abi-elf: ## the library ABI_ELF_LIB's SONAME, needs, thread-locals, version nodes and exports against its version script ABI_ELF_MAP (abi-elf.sh; needs binutils)
+	$(proved_port_version_check)
+	$(if $(strip $(ABI_ELF_LIB)),,$(error $(abi_elf_lib_empty)))
+	$(if $(strip $(ABI_ELF_MAP)),,$(error $(abi_elf_map_empty)))
+	$(if $(strip $(ABI_ELF_SONAME)),,$(error $(abi_elf_soname_empty)))
+	$(if $(strip $(ABI_ELF_NEEDED)),,$(error $(abi_elf_needed_empty)))
+	sh $(PROVED_PORT_MAKE)abi-elf.sh '$(strip $(ABI_ELF_LIB))' '$(strip $(ABI_ELF_MAP))' '$(strip $(ABI_ELF_SONAME))' '$(strip $(ABI_ELF_NEEDED))'$(if $(strip $(ABI_ELF_TLS_MAX) $(ABI_ELF_DEFAULTS)), '$(strip $(ABI_ELF_TLS_MAX))')$(if $(strip $(ABI_ELF_DEFAULTS)), '$(strip $(ABI_ELF_DEFAULTS))')
 
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
@@ -588,7 +624,7 @@ header-check: ## the macros HEADER_CHECK_PREFIXES names in the port's headers HE
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

@@ -7,8 +7,8 @@
 # and headers.sh over the filled templates; kit/skip-summary-test.sh,
 # kit/known-failures-test.sh and kit/header-check-test.sh run
 # skip-summary.sh, known-failures.sh and header-check.sh on their own,
-# and kit/glibc-max-test.sh runs
-# glibc-max.sh on its own, in its own environment. No Verus or Kani
+# and kit/glibc-max-test.sh and kit/abi-elf-test.sh run glibc-max.sh
+# and abi-elf.sh on their own, in their own environments. No Verus or Kani
 # runs. busybox for the tools a port's checks have, make (GNU) for the
 # snippet. Blocks.
 version: 1
@@ -57,6 +57,33 @@ checks:
       # real libraries, and binutils for readelf.
       packages: [busybox, build-base, binutils]
     cmd: [sh, kit/glibc-max-test.sh]
+
+  abi-elf-test:
+    description: >-
+      kit/abi-elf-test.sh: kit/make/abi-elf.sh (make abi-elf) on shared
+      objects built with cc and a version script, read with binutils'
+      readelf, each output spelled out: a library that matches its map
+      (named nodes with a parent, both comment kinds, each inside the
+      other), a wrong SONAME, a library it may not need, thread-locals
+      past and within TLS_MAX and a size that is not hex (a stub
+      readelf), a leaked symbol, a missing one, one at the wrong
+      version, a name in two nodes (.symver) with its default version
+      at the first or the last node as DEFAULTS gives it, a missing
+      or doubled default, DEFAULTS entries that do not parse or name
+      no listed node, a weak and a unique export,
+      version names that differ by a `.`, absolute symbols (leaked,
+      listed, and one named for a node at another version through a
+      stub readelf), a library with no version definitions, a node with
+      another parent, two parents or missing, the map forms it does not
+      read, a missing library or map, a file readelf cannot read and
+      usage.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      # BusyBox's tools as a port's checks have, a C compiler for the
+      # libraries, and binutils for readelf.
+      packages: [busybox, build-base, binutils]
+    cmd: [sh, kit/abi-elf-test.sh]
 
   known-failures-test:
     description: >-

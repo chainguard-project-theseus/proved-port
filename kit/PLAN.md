@@ -354,7 +354,13 @@ is deleted in that PR.
    [HEADER_CHECK_UPSTREAM=/usr/include]`, #203), pcre3's script with its
    headers, prefixes and upstream directory as arguments, with
    `make.yaml`'s `header-check-test`; pcre3's switch to it is to come.
-   pcre3's ABI check (`ci/abi.sh`) is not yet in the kit.
+   The per-library ELF part of pcre3's ABI check (its `ci/abi.sh`
+   checks 1 to 3: SONAME, needs, thread-locals, version nodes and
+   exports against the library's version script) is
+   `kit/make/abi-elf.sh` (`make abi-elf ABI_ELF_LIB=... ABI_ELF_MAP=...
+   ABI_ELF_SONAME=...`, #205), with `make.yaml`'s `abi-elf-test`;
+   pcre3's C tests, consumer binding and install checks stay in the
+   port, and its switch to the kit target is to come.
 5. **Comparison harnesses.** pcre3: `fuzz/diff/` splits into the kit's
    generic driver shell and pcre3's comparison file and `known.c`;
    `ci/fuzz-diff.sh` builds the kit driver against them, under the same
