@@ -475,7 +475,11 @@ where it reports drift.
   starting point is `kit/templates/verus/seams.rules`). `-write`
   writes the ledger, `-check` fails where seams.sh's `--check` fails
   for those rules, and `-entries` prints one line per seam for the
-  checks a port's statuses cite, which stay in the port. Unlike
+  checks a port's statuses cite, which stay in the port (nine
+  tab-separated fields, a backslash, newline, tab or carriage return
+  in any field written `\\`, `\n`, `\t` or `\r`, so an
+  unsupported-attribute contract's attribute lines stay on its line,
+  #221). Unlike
   seams.sh, a `|` in an item's name is escaped in the ledger's table
   (seams.sh meant to, but BusyBox awk dropped the backslash), a source
   file's last line without a newline stays its own line, a

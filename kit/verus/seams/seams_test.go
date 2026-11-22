@@ -650,6 +650,78 @@ func runIn(t *testing.T, dir string, args ...string) (int, string, string) {
 	return code, o.String(), e.String()
 }
 
+// -entries writes each seam on one line of nine fields, though an
+// unsupported-attribute contract holds newlines and a literal a tab,
+// and the escapes undo to the text the hash reads.
+func TestEntriesOneLine(t *testing.T) {
+	rules, err := os.ReadFile("testdata/challoc.rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules = append(rules, "guess\tC ABI export\tkind=.\n"...)
+	src := lines("verus! {",
+		"#[unsafe(no_mangle)]",
+		"#[verifier::assume_unsupported_attributes]",
+		"pub extern \"C\" fn f() {}",
+		"#[verifier::external_body]",
+		"fn g() -> (r: &'static str)",
+		"    ensures r == \"a\\\\n\tb\",",
+		"{ \"x\" }",
+		"}")
+	// A file name may hold a tab too, and a status a backslash.
+	d := tree(t, map[string]string{"verus/seams.rules": string(rules), "src/a.rs": src,
+		"src/t\tb.rs":                        lines("#[verifier::external_body]", "fn h() {}"),
+		"verus/ledger/src/t\tb.rs.overrides": "h\tpanic/abort\tKani\ttrusted (see a\\n)\n"})
+	code, o, e := runIn(t, d, "-entries")
+	if code != 0 || e != "" {
+		t.Fatalf("entries: %d %q", code, e)
+	}
+	got := strings.Split(strings.TrimSuffix(o, "\n"), "\n")
+	if len(got) != 3 {
+		t.Fatalf("want 3 lines, got %d: %q", len(got), o)
+	}
+	unesc := strings.NewReplacer(`\\`, `\`, `\n`, "\n", `\t`, "\t", `\r`, "\r")
+	res := generate(readRulesT(t, d), input{sources: []namedText{{"src/a.rs", src}}}, true)
+	for i, l := range got {
+		f := strings.Split(l, "\t")
+		if len(f) != 9 {
+			t.Errorf("line %d: %d fields: %q", i, len(f), l)
+			continue
+		}
+		if i == 2 {
+			if f[0] != `src/t\tb.rs` || f[6] != `trusted (see a\\n)` || f[7] != `verus/ledger/src/t\tb.rs.overrides` {
+				t.Errorf("file, status and overrides fields %q %q %q", f[0], f[6], f[7])
+			}
+			continue
+		}
+		if c := unesc.Replace(f[8]); c != norm(res.entries[i].hc) {
+			t.Errorf("line %d: contract %q, want the hash text %q", i, c, norm(res.entries[i].hc))
+		}
+	}
+	if want := `#[unsafe(no_mangle)]\n#[verifier::assume_unsupported_attributes]\npub extern "C" fn f() {}`; !strings.HasSuffix(got[0], "\t"+want) {
+		t.Errorf("unsupported-attribute line %q, want it to end in %q", got[0], want)
+	}
+	// The literal's backslash and tab, escaped.
+	if want := `fn g() -> (r: &'static str) ensures r == "a\\\\n\tb",`; !strings.HasSuffix(got[1], " "+want) {
+		t.Errorf("external_body line %q", got[1])
+	}
+}
+
+func TestEntryField(t *testing.T) {
+	if got := entryField.Replace("a\\n\nb\tc\rd\\"); got != `a\\n\nb\tc\rd\\` {
+		t.Errorf("got %q", got)
+	}
+}
+
+func readRulesT(t *testing.T, d string) *Rules {
+	t.Helper()
+	r, err := readRules(filepath.Join(d, "verus/seams.rules"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
 func TestWriteAndCheck(t *testing.T) {
 	rules, err := os.ReadFile("testdata/challoc.rules")
 	if err != nil {
