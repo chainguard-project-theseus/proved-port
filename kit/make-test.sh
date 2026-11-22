@@ -468,6 +468,11 @@ expect "make -n perf-budget-print, challoc's two quanta" \
 expect "make -n skip-summary, challoc's cell" \
   "$(shows skip-summary SKIP_LOG=' test.log ' SKIP_MANIFEST=ci/expected-skips/x86_64-glibc.txt)" \
   "sh $home/make/skip-summary.sh 'test.log' 'ci/expected-skips/x86_64-glibc.txt'"
+# glibc-max passes the library and the version as glibc-max.sh's two
+# arguments, blanks around them dropped.
+expect "make -n glibc-max, challoc's library" \
+  "$(shows glibc-max GLIBC_MAX_LIB=' .ci/target/release/libchalloc.so ' GLIBC_MAX=2.44)" \
+  "sh $home/make/glibc-max.sh '.ci/target/release/libchalloc.so' '2.44'"
 
 # verify runs every target VERIFY_TARGETS lists, in order, each with the
 # command line's variables. Under -n make prints its loop (a line naming
@@ -552,6 +557,8 @@ for t in perf-budget perf-budget-print; do
 done
 refuses_make "make -n skip-summary with no SKIP_LOG" "SKIP_LOG is empty" skip-summary SKIP_MANIFEST=skips.txt
 refuses_make "make -n skip-summary with a blank SKIP_MANIFEST" "SKIP_MANIFEST is empty" skip-summary SKIP_LOG=test.log SKIP_MANIFEST=' '
+refuses_make "make -n glibc-max with no GLIBC_MAX_LIB" "GLIBC_MAX_LIB is empty" glibc-max GLIBC_MAX=2.44
+refuses_make "make -n glibc-max with a blank GLIBC_MAX" "GLIBC_MAX is empty" glibc-max GLIBC_MAX_LIB=libalpha.so GLIBC_MAX=' '
 # The no-kit guard kit/count/README.md gives ports lists every kit
 # target, so each fails with the kit's message where the package is
 # missing: proved_port_phony and verify, in that order.
@@ -682,7 +689,7 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;

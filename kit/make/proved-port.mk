@@ -1,7 +1,7 @@
 # proved-port.mk: the proof targets every proved port shares. The
 # theseus-proved-port package installs it, with kani.sh, headers.sh,
 # lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs,
-# skip-summary.sh and VERUS-FILES, in
+# skip-summary.sh, glibc-max.sh and VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
@@ -88,6 +88,9 @@
 #                     <key>` lines against the expected-skips manifest
 #                     SKIP_MANIFEST; a new skip fails, a gone one is a
 #                     notice (challoc's skip-summary).
+#   glibc-max         glibc-max.sh: the library GLIBC_MAX_LIB needs no
+#                     GLIBC_ symbol version above GLIBC_MAX (challoc's
+#                     glibc-max).
 #   verify           every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
@@ -303,7 +306,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -492,6 +495,22 @@ skip-summary: ## the SKIP lines of the test log SKIP_LOG against the expected-sk
 	$(if $(strip $(SKIP_LOG)),,$(error $(skip_log_empty)))
 	$(if $(strip $(SKIP_MANIFEST)),,$(error $(skip_manifest_empty)))
 	sh $(PROVED_PORT_MAKE)skip-summary.sh '$(strip $(SKIP_LOG))' '$(strip $(SKIP_MANIFEST))'
+# --- glibc-max -------------------------------------------------------------
+# glibc-max.sh SO MAX; its header says what it does. GLIBC_MAX_LIB is the
+# built library to read (challoc's .ci/target/release/libchalloc.so) and
+# GLIBC_MAX the highest GLIBC_ version it may need (2.44, Wolfi's glibc
+# stream); the target fails while either is empty. The script runs
+# binutils' readelf, which the port's check environment provides.
+GLIBC_MAX_LIB ?=
+GLIBC_MAX ?=
+glibc_max_lib_empty = GLIBC_MAX_LIB is empty: name the built library to read (make glibc-max GLIBC_MAX_LIB=target/release/libfoo.so)
+glibc_max_empty = GLIBC_MAX is empty: name the highest GLIBC_ version the library may need (GLIBC_MAX=2.44)
+
+glibc-max: ## the library GLIBC_MAX_LIB needs no GLIBC_ symbol version above GLIBC_MAX (glibc-max.sh; needs binutils)
+	$(proved_port_version_check)
+	$(if $(strip $(GLIBC_MAX_LIB)),,$(error $(glibc_max_lib_empty)))
+	$(if $(strip $(GLIBC_MAX)),,$(error $(glibc_max_empty)))
+	sh $(PROVED_PORT_MAKE)glibc-max.sh '$(strip $(GLIBC_MAX_LIB))' '$(strip $(GLIBC_MAX))'
 
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
@@ -516,7 +535,7 @@ skip-summary: ## the SKIP lines of the test log SKIP_LOG against the expected-sk
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

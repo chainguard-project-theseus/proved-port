@@ -260,10 +260,22 @@ if [ "$rc" -ne 0 ] || ! grep -qF "skips match $tmp/skips.txt" "$tmp/out"; then
   fail "the installed skip-summary.sh, an expected skip: got = exit $rc, want = exit 0 with skips match"
 fi
 echo "ok the installed skip-summary.sh passes an expected skip"
+expect "make -n glibc-max: the package's glibc-max.sh" \
+  "$(shows "$installed" glibc-max GLIBC_MAX_LIB=libc.so GLIBC_MAX=2.44)" \
+  "sh $home/make/glibc-max.sh 'libc.so' '2.44'"
+# The installed script runs: a missing library fails, naming it (the
+# check's environment may have no readelf, so it reads no ELF here).
+[ -f "$home/make/glibc-max.sh" ] || fail "the installed glibc-max.sh: got = missing, want = installed"
+if sh "$home/make/glibc-max.sh" "$tmp/no.so" 2.44 > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 1 ] || ! grep -qxF "error: $tmp/no.so missing" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed glibc-max.sh, a missing library: got = exit $rc, want = exit 1 naming it"
+fi
+echo "ok the installed glibc-max.sh fails a missing library"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary verify; do
-  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so SKIP_LOG=test.log SKIP_MANIFEST=skips.txt PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max verify; do
+  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so SKIP_LOG=test.log SKIP_MANIFEST=skips.txt GLIBC_MAX_LIB=libc.so GLIBC_MAX=2.44 PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
     || { cat "$tmp/err" >&2; fail "make -n $t, PROVED_PORT_VERSION=$version (KIT's): got = failure, want = success"; }
   if make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$other" > "$tmp/out" 2> "$tmp/err"; then
     fail "make -n $t, PROVED_PORT_VERSION=$other: got = success, want = failure"
