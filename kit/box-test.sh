@@ -1,7 +1,7 @@
 #!/bin/sh
 # kit/box-test.sh: tests of kit/perf/box (the box-test check), with no
-# box: stand-in perf and taskset scripts on PATH. The stand-in perf runs
-# the command and writes a CSV with, for the k-th event of -e, the count
+# box: stand-in perf, taskset and uname scripts on PATH. The stand-in
+# perf logs its -e list to PERF_LOG, runs the command and writes a CSV with, for the k-th event of -e, the count
 # ROUND*100+k, after decoy lines for the event without its modifier and
 # with a letter after it, and before a second line for it with another
 # count, except the events
@@ -24,6 +24,12 @@
 #     not the previous run's;
 #   - the raw lines read through stats relabel and stats check (clean);
 #   - each refused setting exits 2 and writes no raw file;
+#   - -E: the kit's events.tsv aarch64 frontend list (the list and the
+#     six count columns written here by hand), ARCH from a stand-in
+#     uname (STUB_ARCH), a file of its own with -f (comments, empty
+#     lines, the matching line in any place) and -a over uname, -n's
+#     lookup without a run, and the lookup's refusals (every file line
+#     is checked, including those after SET's);
 #   - md5.sh: a before-only log that stats md5 refuses, an unchanged
 #     bracket it passes, and a changed file it finds; a missing file, a directory and a file md5sum fails on (a
 #     stand-in md5sum) each give exit 1, an md5sum error line that stats
@@ -49,6 +55,7 @@ cat > "$tmp/bin/perf" <<'EOF'
 [ "$1" = stat ] && [ "$2" = -x, ] && [ "$3" = -e ] && [ "$5" = -o ] && [ "$7" = -- ] || { echo "stand-in perf: bad args $*" >&2; exit 99; }
 ev=$4 csv=$6
 shift 7
+echo "$ev" >> "$PERF_LOG"
 rc=0
 "$@" || rc=$?
 # STUB_NOCSV=ARM:ROUND: that run writes no CSV at all.
@@ -75,10 +82,18 @@ echo "$2" >> "$TASKSET_LOG"
 shift 2
 exec "$@"
 EOF
-chmod +x "$tmp/bin/perf" "$tmp/bin/taskset"
+cat > "$tmp/bin/uname" <<'EOF'
+#!/bin/sh
+# Stand-in: uname -m prints STUB_ARCH; with STUB_ARCH unset it fails.
+[ "$1" = -m ] || exit 97
+[ -n "${STUB_ARCH+x}" ] || { echo "stand-in uname: no STUB_ARCH" >&2; exit 1; }
+echo "$STUB_ARCH"
+EOF
+chmod +x "$tmp/bin/perf" "$tmp/bin/taskset" "$tmp/bin/uname"
 PATH=$tmp/bin:$PATH
-export TASKSET_LOG="$tmp/taskset.log"
+export TASKSET_LOG="$tmp/taskset.log" PERF_LOG="$tmp/perf.log"
 : > "$TASKSET_LOG"
+: > "$PERF_LOG"
 
 # The -n order: three arms, four rounds, two rows. Round r runs arm
 # (i + r) mod 3 + 1 at position i: r=1 y z x, r=2 z x y, r=3 x y z,
@@ -220,6 +235,88 @@ refuse "rows-nocmd:1: empty row or command" -o "$tmp/rawr" "$tmp/arms2" "$tmp/ro
 refuse "rows-twice:2: row 'p' named twice" -o "$tmp/rawr" "$tmp/arms2" "$tmp/rows-twice"
 refuse "has no rows" -o "$tmp/rawr" "$tmp/arms2" "$tmp/none"
 [ "$(wc -l < "$TASKSET_LOG")" -eq 14 ] || fail "a refused run ran something"
+
+# -E: the kit's events.tsv beside rounds.sh, ARCH from uname -m. Its
+# aarch64 frontend list, copied here by hand from port A's script, is
+# what perf gets, one count column per event.
+: > "$PERF_LOG"
+STUB_ARCH=aarch64 "$rounds" -o "$tmp/rawE" -r 1 -E frontend "$tmp/arm1" "$tmp/rows"
+echo 'instructions:u,cycles:u,l1i_cache_refill:u,stall_frontend:u,stall_backend:u,br_mis_pred_retired:u' > "$tmp/ev.want"
+cat "$tmp/ev.want" "$tmp/ev.want" | cmp - "$PERF_LOG" || fail "-E frontend events: $(cat "$PERF_LOG")"
+printf 'p\tb\t1\t101\t102\t103\t104\t105\t106\tout b 1 \nq\tb\t1\t101\t102\t103\t104\t105\t106\tx y z \n' |
+	cmp - "$tmp/rawE" || fail "-E frontend lines: $(cat "$tmp/rawE")"
+# A file of its own (-f): comments and empty lines skipped, the line
+# for ARCH and SET taken whatever its place, and -a over uname -m.
+tr '|' '\t' > "$tmp/ev.tsv" <<'EOF'
+# a comment|with|tabs
+
+aarch64|s|a1:u
+x86_64|s|x1:u,x2:u,x3:u
+x86_64|t|t1:u
+aarch64|t|a2:u
+EOF
+: > "$PERF_LOG"
+STUB_ARCH=aarch64 "$rounds" -o "$tmp/rawF" -r 1 -E s -f "$tmp/ev.tsv" -a x86_64 "$tmp/arm1" "$tmp/rows"
+printf 'x1:u,x2:u,x3:u\nx1:u,x2:u,x3:u\n' | cmp - "$PERF_LOG" || fail "-f -a events: $(cat "$PERF_LOG")"
+printf 'p\tb\t1\t101\t102\t103\tout b 1 \nq\tb\t1\t101\t102\t103\tx y z \n' |
+	cmp - "$tmp/rawF" || fail "-f -a lines: $(cat "$tmp/rawF")"
+: > "$PERF_LOG"
+STUB_ARCH=aarch64 "$rounds" -o "$tmp/rawT" -r 1 -E t -f "$tmp/ev.tsv" "$tmp/arm1" "$tmp/rows"
+printf 'a2:u\na2:u\n' | cmp - "$PERF_LOG" || fail "-f uname events: $(cat "$PERF_LOG")"
+# -n with -E looks the set up and runs nothing.
+: > "$PERF_LOG"
+STUB_ARCH=x86_64 "$rounds" -n -r 1 -E t -f "$tmp/ev.tsv" "$tmp/arm1" "$tmp/rows" > "$tmp/dryE"
+printf '1\tb\tp\n1\tb\tq\n' | cmp - "$tmp/dryE" || fail "-n -E: $(cat "$tmp/dryE")"
+[ ! -s "$PERF_LOG" ] || fail "-n -E ran perf"
+# Refused: the lookup's settings and file lines.
+ef() { printf '%b' "$1" > "$tmp/ef"; }
+export STUB_ARCH=aarch64
+refuse "no frontend events for x86_64 in" -o "$tmp/rawr" -E frontend -a x86_64 "$tmp/arms2" "$tmp/rows"
+refuse "no frontend events for x86_64 in" -n -E frontend -a x86_64 "$tmp/arms2" "$tmp/rows"
+refuse "no u events for aarch64 in $tmp/ev.tsv" -o "$tmp/rawr" -E u -f "$tmp/ev.tsv" "$tmp/arms2" "$tmp/rows"
+refuse "-e and -E together" -o "$tmp/rawr" -e a:u -E frontend "$tmp/arms2" "$tmp/rows"
+refuse "-e and -E together" -o "$tmp/rawr" -E frontend -e a:u "$tmp/arms2" "$tmp/rows"
+refuse "-f and -a need -E" -o "$tmp/rawr" -f "$tmp/ev.tsv" "$tmp/arms2" "$tmp/rows"
+refuse "-f and -a need -E" -o "$tmp/rawr" -a aarch64 "$tmp/arms2" "$tmp/rows"
+refuse "-E SET is empty" -o "$tmp/rawr" -E '' "$tmp/arms2" "$tmp/rows"
+refuse "ARCH is empty" -o "$tmp/rawr" -E s -a '' -f "$tmp/ev.tsv" "$tmp/arms2" "$tmp/rows"
+(STUB_ARCH=''; refuse "ARCH is empty" -o "$tmp/rawr" -E s -f "$tmp/ev.tsv" "$tmp/arms2" "$tmp/rows")
+(unset STUB_ARCH; refuse "uname -m failed; give -a ARCH" -o "$tmp/rawr" -E s -f "$tmp/ev.tsv" "$tmp/arms2" "$tmp/rows")
+refuse "no events file $tmp/nope" -o "$tmp/rawr" -E s -f "$tmp/nope" "$tmp/arms2" "$tmp/rows"
+ef 'aarch64\ts\n'
+refuse "ef:1: want ARCH<TAB>SET<TAB>EVENTS" -o "$tmp/rawr" -E s -f "$tmp/ef" "$tmp/arms2" "$tmp/rows"
+ef 'aarch64\ts\ta:u\n# x\nx86_64\ts\ta:u\tb:u\n'
+refuse "ef:3: want ARCH<TAB>SET<TAB>EVENTS" -o "$tmp/rawr" -E s -f "$tmp/ef" "$tmp/arms2" "$tmp/rows"
+ef 'aarch64\ts\t\n'
+refuse "ef:1: want ARCH<TAB>SET<TAB>EVENTS" -o "$tmp/rawr" -E s -f "$tmp/ef" "$tmp/arms2" "$tmp/rows"
+ef '\ts\ta:u\n'
+refuse "ef:1: want ARCH<TAB>SET<TAB>EVENTS" -o "$tmp/rawr" -E s -f "$tmp/ef" "$tmp/arms2" "$tmp/rows"
+ef 'aarch64\t\ta:u\n'
+refuse "ef:1: want ARCH<TAB>SET<TAB>EVENTS" -o "$tmp/rawr" -E s -f "$tmp/ef" "$tmp/arms2" "$tmp/rows"
+ef 'aarch64\ts t\ta:u\n'
+refuse "ef:1: ARCH and SET are one word each" -o "$tmp/rawr" -E s -f "$tmp/ef" "$tmp/arms2" "$tmp/rows"
+ef 'aarch 64\ts\ta:u\n'
+refuse "ef:1: ARCH and SET are one word each" -o "$tmp/rawr" -E s -f "$tmp/ef" "$tmp/arms2" "$tmp/rows"
+# A line later than SET's own is checked too, and so is another set.
+ef 'aarch64\ts\ta:u\nx86_64\tq\tb:u\nx86_64\tq\tc:u\n'
+refuse "ef:3: x86_64 q named twice" -o "$tmp/rawr" -E s -f "$tmp/ef" "$tmp/arms2" "$tmp/rows"
+ef 'aarch64\ts\ta:u,,b:u\n'
+refuse "empty event in 'a:u,,b:u'" -o "$tmp/rawr" -E s -f "$tmp/ef" "$tmp/arms2" "$tmp/rows"
+# -g is stats's layout: two counts, then the output. A wider or
+# narrower list, from -E or -e, is refused; two events pass.
+refuse "-g writes stats's layout, which takes two events; got 'instructions:u,cycles:u,l1i" -o "$tmp/rawr" -g g1 -E frontend "$tmp/arms2" "$tmp/rows"
+refuse "takes two events; got 'a1:u'" -o "$tmp/rawr" -g g1 -E s -f "$tmp/ev.tsv" "$tmp/arms2" "$tmp/rows"
+refuse "takes two events; got 'a:u'" -o "$tmp/rawr" -g g1 -e a:u "$tmp/arms2" "$tmp/rows"
+refuse "takes two events; got 'a:u,b:u,c:u'" -o "$tmp/rawr" -g g1 -e a:u,b:u,c:u "$tmp/arms2" "$tmp/rows"
+refuse "takes two events; got 'a:u,b:u,c:u'" -n -g g1 -e a:u,b:u,c:u "$tmp/arms2" "$tmp/rows"
+ef 'aarch64\ts\ta:u,b:u\n'
+"$rounds" -n -g g1 -E s -f "$tmp/ef" "$tmp/arms2" "$tmp/rows" > /dev/null || fail "-g with a two-event set refused"
+# The same ARCH with another SET, and the same SET with another ARCH,
+# are not twice.
+ef 'aarch64\ts\ta:u\naarch64\tq\tb:u\nx86_64\ts\tc:u\n'
+STUB_ARCH=aarch64 "$rounds" -n -r 1 -E s -f "$tmp/ef" "$tmp/arm1" "$tmp/rows" > /dev/null || fail "distinct ARCH SET pairs refused"
+[ ! -s "$PERF_LOG" ] || fail "a refused -E run ran perf"
+unset STUB_ARCH
 
 # md5.sh: a bracket around a change.
 mkdir "$tmp/in"

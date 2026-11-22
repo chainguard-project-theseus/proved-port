@@ -1,0 +1,11 @@
+# kit/perf/box/events.tsv: perf stat event lists per arch, read by
+# rounds.sh -E SET. One ARCH<TAB>SET<TAB>EVENTS line per list; ARCH is
+# what `uname -m` prints. Lines that start with # and empty lines are
+# skipped. A port with its own lists passes its own file with -f.
+#
+# frontend: port A's aarch64 detail phase (instruction-side L1 refills,
+# front- and back-end stalls, mispredicted branches). These are aarch64
+# PMU event names; there is no x86-64 row because no port has an
+# x86-64 list to take one from. With six counts it runs without -g:
+# its lines are for a port's own table, not for stats (see rounds.sh).
+aarch64	frontend	instructions:u,cycles:u,l1i_cache_refill:u,stall_frontend:u,stall_backend:u,br_mis_pred_retired:u

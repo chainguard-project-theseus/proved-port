@@ -376,11 +376,14 @@ is deleted in that PR.
    `rounds.sh` (rounds with the arms rotated per round, one perf stat
    line per run in the layout stats reads) and `md5.sh` (one side of
    the md5 bracket), checked by the go.yaml check `box-test` with
-   stand-in perf and taskset. Still to come: the noise-baseline
+   stand-in perf and taskset. `rounds.sh -E SET` takes a `perf stat`
+   event list per arch from `kit/perf/box/events.tsv` (#182), which
+   holds port A's aarch64 `frontend` list; there is no x86-64 list yet.
+   Still to come: the noise-baseline
    verdicts, the table join, the per-port workload files, the pull's
    fetch, and the rest of section 3's item 5 (the box run skeleton):
    arms by sha with tarball and library md5s (the arm build), the box
-   setup and phase lock, `perf stat` event lists per arch, one
+   setup and phase lock, one
    `systemd-run` unit per run, the sanity gate before the full run,
    and start and stop with cost logging.
 7. **Emulator, codegen diff, fast-path budget, noalias check.**
