@@ -368,6 +368,159 @@ error: test.log has 1 test result lines that are neither ok. nor FAILED. (colour
 EOF
 want "a coloured result line fails the run, beside a listed EXTRA key" 1
 
+# --- a test binary that crashed (#200) ----------------------------------------------------
+# cargo test --no-fail-fast with a listed failure in tests/a.rs and an
+# abort in tests/b.rs (the shape of a real run): b's `running` line has
+# no `test result:` after it, so `crashed: tests/b.rs` is a failure.
+cat > test.log <<'EOF'
+     Running unittests src/lib.rs (target/debug/deps/cr-177c3e2f46da647e)
+
+running 1 test
+test tests::it_works ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/a.rs (target/debug/deps/a-7636db1bf0bf67f3)
+
+running 1 test
+test known ... FAILED
+
+failures:
+
+failures:
+    known
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test a`
+     Running tests/b.rs (target/debug/deps/b-bbe5d8f4092d2ef8)
+
+running 2 tests
+error: test failed, to rerun pass `--test b`
+
+Caused by:
+  process didn't exit successfully: `target/debug/deps/b-bbe5d8f4092d2ef8` (signal: 6, SIGABRT: process abort signal)
+   Doc-tests cr
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+EOF
+printf '%s\n' known > known.txt
+run test.log known.txt
+cat > want <<'EOF'
+error: failed: crashed: tests/b.rs
+warning: known failure (known.txt): known
+EOF
+want "a test binary that crashed beside a listed failure fails, named by its target" 1
+printf '%s\n' known 'crashed: tests/b.rs' > known.txt
+run test.log known.txt
+cat > want <<'EOF'
+warning: known failure (known.txt): crashed: tests/b.rs
+warning: known failure (known.txt): known
+EOF
+want "a listed crash passes" 0
+# With no cargo lines: the Nth `running` line names it; a crash at the
+# end of the log; and the doc tests' target.
+printf '%s\n' 'running 1 test' 'test a ... ok' 'test result: ok. 1 passed; 0 failed' \
+  'running 3 tests' 'test b ... ' > test.log
+: > known.txt
+run test.log known.txt
+printf '%s\n' 'error: failed: crashed: test binary 2' > want
+want "with no cargo lines, a crash at the end of the log is test binary N" 1
+printf '%s\n' 'running 3 tests' 'test b ... ' 'running 1 test' 'test a ... ok' \
+  'test result: ok. 1 passed; 0 failed' > test.log
+run test.log known.txt
+printf '%s\n' 'error: failed: crashed: test binary 1' > want
+want "with no cargo lines, the next running line ends a crashed binary" 1
+# The real bytes: libtest wrote `test b ... ` with no newline before b
+# died; the next binary writes `\nrunning 1 test\n`, whose leading
+# newline ends that line.
+printf 'running 3 tests\ntest b ... \nrunning 1 test\ntest a ... ok\ntest result: ok. 1 passed; 0 failed\n' > test.log
+printf '%s\n' known > known.txt
+printf '%s\n' 'test known ... FAILED' 'failures:' '    known' '' 'test result: FAILED. 0 passed; 1 failed' >> test.log
+run test.log known.txt
+cat > want <<'EOF'
+error: failed: crashed: test binary 1
+warning: known failure (known.txt): known
+EOF
+want "a crashed binary's unfinished line that the next running line ends is a crash" 1
+: > known.txt
+# Test output that ends in `running N tests` (`--nocapture`) starts
+# nothing, inside an open binary that then finishes, or after one.
+printf '%s\n' 'running 2 tests' 'the fixture said running 2 tests' 'test fine ... ok' \
+  'test known ... FAILED' 'failures:' '    known' '' \
+  'test result: FAILED. 1 passed; 1 failed' 'the fixture said running 2 tests' > test.log
+printf '%s\n' known > known.txt
+run test.log known.txt
+printf '%s\n' 'warning: known failure (known.txt): known' > want
+want "test output ending in running N tests starts nothing, inside an open binary or after one" 0
+: > known.txt
+printf '%s\n' '   Doc-tests cr' 'running 2 tests' 'test src/lib.rs - f (line 3) ... ' \
+  '     Running tests/c.rs (target/debug/deps/c-1)' 'running 1 test' 'test c ... ok' \
+  'test result: ok. 1 passed; 0 failed' > test.log
+run test.log known.txt
+printf '%s\n' 'error: failed: crashed: doc-tests cr' > want
+want "a doc-test binary that crashed is named doc-tests CRATE, and the next binary's line ends it" 1
+# A binary that crashed after its result line (exit-time teardown): cargo's
+# `process didn't exit successfully ... (signal: ...)` names the binary it
+# ran last. A sanitizer's exit status counts too; libtest's 101 does not.
+printf '%s\n' '     Running tests/a.rs (target/debug/deps/a-1)' 'running 1 test' 'test known ... FAILED' \
+  'failures:' '    known' '' 'test result: FAILED. 0 passed; 1 failed' \
+  "error: test failed, to rerun pass \`--test a\`" '' 'Caused by:' \
+  "  process didn't exit successfully: \`target/debug/deps/a-1\` (exit status: 101)" \
+  '     Running tests/b.rs (target/debug/deps/b-1)' 'running 1 test' 'test fine ... ok' \
+  'test result: ok. 1 passed; 0 failed' "error: test failed, to rerun pass \`--test b\`" '' 'Caused by:' \
+  "  process didn't exit successfully: \`target/debug/deps/b-1\` (signal: 6, SIGABRT: process abort signal)" \
+  '     Running tests/c.rs (target/debug/deps/c-1)' 'running 1 test' 'test lsan ... ok' \
+  'test result: ok. 1 passed; 0 failed' \
+  "  process didn't exit successfully: \`target/debug/deps/c-1\` (exit status: 23)" > test.log
+printf '%s\n' known > known.txt
+run test.log known.txt
+cat > want <<'EOF'
+error: failed: crashed: tests/b.rs
+error: failed: crashed: tests/c.rs
+warning: known failure (known.txt): known
+EOF
+want "a crash after the result line (a signal, an exit status other than 101) is a crash; 101 is not" 1
+# A `harness = false` test that panicked: no libtest lines at all, only
+# cargo's Running line and status 101. No FAILED result explains the
+# 101, so it is a crash.
+printf '%s\n' '     Running tests/a.rs (target/debug/deps/a-1)' 'running 1 test' 'test known ... FAILED' \
+  'failures:' '    known' '' 'test result: FAILED. 0 passed; 1 failed' \
+  "  process didn't exit successfully: \`target/debug/deps/a-1\` (exit status: 101)" \
+  '     Running tests/h.rs (target/debug/deps/h-1)' "thread 'main' panicked at tests/h.rs:3:5:" 'boom' \
+  "error: test failed, to rerun pass \`--test h\`" '' 'Caused by:' \
+  "  process didn't exit successfully: \`target/debug/deps/h-1\` (exit status: 101)" > test.log
+printf '%s\n' known > known.txt
+run test.log known.txt
+cat > want <<'EOF'
+error: failed: crashed: tests/h.rs
+warning: known failure (known.txt): known
+EOF
+want "a 101 that no FAILED result line explains (a harness = false test) is a crash" 1
+# rustdoc that exits 101 before libtest starts: the Doc-tests line
+# resets the FAILED flag the binary before it set.
+printf '%s\n' '     Running tests/a.rs (target/debug/deps/a-1)' 'running 1 test' 'test known ... FAILED' \
+  'failures:' '    known' '' 'test result: FAILED. 0 passed; 1 failed' \
+  '   Doc-tests cr' "error: doctest failed, to rerun pass \`--doc\`" '' 'Caused by:' \
+  "  process didn't exit successfully: \`rustdoc --edition=2021 --crate-type lib\` (exit status: 101)" > test.log
+run test.log known.txt
+cat > want <<'EOF'
+error: failed: crashed: doc-tests cr
+warning: known failure (known.txt): known
+EOF
+want "rustdoc exiting 101 before libtest starts, after a FAILED binary, is a crash" 1
+# A closed binary's name does not carry to the next binary that has no
+# Running line of its own; test output that says `Running` is not cargo's.
+printf '%s\n' '     Running tests/a.rs (x)' 'running 1 test' 'test result: ok. 1 passed; 0 failed' \
+  'running 2 tests' '  Running server on port 80' 'test s ... ok' 'test result: ok. 2 passed; 0 failed' \
+  'running 1 test' > test.log
+: > known.txt
+run test.log known.txt
+printf '%s\n' 'error: failed: crashed: test binary 3' > want
+want "a binary with no Running line of its own is test binary N; test output saying Running ends nothing" 1
+
 # --- missing, unreadable, failing tools ----------------------------------------------------
 printf '%s\n' 'test api::x ... FAILED' > test.log
 printf '%s\n' api::x > known.txt
@@ -401,6 +554,30 @@ want "a list sed cannot read fails" 1
 if PATH=$tmp/stub-awk:$PATH sh "$script" test.log known.txt > out 2>&1; then rc=0; else rc=$?; fi
 printf '%s\n' "$tmp/stub-awk/awk: read error" 'error: awk failed on the FAILED lines of test.log' > want
 want "an awk that fails on the FAILED lines fails" 1
+# An awk that fails only on one pass (the program text names it), the
+# other passes running the real awk: the failures-blocks pass and the
+# test-binaries pass each have their own guard.
+mkdir stub-awk-pass
+cat > stub-awk-pass/awk <<'EOF'
+#!/bin/sh
+case $1 in *"$STUB_AWK_MATCH"*) echo "$0: failed" >&2; exit 2 ;; esac
+PATH=$REAL_PATH exec awk "$@"
+EOF
+chmod +x stub-awk-pass/awk
+for p in '^failures:' 'crashed: '; do
+  case $p in
+    '^failures:') what='the failures blocks' ;;
+    *) what='the test binaries' ;;
+  esac
+  if STUB_AWK_MATCH=$p PATH=$tmp/stub-awk-pass:$PATH sh "$script" test.log known.txt > out 2>&1; then rc=0; else rc=$?; fi
+  # The failures-blocks pass sends its stderr (its count line) to a
+  # file, so the stub's message shows only for the other pass.
+  case $p in
+    '^failures:') printf '%s\n' "error: awk failed on $what of test.log" > want ;;
+    *) printf '%s\n' "$tmp/stub-awk-pass/awk: failed" "error: awk failed on $what of test.log" > want ;;
+  esac
+  want "an awk that fails on $what fails" 1
+done
 
 # --- usage -------------------------------------------------------------------------------------
 run test.log
