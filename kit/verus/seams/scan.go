@@ -173,12 +173,15 @@ func (s *scanner) unsupported(name string, at int, contract string) {
 }
 
 var (
-	reDocLine      = re("^///")
-	reDocHead      = re("^/// ?")
-	reAttrStart    = re("^#!?\\[")
-	reCfgTest1     = re("^#[ \t]*\\[[ \t]*cfg[ \t]*\\([ \t]*(all[ \t]*\\([ \t]*)?test[ \t]*[,)]")
-	reCfgTest2     = re("^#\\[cfg\\(test\\)\\]")
-	reFnLine       = re("(^|[ \t])fn [A-Za-z_]")
+	reDocLine   = re("^///")
+	reDocHead   = re("^/// ?")
+	reAttrStart = re("^#!?\\[")
+	reCfgTest1  = re("^#[ \t]*\\[[ \t]*cfg[ \t]*\\([ \t]*(all[ \t]*\\([ \t]*)?test[ \t]*[,)]")
+	reCfgTest2  = re("^#\\[cfg\\(test\\)\\]")
+	reFnLine    = re("(^|[ \t])fn [A-Za-z_]")
+	// The first line of an item that has a body (besides fn and impl):
+	// after `#[cfg(test)]` the scan waits for that body on a later line.
+	reItemHead     = re("^(pub(\\([^)]*\\))?[ \t]+)?((unsafe|auto)[ \t]+)*(mod|trait|struct|enum|union)[ \t]+[A-Za-z_]|^macro_rules![ \t]*[A-Za-z_]")
 	reSemiEnd      = re(";$")
 	reIsFn         = re("(^|[ \t])fn [A-Za-z_][A-Za-z0-9_]*")
 	reFnHead       = re("^.*fn ")
@@ -448,7 +451,16 @@ func (s *scanner) line(raw, c string) {
 	}
 
 	// A test-only item is skipped from its first line through its body,
-	// which may open lines below a multi-line fn signature (pendtest 2).
+	// which may open lines below its first (pendtest 2): a multi-line fn
+	// signature, `mod t` then `{`, an impl with a `where` line. Only a
+	// first line that starts an item with a body (fn, impl, mod, trait,
+	// struct, enum, union, macro_rules!) and does not end in `;` waits;
+	// any other first line (a field, variant, parameter or match arm) is
+	// the whole item, its continuation lines read as code (that can
+	// count too much, never too little). A line
+	// that closes more braces than it opens ends the pending item and is
+	// read as code (it closes the enclosing block: `B` / `}` after a
+	// test-only last variant).
 	if s.pendtest != 0 {
 		s.attrs, s.hattrs, s.doc, s.uattrs = "", "", "", ""
 		if opens > closes {
@@ -457,17 +469,26 @@ func (s *scanner) line(raw, c string) {
 			s.skipAt = s.ln
 			s.skipd = s.depth
 			s.depth += opens - closes
-		} else if opens > 0 && opens == closes {
+			return
+		}
+		if opens > 0 && opens == closes {
 			// A one-line item (`fn g() {}`): it ends here. seams.sh read
 			// it as a multi-line signature and skipped on to the next
 			// line that opens a brace, dropping the seams between.
 			s.pendtest = 0
-		} else if s.pendtest == 1 && reFnLine.MatchString(t) && !reSemiEnd.MatchString(t) {
-			s.pendtest = 2
-		} else if s.pendtest == 1 || reSemiEnd.MatchString(t) || closes > opens {
-			s.pendtest = 0
+			return
 		}
-		return
+		if closes > opens {
+			s.pendtest = 0
+		} else {
+			head := reFnLine.MatchString(t) || reImplLine.MatchString(t) || reItemHead.MatchString(t)
+			if s.pendtest == 1 && !reSemiEnd.MatchString(t) && head {
+				s.pendtest = 2
+			} else if s.pendtest == 1 || reSemiEnd.MatchString(t) {
+				s.pendtest = 0
+			}
+			return
+		}
 	}
 
 	kind, name := "", ""
