@@ -247,10 +247,23 @@ if [ "$rc" -ne 2 ] || ! grep -qF 'PERF_BUDGET_LIB is empty' "$tmp/out"; then
   fail "the installed perf-budget.sh, no PERF_BUDGET_LIB: got = exit $rc, want = exit 2 naming PERF_BUDGET_LIB"
 fi
 echo "ok the installed perf-budget.sh and perf-budget.rs; the script refuses a run with no PERF_BUDGET_LIB"
+expect "make -n skip-summary: the package's skip-summary.sh" \
+  "$(shows "$installed" skip-summary SKIP_LOG=test.log SKIP_MANIFEST=skips.txt)" \
+  "sh $home/make/skip-summary.sh 'test.log' 'skips.txt'"
+# The installed script runs: a log whose one skip the manifest expects.
+[ -f "$home/make/skip-summary.sh" ] || fail "the installed skip-summary.sh: got = missing, want = installed"
+printf 'SKIP c_mseal no mseal\n' > "$tmp/skip.log"
+printf 'c_mseal\n' > "$tmp/skips.txt"
+if sh "$home/make/skip-summary.sh" "$tmp/skip.log" "$tmp/skips.txt" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qF "skips match $tmp/skips.txt" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed skip-summary.sh, an expected skip: got = exit $rc, want = exit 0 with skips match"
+fi
+echo "ok the installed skip-summary.sh passes an expected skip"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print verify; do
-  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary verify; do
+  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so SKIP_LOG=test.log SKIP_MANIFEST=skips.txt PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
     || { cat "$tmp/err" >&2; fail "make -n $t, PROVED_PORT_VERSION=$version (KIT's): got = failure, want = success"; }
   if make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$other" > "$tmp/out" 2> "$tmp/err"; then
     fail "make -n $t, PROVED_PORT_VERSION=$other: got = success, want = failure"
