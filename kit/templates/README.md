@@ -247,7 +247,12 @@ packages that run on every pull request. Check keys are
 the ones the ports use, so the `ci/run:<check>` labels carry over. The
 deps entries each repeat the rules the agent must keep, since it sees
 only its entry's prompt: FLOOR never goes down and gains no `lowered`
-line, the kit's pin (`theseus-proved-port~`, `PROVED_PORT_VERSION`, and
+line (but in the kit entry, where a release's notes say a share its
+counting rule drops takes a `lowered` line: the entry checks the drop
+against `verus-count --list`, prepares the line naming the release and
+change, moves README.md's badge, and leaves the bump a draft for a
+person, who may verify more instead), the
+kit's pin (`theseus-proved-port~`, `PROVED_PORT_VERSION`, and
 the proved-port marketplace ref in `.claude/settings.json`) moves only
 through the kit entry, and a reference bump
 updates the `docs/abi/` entries, the deviations lists and the
@@ -257,8 +262,8 @@ every kit pin together to the newest release, with no waiting period
 verus-headers` reports drift, applies what the release's CHANGELOG asks
 of ports that is new since the old pin, within the entry's paths only
 (the rest is listed for a person; with no CHANGELOG, only its
-`make verify` example), and leaves a bump whose counter fails a gate
-the old one passed for a person. The toolchain entry
+`make verify` example), and leaves a bump whose counter fails any
+other gate the old one passed for a person. The toolchain entry
 commits the pin moves before it runs any suite, so a run that outlasts
 the deps agent's two-hour budget still pushes a draft, then runs every
 suite in the guest, Kani included, as pcre3's does. A port whose

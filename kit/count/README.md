@@ -927,7 +927,12 @@ change to the port, as functions that were in no denominator join it
 the first pin move fails its FLOOR. A port holds its FLOOR by verifying
 more: it brings the macros' bodies inside `verus!` (below), verified or
 trusted at a seam, and the pin move waits until the port's figures hold
-its FLOOR. Lowering FLOOR is not the way to adopt a counter change.
+its FLOOR. Lowering FLOOR is not the way to adopt a counter change,
+unless the release's notes say otherwise for its counting rule (0.4.5's
+notes 3 and 7: a share the rule drops below FLOOR takes a `lowered` line
+naming what now counts as trusted). Even then verifying more comes
+first: the deps agent's kit entry prepares such a line in a draft that
+names the kit change, and a person chooses between it and more proofs.
 
 To raise the share, put the functions a macro writes inside `verus!`
 by writing them there, or have the macro write a `verus! { .. }` block,

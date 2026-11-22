@@ -30,6 +30,31 @@ where it reports drift.
   same way), and a file at a default path that cargo does not build
   (`autolib = false`, `autobins = false`) was read. The forbid check on
   the command line is unchanged; it already reached every target.
+- The kit entry of the templated `.chainguard/deps.yaml` prepares a
+  `lowered` line where a release's notes say a share its counting rule
+  drops below FLOOR takes one (#188). Its prompt said FLOOR never gains
+  a `lowered` line from the entry, while 0.4.5's notes 3 and 7 (#74,
+  #68) say such a share takes one. Now the entry saves the old
+  counter's `--list` and figures before it installs the new package,
+  and, for such a release, checks against them that every newly
+  trusted, outside or counted function is one the notes' rule
+  describes; with no saved list it leaves FLOOR as it is. For a
+  drop the rule alone explains, with nothing in the port's code or
+  ledgers changed, it sets the figure to the share the check reports,
+  adds a `lowered FIGURE P REASON` line naming the kit release and
+  change by the kit's full name (`kit 0.4.5,
+  chainguard-project-theseus/proved-port#74`), what now counts as
+  trusted or outside and the counts before and after, and replaces
+  README.md's Verus badge where `functions` or `lines` moves (the
+  entry's paths gain `README.md` for that line alone, and the prompt
+  says so where it limits changes to the paths). It leaves that
+  bump a draft: the FLOOR header puts verifying more first, so a person
+  chooses between the line and more proofs, and ledger rows the notes
+  ask for are listed in the body for that person. Every other gate the
+  old counter passed still leaves the bump a draft with nothing fixed.
+  The other entries keep "never gains a `lowered` line".
+  `kit/count/README.md`'s "Lowering FLOOR is not the way to adopt a
+  counter change" names the exception.
 
 ### Porting notes
 
@@ -42,6 +67,19 @@ where it reports drift.
    default path cargo does not build, which was read in place of its
    test, bench and example roots (add the forbid to those). A port with
    neither changes nothing.
+2. The deps template carries no `# kit:` header and `make verus-headers`
+   does not hold it, so a port takes the change by hand: in its
+   `.chainguard/deps.yaml` kit entry, add `"README.md"` to `paths`,
+   take the template's text from "If the pin is already that release,
+   change nothing." to "commit the pin moves before you run anything
+   else;" (the old counter's saved view) and from "Make only the
+   changes" to "goes in the body.", and replace its text from "verus/FLOOR never goes down" to "fix nothing
+   in the port's code or ledgers," with the template's text from
+   "verus/RLIMIT gains no" to the same words (the RLIMIT sentence moved
+   ahead of the FLOOR one, so the template's range starts there). A port
+   that leaves its prompt as it is changes nothing else: its kit bumps
+   that cross such a counting-rule change stay drafts for a person, who
+   writes the line.
 
 ## 0.4.11
 
