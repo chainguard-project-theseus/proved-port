@@ -98,6 +98,46 @@ where it reports drift.
   library that defines `GLIBC_` nodes, whose definitions challoc's
   counted as needs; and a library with an ABI marker need, which
   challoc's did not read. No existing target or check changes.
+- The Kani marker (`#[cfg_attr(any(), discharged_by = "kani")]`) now
+  discharges a shipped function outside `verus!`, as it does a trusted
+  one inside. Before, the counter classed every function outside
+  `verus!` as outside before it read the marker, so a port whose FFI
+  layer is plain Rust that Kani checks could not count those checks.
+  Such a function needs a `kani-*.md` record that names its file and
+  quotes `fn NAME`, as any marked function does, or the run fails
+  (exit 1), and with `[ledger]` its marker is refused, as any shipped
+  one is. Since it has no contract to quote, the counter checks three
+  more things, and each failure fails the run (exit 1):
+  - its record names it in backquotes by its path: a method with its
+    owner (`A::new`, `B<u8>::new`, `<A as From<u8>>::from`), a free
+    function with its inline modules (`a::init`) or alone at its file's
+    top (`init`);
+  - no other marked function in its file has the same path (`cfg`
+    twins do);
+  - a record that covers it names, each in backquotes, the file and
+    name of a `#[kani::proof]` harness of its crate, in that file and
+    under `cfg`s `make kani` builds (not `cfg(test)`), whose body calls
+    it by name and, for a method, mentions its owner.
+
+  kit/count/README.md, "Two ways to discharge a seam", gives each rule
+  and its limits: the harness check is by name, so a call of that name
+  counts whoever defines it. REACH takes such a function as checked;
+  the functions nested in its body stay outside, in REACH too.
+  `exec_allows_no_decreases_clause` around it changes nothing, since
+  the attribute covers no code outside `verus!`. One built only for
+  Verus leaves the tally, as outside code built only for Verus does,
+  and its marker discharges nothing. A crate whose functions are all
+  outside `verus!`, marked or not, is not taken as one Verus checks,
+  so it needs no `[package.metadata.verus] verify = true`.
+- The `verus/FLOOR` template's header says `checked-functions` and
+  `checked-lines` add the functions Kani discharges, not only the
+  trusted ones.
+- The `kani-TEMPLATE.md` record template, the `verus/README.md`
+  template's "Kani" section, the templates README and the skill's
+  `references/proofs.md` say how to discharge a function outside
+  `verus!`: the harness, one record per source file
+  (`kani-<crate>-<path under src/, / as ->.md`) covering every marked
+  function in it, and the marker, with no seam row.
 
 ### Porting notes
 
@@ -137,6 +177,20 @@ where it reports drift.
    the copy. A port that copied the no-kit guard in
    `kit/count/README.md` adds `glibc-max` to its `PROVED_PORT_TARGETS`
    when it starts to use it. A port that does neither changes nothing.
+5. Every port, before moving its pin to 0.4.12: find the marker on
+   shipped functions outside `verus!` (`grep -rn 'discharged_by *=
+   *"kani"' --include=*.rs .`, then whether each hit sits inside a
+   `verus!` block). Before, each such marker counted nothing; now each
+   makes its function discharged. Without `[ledger]`, add a record for
+   it (`kani-TEMPLATE.md`) that names it by its path and names a harness
+   that calls it, or remove the marker, and with `[reach]`
+   drop any REACH row that names it. With `[ledger]`, remove the
+   marker: the ledger says what is discharged. A port with none sees
+   nothing from this note.
+6. Every port, with the pin bump: `make verus-headers` reports
+   verus/FLOOR's header as drifted, since the template's "add the
+   trusted functions Kani discharges" is now "add the functions Kani
+   discharges". Take the kit's text there.
 
 ## 0.4.11
 

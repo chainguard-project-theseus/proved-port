@@ -518,7 +518,69 @@ the file sits, so keep the file at the root.
   `cfg_attr`s as rustc expands them, nested or beside other attributes,
   and counts only where the predicates around it hold in no build
   whatever the configuration declares (`any()`); under one some build may
-  meet (`windows`) the function is not discharged.
+  meet (`windows`) the function is not discharged. A shipped function
+  outside `verus!` with the marker is discharged too: Kani checks
+  it, and Verus checks nothing of it either way. It has no Verus
+  contract, so its record states what the harness checks, and quotes
+  it as it quotes a trusted one. With no contract to compare against,
+  the counter checks three more things, and each failure fails the run
+  (exit 1):
+  - **Its path.** Its record names it in backquotes, exactly: a method
+    with its owner, `A::new` and `B<u8>::new` for inherent `impl`s (the
+    self type as written, generics included), `<A as From<u8>>::from`
+    for a trait `impl`, and `Tr::name` for a trait's default method,
+    with spaces only between two identifier characters (`Box<dyn Tr>`);
+    a free function with the inline modules around it in its file
+    (`a::init` for `mod a { fn init }`), or alone at the file's top
+    (`init`). Plain Rust holds many same-named functions, and a quote of
+    `fn new` alone would cover every marked `new` in the file.
+  - **No shared path.** Two marked functions in one file with the same
+    path (`#[cfg(unix)] fn map` beside `#[cfg(windows)] fn map`, or two
+    `impl A` blocks under different `cfg`s) fail the run, since no
+    record could tell them apart: mark one, or rename one.
+  - **A harness that calls it.** A record that covers it (its file,
+    `fn NAME` and its path) names, each in backquotes, the file
+    (relative to the root, as `crates/ffi/src/proofs.rs`) and the name
+    of a `#[kani::proof]` (or `#[kani::proof_for_contract]`, written so;
+    `#[cfg_attr(kani, kani::proof)]` and a bare `#[proof]` are not
+    read, which fails closed) function of the same crate, in that file,
+    whose body calls it by name: the last identifier before a call's
+    parentheses, through any path, receiver or turbofish (`A::new(..)`,
+    `s.open(..)`). For a method, the body also mentions the owner's
+    last identifier (`A` for `A::new` or `<A as From<u8>>::from`), so
+    that `Vec::new()` alone does not check a marked `A::new`.
+    Harnesses are read from the crate's root files and the files a
+    `mod` declares under `cfg`s cargo kani may meet, `cfg(kani)` ones
+    included, at any depth of inline modules and `impl`s. One `make
+    kani` never runs is left out: under a `cfg` no build meets
+    (`#[cfg(any())]`), under `cfg(test)` (cargo kani sets `test` only
+    with `--tests`), or in a file no `mod` declares. A `fn` declared
+    anywhere in a harness's body, at its top or in an inner block, adds
+    no call and no mention; a function pointer type there
+    (`extern "C" fn(*mut u8)`) is no declaration, and the calls after it
+    count. Harnesses a macro or `verus!` writes are
+    not read (fails closed). The counter does not read `KANI_CRATES` or
+    `KANI_FLAGS`: a harness in a crate `make kani` does not select, or
+    in a test, bench or example root, still counts, so keep harnesses
+    in the crates `make kani` runs. The check is by name: a call of
+    that name counts whoever defines it, so for a free function
+    another crate's or std's of that name does (`mem::drop(x)` for a
+    marked `drop`, a local closure named `init` for `init`), and for a
+    method any call of that name in a body that mentions the owner; it
+    does not follow calls through other functions, function pointers
+    or operators; and it says nothing of how much the harness checks,
+    which the record states and review judges.
+
+  Such a function does not make its
+  crate one Verus checks (`[package.metadata.verus] verify = true`),
+  and REACH takes it as checked, so a REACH row naming it fails. The
+  functions nested in its body (an `extern "C"` one it declares
+  included) stay outside, in the tally and in REACH: its record and
+  harness check none of them. One
+  built only for Verus is left out of the tally, as outside code built
+  only for Verus is: no shipped proof rests on it, so its marker
+  discharges nothing, needs no record, and is not refused with
+  `[ledger]`.
 - **The generated ledger** (challoc, `[ledger]`): `verus/seams.sh`
   writes `verus/ledger/**.rs.md` from the source, and each entry's
   status says whether its seam is discharged, partly checked or
@@ -534,7 +596,8 @@ the file sits, so keep the file at the root.
 functions whose loops and recursion have no `decreases`, so nothing
 proves they end. Each exec function it covers counts as trusted, not
 verified, nor discharged even with the Kani marker (a Kani record does
-not prove termination either): one that carries it, and each in an
+not prove termination either, so the attribute's waiver stands): one
+that carries it, and each in an
 `impl`, trait or inline module that carries it (outer, or inner `#![..]`
 inside the braces), or in a file whose inner attributes carry it. The counter reads it as it
 reads `assume_unsupported_attributes`: in the path form or as
@@ -544,7 +607,9 @@ it, on an inline module around it, or atop the file that declares it),
 it fails the run (exit 1), naming the declaration: the counter
 reads each module file on its own, so it would not reach the functions
 it covers; put it on those functions, impls, traits or inline modules.
-Ghost functions and code outside `verus!` keep their classes. With a
+Ghost functions and code outside `verus!` keep their classes, so a
+function outside `verus!` with the Kani marker stays discharged under
+it. With a
 generated ledger, a `no_decreases` seam at a function's `fn` line is
 its ledger entry when the attribute alone makes it trusted and no
 `external_body` or `axiom` seam is there, and counts it unchecked
@@ -736,7 +801,7 @@ nested repetitions; `$crate`; a `$name` the rule does not bind written
 through, as a macro that writes a `macro_rules!` needs; an invocation
 the expansion writes is expanded in turn), and each function in it
 counts as outside `verus!`, since `verus!` does not expand the macros it
-holds.
+holds (or as discharged, with the Kani marker).
 
 The fragments match by the crate's edition, as rustc's do. An
 `expr_2021` begins at neither `const` nor `_` (and no `expr` at `let`),

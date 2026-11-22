@@ -10,6 +10,27 @@ function carries the
 `#[cfg_attr(any(), discharged_by = "kani")]` marker and no record names
 its file in backquotes and quotes `fn NAME`; section 1 is where it looks.}
 
+{For shipped functions outside `verus!`, which have no seam and no
+Verus contract, write one record per source file, covering every marked
+function in it: name it `kani-<crate>-<path under src/ without .rs,
+each / as ->.md`, as `kani-ffi-stream.md` for `crates/ffi/src/stream.rs`
+or `kani-ffi-io-read.md` for `crates/ffi/src/io/read.rs`, so no two
+records collide. Title it with the file, and open with "`{FILE}`,
+outside `verus!`. Discharged by Kani {KANI_RELEASE}. The harnesses
+below check the properties section 1 states.", then list each
+function by its path in backquotes, a method with its owner, as
+`A::new`, `B<u8>::new` or `<A as From<u8>>::from`, a free function with
+its inline modules, as `a::init`, or alone at the file's top, as `init`
+(kit/count/README.md, "Two ways to discharge a seam"). In
+section 1 quote each function's doc comment, signature and marker line,
+then state below the block each property the harnesses assert. Section
+2 names each harness's file and name in backquotes, as it does for a
+seam: the counter fails a marked function outside `verus!` unless a
+record that covers it names it by its path and names the file and name
+of a `#[kani::proof]` harness of its crate whose body calls it (and,
+for a method, mentions its owner). Sections 2 and 3 then read those
+properties where they say `requires` and `ensures`.}
+
 ## 1. Contract
 
 At this record's commit:

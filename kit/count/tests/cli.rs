@@ -4394,6 +4394,139 @@ fn the_ledger_refuses_the_kani_marker_on_a_function_the_termination_attribute_co
     }
 }
 
+/// The Kani marker on functions outside `verus!`: each needs a record
+/// that quotes `fn NAME` and names it in backquotes by its path (`free`,
+/// `A::new`), and a record that names, in backquotes, a `#[kani::proof]`
+/// harness of the crate (here in a `cfg(kani)` file) that calls it, or the
+/// run fails (exit 1). With no record each fails; a record naming only
+/// `A::new` leaves `free` and `B::new` failing; one naming all three but
+/// no harness, or harness names without their file, leaves all three
+/// failing; one naming only a harness that
+/// `make kani` never runs, in a file no `mod` declares, in one
+/// `#[cfg(any())] mod` declares, or in one `#[cfg(test)] mod` declares,
+/// leaves `free` failing; one naming the declared harnesses passes.
+#[test]
+fn a_marked_function_outside_verus_needs_a_record_naming_its_owner_and_harness() {
+    let lib = "#[cfg(kani)]\nmod proofs;\n#[cfg(any())]\nmod dead_proofs;\n#[cfg(test)]\nmod test_proofs;\n\
+        pub struct A;\npub struct B;\n\
+        #[cfg_attr(any(), discharged_by = \"kani\")]\npub fn free() {}\n\
+        impl A {\n#[cfg_attr(any(), discharged_by = \"kani\")]\npub fn new() {}\n}\n\
+        impl B {\n#[cfg_attr(any(), discharged_by = \"kani\")]\npub fn new() {}\n}\n";
+    let proofs = "#[kani::proof]\nfn check_free() {\ncrate::free();\n}\n\
+        #[kani::proof]\nfn check_new() {\ncrate::A::new();\ncrate::B::new();\n}\n";
+    let orphan = "#[kani::proof]\nfn check_orphan() {\ncrate::free();\n}\n";
+    let dead = "#[kani::proof]\nfn check_dead() {\ncrate::free();\n}\n";
+    let tested = "#[kani::proof]\nfn check_test() {\ncrate::free();\n}\n";
+    let quotes = "```rust\npub fn free() {}\npub fn new() {}\n```\n";
+    let unquoted = |n: &str| {
+        format!(
+            "FAIL discharged: crates/a/src/lib.rs: `{n}` has the discharged_by = \"kani\" marker, but no verus/seams/kani-*.md record names its file and quotes `fn {n}`"
+        )
+    };
+    let unowned = |p: &str| {
+        format!(
+            "FAIL discharged: crates/a/src/lib.rs: `{p}` has the discharged_by = \"kani\" marker outside verus!, but no verus/seams/kani-*.md record names its file and `{p}` in backquotes"
+        )
+    };
+    let unharnessed = |p: &str, n: &str, owner: &str| {
+        format!(
+            "FAIL discharged: crates/a/src/lib.rs: `{p}` has the discharged_by = \"kani\" marker outside verus!, but no verus/seams/kani-*.md record that covers it names, each in backquotes, the file and name of a #[kani::proof] harness of crate a whose body calls `{n}`{owner}"
+        )
+    };
+    let proofs_rs = "`crates/a/src/proofs.rs`";
+    for (record, want_fails) in [
+        (
+            None,
+            vec![
+                unquoted("free"),
+                unquoted("new"),
+                unquoted("new"),
+                unowned("free"),
+                unowned("A::new"),
+                unowned("B::new"),
+            ],
+        ),
+        (
+            Some(format!(
+                "`A::new` (`crates/a/src/lib.rs`): {proofs_rs}, `check_free`, `check_new`.\n\n{quotes}"
+            )),
+            vec![unowned("free"), unowned("B::new")],
+        ),
+        (
+            Some(format!(
+                "`free`, `A::new` and `B::new` (`crates/a/src/lib.rs`).\n\n{quotes}"
+            )),
+            vec![
+                unharnessed("free", "free", ""),
+                unharnessed("A::new", "new", " and mentions `A`"),
+                unharnessed("B::new", "new", " and mentions `B`"),
+            ],
+        ),
+        (
+            Some(format!(
+                "`free`, `A::new` and `B::new` (`crates/a/src/lib.rs`): `check_free`, `check_new`, but not their file.\n\n{quotes}"
+            )),
+            vec![
+                unharnessed("free", "free", ""),
+                unharnessed("A::new", "new", " and mentions `A`"),
+                unharnessed("B::new", "new", " and mentions `B`"),
+            ],
+        ),
+        (
+            Some(format!(
+                "`free`, `A::new` and `B::new` (`crates/a/src/lib.rs`): `crates/a/src/old_proofs.rs`, `check_orphan`, {proofs_rs}, `check_new`.\n\n{quotes}"
+            )),
+            vec![unharnessed("free", "free", "")],
+        ),
+        (
+            Some(format!(
+                "`free`, `A::new` and `B::new` (`crates/a/src/lib.rs`): `crates/a/src/dead_proofs.rs`, `check_dead`, {proofs_rs}, `check_new`.\n\n{quotes}"
+            )),
+            vec![unharnessed("free", "free", "")],
+        ),
+        (
+            Some(format!(
+                "`free`, `A::new` and `B::new` (`crates/a/src/lib.rs`): `crates/a/src/test_proofs.rs`, `check_test`, {proofs_rs}, `check_new`.\n\n{quotes}"
+            )),
+            vec![unharnessed("free", "free", "")],
+        ),
+        (
+            Some(format!(
+                "`free`, `A::new` and `B::new` (`crates/a/src/lib.rs`): {proofs_rs}, `check_free`, `check_new`.\n\n{quotes}"
+            )),
+            vec![],
+        ),
+    ] {
+        let dir = crate_of(
+            "outside-marker",
+            &[
+                ("lib.rs", lib),
+                ("proofs.rs", proofs),
+                ("old_proofs.rs", orphan),
+                ("dead_proofs.rs", dead),
+                ("test_proofs.rs", tested),
+            ],
+        );
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!("{PLAIN}[kani]\nrecords = \"verus/seams\"\n"),
+        )
+        .expect("write");
+        fs::create_dir_all(dir.join("verus/seams")).expect("mkdir");
+        if let Some(r) = &record {
+            fs::write(dir.join("verus/seams/kani-a-lib.md"), r).expect("write");
+        }
+        let (got, out, err) = count(&dir, &[]);
+        let fails: Vec<&str> = err.lines().filter(|l| l.starts_with("FAIL")).collect();
+        let want_code = if want_fails.is_empty() { 0 } else { 1 };
+        assert!(
+            got == want_code && fails == want_fails,
+            "record {record:?}: got = exit {got}, {fails:?}, {out:?}, {err:?}; wanted = exit {want_code}, {want_fails:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 /// Candidate definitions of a macro that differ only in why a function
 /// they write is trusted (`exec_allows_no_decreases_clause` alone, or
 /// `external_body` too), or in whether the attribute covers an

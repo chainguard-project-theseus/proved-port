@@ -19,10 +19,15 @@
 //! fails the run);
 //! *trusted* when it sits inside
 //! `verus!` but is one of those; and *outside* when it is not inside
-//! `verus!` at all. A trusted function marked
+//! `verus!` at all. A trusted or outside function marked
 //! `#[cfg_attr(any(), discharged_by = "kani")]` is *discharged* instead:
 //! Kani checks its contract (verus/README.md, "Kani"), on the bounded inputs
-//! its record names, so it counts neither as verified nor as trusted. The
+//! its record names, so it counts neither as verified nor as trusted or
+//! outside. One outside `verus!` has no Verus contract, so its record
+//! states what Kani checks, names it in backquotes by its path (a method
+//! with its owner, [`owner_key`]; a free function with its inline modules
+//! in its file, or alone), and names a `#[kani::proof]` harness that
+//! calls it ([`outside_unchecked`]). The
 //! marker is inert in every build (`any()` is false), and a marked function
 //! no `verus/seams/kani-*.md` record covers fails the run. With a
 //! `[ledger]` section, a generated seam ledger ([`ledger`]) says which
@@ -248,11 +253,38 @@ enum Covered {
     Also,
 }
 
+/// A discharged function outside `verus!`: its crate, file (relative to
+/// the root) and name, and the key a record names it by before `::name`
+/// ([`owner_key`] for a method, the inline modules around it within its
+/// file for a free function, `None` at a file's top).
+#[derive(Clone, Debug, PartialEq)]
+struct OutsideMark {
+    krate: String,
+    file: PathBuf,
+    name: String,
+    key: Option<String>,
+    /// For a method, its owner's name alone (`A` for `<A as From<u8>>`,
+    /// `B` for `B<u8>`), which a harness that checks it mentions.
+    owner: Option<String>,
+}
+
+impl OutsideMark {
+    /// How a record names it: `KEY::name`, or `name` with no key.
+    fn path(&self) -> String {
+        match &self.key {
+            Some(k) => format!("{k}::{}", self.name),
+            None => self.name.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct Tally {
     fns: [usize; 4],
     lines: [usize; 4],
     ghost: usize,
+    /// The discharged functions among `fns` that sit outside `verus!`.
+    outside_discharged: usize,
 }
 
 impl Tally {
@@ -262,6 +294,7 @@ impl Tally {
             self.lines[i] += t.lines[i];
         }
         self.ghost += t.ghost;
+        self.outside_discharged += t.outside_discharged;
     }
 }
 
@@ -276,6 +309,14 @@ struct Counter {
     /// Each discharged function's file, relative to the root, and name, for
     /// [`unrecorded`].
     discharged: Vec<(PathBuf, String)>,
+    /// Each discharged function outside `verus!`, for [`outside_unchecked`].
+    outside: Vec<OutsideMark>,
+    /// The inline modules around the item [`Counter::items`] is walking,
+    /// within its file: the last this many of [`Counter::module`].
+    inline_mods: usize,
+    /// Each crate's `#[kani::proof]` harnesses ([`kani_harnesses`]),
+    /// test-only files included.
+    harnesses: BTreeMap<String, Vec<Harness>>,
     /// Each function with the Kani marker that
     /// `exec_allows_no_decreases_clause` covers, which counts as trusted
     /// and so is not in `discharged`: with `[ledger]` its marker is
@@ -301,6 +342,9 @@ struct Counter {
     owner: String,
     /// Whether [`Counter::owner`] is an `impl`'s type, not a trait.
     owner_impl: bool,
+    /// The trait a trait `impl` [`Counter::items`] is walking implements,
+    /// as written (`From<u8>`); `None` elsewhere.
+    owner_trait: Option<String>,
     /// The type parameters of the `impl` [`Counter::items`] is walking
     /// (`impl<S: Spec> Tr for S` declares `S`).
     owner_params: Vec<String>,
@@ -630,6 +674,9 @@ impl Counter {
             tallies: BTreeMap::new(),
             errors: 0,
             discharged: Vec::new(),
+            outside: Vec::new(),
+            inline_mods: 0,
+            harnesses: BTreeMap::new(),
             marked_covered: Vec::new(),
             fns: Vec::new(),
             files: Vec::new(),
@@ -639,6 +686,7 @@ impl Counter {
             traits: std::collections::BTreeSet::new(),
             owner: String::new(),
             owner_impl: false,
+            owner_trait: None,
             owner_params: Vec::new(),
             type_paths: BTreeMap::new(),
             opaque: std::collections::BTreeSet::new(),
@@ -2372,7 +2420,8 @@ fn cargo(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 /// The `#[cfg_attr(any(), discharged_by = "kani")]` marker: Kani checks
-/// this trusted function's contract (verus/README.md, "Kani"). The marker
+/// this trusted function's contract, or what the record states for one
+/// outside `verus!` (verus/README.md, "Kani"). The marker
 /// is inert: `discharged_by` is no attribute rustc knows, so it may only
 /// sit under predicates that hold in no build. It is read through
 /// [`applied_attrs`], so it counts nested or beside other attributes
@@ -2666,7 +2715,9 @@ fn is_trusted_proof(sig: &Signature, attrs: &[Attribute], body: Option<&TokenStr
 /// How the tally classes a function, `in_verus` when it is under `verus!`:
 /// `None` for a ghost one (spec or proof) that is not a trusted proof, which
 /// is counted apart. Shipped code and code built only for Verus are classed
-/// by this one rule.
+/// by this one rule. A function outside `verus!` with the Kani marker is
+/// discharged, as a trusted one with it is: Kani checks it, on the bounded
+/// inputs its record names, and Verus checks nothing of it either way.
 fn classify(
     in_verus: bool,
     sig: &Signature,
@@ -2674,7 +2725,11 @@ fn classify(
     body: Option<&TokenStream>,
 ) -> Option<Class> {
     if !in_verus {
-        return Some(Class::Outside);
+        return Some(if is_discharged(attrs) {
+            Class::Discharged
+        } else {
+            Class::Outside
+        });
     }
     let trusted_proof = is_trusted_proof(sig, attrs, body);
     if is_ghost(sig) && !trusted_proof {
@@ -2822,8 +2877,10 @@ impl Counter {
         // `external_body` or calls `assume`, with the Kani marker, which a
         // ledger does not take as discharging it, so without the attribute
         // it is trusted for that. Any other exec function the attribute
-        // covers is trusted for another reason as well.
-        let covers = no_decreases && !is_ghost(sig);
+        // covers is trusted for another reason as well. Code outside
+        // `verus!` keeps its class: the attribute is Verus's, and covers
+        // none of it, a function with the Kani marker included.
+        let covers = no_decreases && in_verus && !is_ghost(sig);
         let mut covered = if covers { Covered::Also } else { Covered::No };
         let class = match class {
             Some(c @ (Class::Verified | Class::Discharged)) if covers => {
@@ -2878,11 +2935,12 @@ impl Counter {
             // A shipped build compiles none of this code, so its verified,
             // ghost and outside functions leave the tally. A trusted one
             // still counts: a shipped function's proof can rest on it, so
-            // it is a seam.
+            // it is a seam. One outside `verus!` with the Kani marker is no
+            // seam, since no proof rests on it, and leaves the tally too.
             // With `verus_only_ghost`, its ghost functions join the ghost
             // column, which Verus checks all the same.
             match class {
-                Some(class @ (Class::Trusted | Class::Discharged)) => {
+                Some(class @ (Class::Trusted | Class::Discharged)) if in_verus => {
                     self.tally_fn(class, sig.ident.to_string(), at, lines, covered);
                 }
                 None if self.verus_only_ghost => {
@@ -2903,6 +2961,35 @@ impl Counter {
         } else {
             class
         };
+        // A discharged function outside `verus!` gives Verus nothing to
+        // check, so it does not make its crate one that needs
+        // `[package.metadata.verus] verify = true` ([`verus_crates`]).
+        if class == Class::Discharged && !in_verus && self.dry.is_none() {
+            self.tallies
+                .entry(self.krate.clone())
+                .or_default()
+                .outside_discharged += 1;
+            // Plain Rust holds many same-named functions (`new`, `drop`, an
+            // `init` in two inline modules), so a quote of `fn NAME` alone
+            // could cover each of them: the record names it by its key too.
+            let inline = &self.module[self.module.len().saturating_sub(self.inline_mods)..];
+            let key = owner_key(&self.owner, self.owner_trait.as_deref())
+                .or_else(|| (!inline.is_empty()).then(|| inline.join("::")));
+            // The owner's last identifier: `A` for `A`, `B<u8>`, `&'a A` or
+            // `crate::A`.
+            let owner = owner_name(&self.owner).and_then(|o| {
+                o.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .rfind(|s| !s.is_empty())
+                    .map(str::to_owned)
+            });
+            self.outside.push(OutsideMark {
+                krate: self.krate.clone(),
+                file: self.file.clone(),
+                name: sig.ident.to_string(),
+                key,
+                owner,
+            });
+        }
         // A macro's expansion is counted, not walked: the walks read the
         // configured macros their own way (`[reach]`'s `exports_macro`
         // and `fn_ptr_macro`).
@@ -2936,7 +3023,16 @@ impl Counter {
             entry,
         });
         self.tally_fn(class, sig.ident.to_string(), at, lines, covered);
-        Some(class)
+        // The functions nested in its body take the class returned here
+        // ([`Counter::nested`]). A marked function outside `verus!` is
+        // discharged by its own record and harness alone, which check
+        // nothing it nests (a nested `extern "C"` entry point included),
+        // so those stay outside.
+        Some(if class == Class::Discharged && !in_verus {
+            Class::Outside
+        } else {
+            class
+        })
     }
 
     /// [`Counter::tally`] for a function, recording a trusted one's line as
@@ -3444,6 +3540,12 @@ impl Counter {
                         verus_syn::__private::ToTokens::to_token_stream(&*i.self_ty).to_string(),
                     );
                     let outer_impl = std::mem::replace(&mut self.owner_impl, true);
+                    let outer_trait = std::mem::replace(
+                        &mut self.owner_trait,
+                        i.trait_.as_ref().map(|(_, path, _)| {
+                            verus_syn::__private::ToTokens::to_token_stream(path).to_string()
+                        }),
+                    );
                     let outer_params = std::mem::replace(
                         &mut self.owner_params,
                         i.generics
@@ -3495,6 +3597,7 @@ impl Counter {
                     }
                     self.owner = outer;
                     self.owner_impl = outer_impl;
+                    self.owner_trait = outer_trait;
                     self.owner_params = outer_params;
                     self.leave(was);
                 }
@@ -3509,6 +3612,7 @@ impl Counter {
                     }
                     let outer = std::mem::replace(&mut self.owner, t.ident.to_string());
                     let outer_impl = std::mem::replace(&mut self.owner_impl, false);
+                    let outer_trait = self.owner_trait.take();
                     for ti in &t.items {
                         if let TraitItem::Fn(f) = ti
                             && let Some(block) = &f.default
@@ -3536,6 +3640,7 @@ impl Counter {
                     }
                     self.owner = outer;
                     self.owner_impl = outer_impl;
+                    self.owner_trait = outer_trait;
                     self.leave(was);
                 }
                 Item::Mod(m) => {
@@ -3545,6 +3650,7 @@ impl Counter {
                     {
                         let was = self.enter(built, &m.attrs);
                         self.module.push(m.ident.to_string());
+                        self.inline_mods += 1;
                         self.inline_macro_use.push(has_attr(&m.attrs, "macro_use"));
                         let instance =
                             mod_instance(&self.file, self.expansion, m.ident.span().start());
@@ -3552,6 +3658,7 @@ impl Counter {
                         self.items(inner, in_verus);
                         self.scope = outer;
                         self.inline_macro_use.pop();
+                        self.inline_mods -= 1;
                         self.module.pop();
                         self.leave(was);
                     } else if built != Built::Test
@@ -3998,6 +4105,29 @@ impl Counter {
         self.took.clear();
         self.invoked.clear();
         for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
+            // The Kani harnesses live in test-only files (`cfg(kani)`), so
+            // they are gathered before those are skipped: from a file some
+            // target builds, a crate root or one a `mod` declares under
+            // `cfg`s cargo kani may meet ([`kani_skips`]). An orphan file,
+            // or one only `#[cfg(any())] mod x;` or `#[cfg(test)] mod x;`
+            // declares, holds no harness `make kani` runs.
+            let cf = canonical(f);
+            let declared = mods.roots.contains(&cf)
+                || mods
+                    .declared
+                    .iter()
+                    .chain(&mods.alternate)
+                    .any(|d| d.file == cf);
+            if declared
+                && !kani_skips(&module_guards(&cf, &mods))
+                && let Some(Ok(file)) = p
+            {
+                kani_harnesses(
+                    &file.items,
+                    f.strip_prefix(root).unwrap_or(f),
+                    self.harnesses.entry(self.krate.clone()).or_default(),
+                );
+            }
             // A module built only for Verus is read for its rlimits alone,
             // and one Verus's build might not compile counts no function
             // verified. Its items are read under its modules' `cfg`s.
@@ -6587,10 +6717,8 @@ fn main() {
         std::process::exit(1);
     }
     let records = cfg.kani.records.as_deref();
-    let missing = unrecorded(
-        &c.discharged,
-        &records.map_or_else(Vec::new, |d| kani_records(&root.join(d))),
-    );
+    let texts = records.map_or_else(Vec::new, |d| kani_records(&root.join(d)));
+    let missing = unrecorded(&c.discharged, &texts);
     for (file, name) in &missing {
         eprintln!(
             "FAIL discharged: {}: `{name}` has the discharged_by = \"kani\" marker, but no {}/kani-*.md record names its file and quotes `fn {name}`",
@@ -6598,7 +6726,16 @@ fn main() {
             records.unwrap_or("[kani] records")
         );
     }
-    if !missing.is_empty() {
+    let unchecked = outside_unchecked(
+        &c.outside,
+        &texts,
+        &c.harnesses,
+        records.unwrap_or("[kani] records"),
+    );
+    for f in &unchecked {
+        eprintln!("FAIL discharged: {f}");
+    }
+    if !missing.is_empty() || !unchecked.is_empty() {
         std::process::exit(1);
     }
     if let Some(r) = &cfg.recursion {
@@ -6749,7 +6886,7 @@ fn rlimit_required(root: &Path, base: &Base, cfg: &Config) {
 /// with a function the walk recorded for Verus ([`Counter::verus_fns`]),
 /// its proofs built only for Verus (`verus_keep_ghost`) too, which no
 /// coverage tally counts, and each whose tally counts a function inside
-/// `verus!`.
+/// `verus!` (a discharged one outside it gives Verus nothing to check).
 fn verus_crates(c: &Counter) -> Vec<String> {
     c.verus_fns
         .keys()
@@ -6758,7 +6895,8 @@ fn verus_crates(c: &Counter) -> Vec<String> {
             c.tallies
                 .iter()
                 .filter(|(_, t)| {
-                    t.ghost + t.fns.iter().sum::<usize>() > t.fns[Class::Outside as usize]
+                    t.ghost + t.fns.iter().sum::<usize>()
+                        > t.fns[Class::Outside as usize] + t.outside_discharged
                 })
                 .map(|(k, _)| k.replace('-', "_")),
         )
@@ -8665,16 +8803,264 @@ fn unrecorded(discharged: &[(PathBuf, String)], records: &[String]) -> Vec<(Path
         .iter()
         .filter(|(file, name)| {
             let file = format!("`{}`", file.display());
-            let quote = format!("fn {name}");
-            !records.iter().any(|r| {
-                r.contains(&file)
-                    && r.match_indices(&quote).any(|(i, _)| {
-                        !r[i + quote.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
-                    })
-            })
+            !records
+                .iter()
+                .any(|r| r.contains(&file) && quotes_fn(r, name))
         })
         .cloned()
         .collect()
+}
+
+/// The key a record names a method outside `verus!` by, before `::name`:
+/// the `impl`'s self type as written, generics included (`B<u8>`), or for
+/// a trait `impl` `<Type as Trait>` (`<A as From<u8>>`), or a trait's name
+/// for its default methods; `None` for a free function. Spaces go, but
+/// one between two identifier characters (`dyn Tr`), so the key reads as
+/// rustfmt writes the type.
+fn owner_key(owner: &str, trait_: Option<&str>) -> Option<String> {
+    let tight = |s: &str| {
+        let s: Vec<char> = s.trim().chars().collect();
+        let word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_');
+        let mut out = String::new();
+        for (i, c) in s.iter().enumerate() {
+            if c.is_whitespace() {
+                let next = s[i..].iter().find(|c| !c.is_whitespace());
+                if word(out.chars().last().as_ref()) && word(next) && !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            } else {
+                out.push(*c);
+            }
+        }
+        out
+    };
+    let ty = tight(owner);
+    if ty.is_empty() {
+        return None;
+    }
+    Some(match trait_ {
+        Some(t) => format!("<{ty} as {}>", tight(t)),
+        None => ty,
+    })
+}
+
+/// Whether the record `r` quotes `fn NAME`, followed by no further
+/// identifier character, as [`unrecorded`] reads it.
+fn quotes_fn(r: &str, name: &str) -> bool {
+    let quote = format!("fn {name}");
+    r.match_indices(&quote)
+        .any(|(i, _)| !r[i + quote.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+}
+
+/// Appends to `out` each `#[kani::proof]` (or `#[kani::proof_for_contract]`)
+/// function in `items` of `file`, at any depth of inline modules and
+/// `impl`s ([`Harness`], [`harness_body`]). An item under a
+/// `cfg` cargo kani does not meet ([`kani_skips`]: `#[cfg(any())] mod
+/// proofs`, `#[cfg(test)] mod tests`) is left out, since `make kani` never
+/// runs it.
+fn kani_harnesses(items: &[Item], file: &Path, out: &mut Vec<Harness>) {
+    let never = |attrs: &[Attribute]| kani_skips(&cfg_predicates(attrs));
+    let read = |name: String, block: &verus_syn::Block| {
+        let mut h = Harness {
+            file: file.to_path_buf(),
+            name,
+            calls: std::collections::BTreeSet::new(),
+            idents: std::collections::BTreeSet::new(),
+        };
+        harness_body(
+            verus_syn::__private::ToTokens::to_token_stream(block),
+            &mut h,
+        );
+        h
+    };
+    let harness = |attrs: &[Attribute]| {
+        !never(attrs)
+            && attrs.iter().any(|a| {
+                let segs: Vec<String> = a
+                    .path()
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect();
+                segs == ["kani", "proof"] || segs == ["kani", "proof_for_contract"]
+            })
+    };
+    for item in items {
+        match item {
+            Item::Fn(f) if harness(&f.attrs) => {
+                out.push(read(f.sig.ident.to_string(), &f.block));
+            }
+            Item::Mod(m) if !never(&m.attrs) => {
+                if let Some((_, inner)) = &m.content {
+                    kani_harnesses(inner, file, out);
+                }
+            }
+            Item::Impl(i) if !never(&i.attrs) => {
+                for ii in &i.items {
+                    if let ImplItem::Fn(f) = ii
+                        && harness(&f.attrs)
+                    {
+                        out.push(read(f.sig.ident.to_string(), &f.block));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether `cargo kani`, as `make kani` runs it, builds no code under the
+/// `cfg` predicates `preds`: they hold in no build, or only where `test`
+/// is set (`#[cfg(test)] mod tests`), which `cargo kani` leaves unset
+/// without `--tests`. It sets `kani`, so `#[cfg(kani)]` passes. A
+/// predicate it cannot read is taken as one that may hold.
+fn kani_skips(preds: &[String]) -> bool {
+    if preds.is_empty() {
+        return false;
+    }
+    let atoms = Atoms {
+        test: vec!["test".to_owned()],
+        ..Atoms::default()
+    };
+    let p = all_of(preds);
+    [false, true]
+        .into_iter()
+        .all(|verus| cfg_eval(&p, verus, &atoms).is_ok_and(|c| !c.t))
+}
+
+/// A `#[kani::proof]` function ([`kani_harnesses`]): its file (relative to
+/// the root), its name, the names its body calls, and every identifier its
+/// body mentions ([`harness_body`]).
+#[derive(Clone, Debug, PartialEq)]
+struct Harness {
+    file: PathBuf,
+    name: String,
+    calls: std::collections::BTreeSet<String>,
+    idents: std::collections::BTreeSet<String>,
+}
+
+/// Adds to `h` what the harness body `tokens` calls and mentions, at any
+/// depth of nesting. A call is the last identifier before a call's
+/// parentheses, with or without a turbofish, whatever path or receiver
+/// precedes it (`f(..)`, `A::new(..)`, `s.open(..)`, `g::<T>(..)`), macro
+/// arguments included. A `fn` item declared anywhere in the body (`fn`
+/// then its name), to the end of its braces, is left out: the harness
+/// does not make its calls, and its `fn name(..)` is no call. A function
+/// pointer type (`extern "C" fn(*mut u8)`) is no item, and what follows
+/// it is read.
+fn harness_body(tokens: TokenStream, h: &mut Harness) {
+    let toks: Vec<TokenTree> = tokens.into_iter().collect();
+    let mut i = 0;
+    while i < toks.len() {
+        match &toks[i] {
+            // A `fn` item has its name next; a function pointer type
+            // (`fn(*mut u8)`) has its parentheses next, and is read on.
+            TokenTree::Ident(id)
+                if id == "fn" && matches!(toks.get(i + 1), Some(TokenTree::Ident(_))) =>
+            {
+                while i < toks.len()
+                    && !matches!(&toks[i], TokenTree::Group(g) if g.delimiter() == proc_macro2::Delimiter::Brace)
+                {
+                    i += 1;
+                }
+            }
+            // The `fn` of a pointer type is a keyword, not a call.
+            TokenTree::Ident(id) if id == "fn" => {}
+            TokenTree::Ident(id) => {
+                h.idents.insert(id.to_string());
+                if let Some(TokenTree::Group(g)) = toks.get(past_turbofish(&toks, i))
+                    && g.delimiter() == proc_macro2::Delimiter::Parenthesis
+                {
+                    h.calls.insert(id.to_string());
+                }
+            }
+            TokenTree::Group(g) => harness_body(g.stream(), h),
+            _ => {}
+        }
+        i += 1;
+    }
+}
+
+/// The failures of the discharged functions outside `verus!`, each as the
+/// text after `FAIL discharged: `. `dir` names the records' directory.
+/// Plain Rust has no contract a record quotes, so each such function needs
+/// three things the counter checks:
+///
+/// - a path ([`OutsideMark::path`]) no other marked function in its file
+///   shares, since a record could not tell the two apart
+///   (`#[cfg(unix)] fn map` beside `#[cfg(windows)] fn map`);
+/// - a record that names its file in backquotes and its path in
+///   backquotes, exactly (`` `A::new` ``, `` `a::init` ``, or `` `init` ``
+///   for one at the file's top), so that one record for `A::new` covers
+///   no marked `B::new`, `<A as From<u16>>::from` or top-level `new`;
+/// - a record that covers it (its file, `fn NAME` and its path) and
+///   names, each in backquotes, the file and the name of a
+///   `#[kani::proof]` harness of its crate whose body calls it by name
+///   and, for a method, mentions its owner ([`harness_body`]), so that
+///   `Vec::new()` alone does not check a marked `A::new`.
+///
+/// A function reports its first failure only. One with no record at all
+/// fails [`unrecorded`] as well.
+fn outside_unchecked(
+    marks: &[OutsideMark],
+    records: &[String],
+    harnesses: &BTreeMap<String, Vec<Harness>>,
+    dir: &str,
+) -> Vec<String> {
+    let mut fails = Vec::new();
+    let mut shared = std::collections::BTreeSet::new();
+    for m in marks {
+        let n = marks
+            .iter()
+            .filter(|o| o.file == m.file && o.path() == m.path())
+            .count();
+        if n > 1 {
+            if shared.insert((m.file.clone(), m.path())) {
+                fails.push(format!(
+                    "{}: {n} functions outside verus! with the discharged_by = \"kani\" marker share `{}`, so no record can tell them apart; mark one of them, or rename one",
+                    m.file.display(),
+                    m.path()
+                ));
+            }
+            continue;
+        }
+        let file = format!("`{}`", m.file.display());
+        let named = format!("`{}`", m.path());
+        let covering: Vec<&String> = records
+            .iter()
+            .filter(|r| r.contains(&file) && quotes_fn(r, &m.name) && r.contains(&named))
+            .collect();
+        if covering.is_empty() {
+            fails.push(format!(
+                "{}: {named} has the discharged_by = \"kani\" marker outside verus!, but no {dir}/kani-*.md record names its file and {named} in backquotes",
+                m.file.display()
+            ));
+            continue;
+        }
+        let checked = harnesses.get(&m.krate).is_some_and(|hs| {
+            hs.iter().any(|h| {
+                h.calls.contains(&m.name)
+                    && m.owner.as_ref().is_none_or(|o| h.idents.contains(o))
+                    && covering.iter().any(|r| {
+                        r.contains(&format!("`{}`", h.file.display()))
+                            && r.contains(&format!("`{}`", h.name))
+                    })
+            })
+        });
+        if !checked {
+            let owner = m
+                .owner
+                .as_ref()
+                .map_or_else(String::new, |o| format!(" and mentions `{o}`"));
+            fails.push(format!(
+                "{}: {named} has the discharged_by = \"kani\" marker outside verus!, but no {dir}/kani-*.md record that covers it names, each in backquotes, the file and name of a #[kani::proof] harness of crate {} whose body calls `{}`{owner}",
+                m.file.display(),
+                m.krate,
+                m.name
+            ));
+        }
+    }
+    fails
 }
 
 /// Appends to `out` each function `tokens` calls directly, at any depth of
@@ -12610,6 +12996,419 @@ fn uncalled() {
             "assumed: got = {:?}, wanted = {want:?}",
             c.assumed
         );
+    }
+
+    /// The Kani marker discharges a shipped function outside `verus!` as it
+    /// does a trusted one inside: under predicates no build meets, with or
+    /// without `exec_allows_no_decreases_clause` around it, which covers
+    /// no code outside `verus!`. It needs a record too. Negative: under a
+    /// predicate some build may meet the function stays outside, one built
+    /// only for Verus leaves the tally, and none of them makes the crate
+    /// one Verus checks.
+    #[test]
+    fn a_marked_function_outside_verus_is_discharged() {
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("lib.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        c.items(
+            &parse_file(
+                r#"
+                #[cfg_attr(any(), discharged_by = "kani")]
+                pub unsafe extern "C" fn checked(p: *mut u8) {
+                    unsafe { *p = 0 };
+                }
+                #[cfg_attr(windows, discharged_by = "kani")]
+                fn maybe() {}
+                fn plain() {}
+                #[cfg(verus_keep_ghost)]
+                #[cfg_attr(any(), discharged_by = "kani")]
+                fn verus_only() {}
+                #[verifier::exec_allows_no_decreases_clause]
+                mod looping {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn spins() {
+                        loop {}
+                    }
+                }
+                "#,
+            )
+            .expect("parses")
+            .items,
+            false,
+        );
+        assert_eq!(c.errors, 0, "errors: got = {}, wanted = 0", c.errors);
+        let d = |n: &str| (PathBuf::from("lib.rs"), n.to_owned());
+        let want = vec![d("checked"), d("spins")];
+        assert_eq!(
+            c.discharged, want,
+            "discharged: got = {:?}, wanted = {want:?}",
+            c.discharged
+        );
+        let got = verus_crates(&c);
+        assert!(got.is_empty(), "verus_crates: got = {got:?}, wanted = []");
+        let t = c.tallies.remove("k").unwrap_or_default();
+        assert_eq!(
+            t.fns,
+            [0, 0, 2, 2],
+            "verified, trusted, outside, discharged: got = {:?}, wanted = [0, 0, 2, 2]",
+            t.fns
+        );
+        assert_eq!(
+            t.lines,
+            [0, 0, 2, 6],
+            "lines: got = {:?}, wanted = [0, 0, 2, 6]",
+            t.lines
+        );
+        let quote = "#[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            pub unsafe extern \"C\" fn checked(p: *mut u8) {\n";
+        let got = unrecorded(
+            &c.discharged,
+            &[format!("Seam F1 (`lib.rs`).\n\n```rust\n{quote}```\n")],
+        );
+        let want = vec![d("spins")];
+        assert_eq!(
+            got, want,
+            "with the checked quote: got = {got:?}, wanted = {want:?}"
+        );
+    }
+
+    /// A marked function outside `verus!` needs a record that names it by
+    /// its key and names a harness that calls it: a record for `A::new`
+    /// that quotes `fn new` does not cover a marked `B<T>::new` in the same
+    /// file, nor one for `<A as From<u8>>::from` a marked
+    /// `<A as From<u16>>::from`; free functions in two inline modules are
+    /// `a::init` and `b::init`, and a record naming only a harness that
+    /// does not call `init` leaves `b::init` failing, and the record for
+    /// `a::init` does not cover a marked `init` at the file's top, which
+    /// needs `` `init` `` itself. A harness that calls `Vec::new` does not
+    /// check a marked `C::new`, whose owner it never mentions, and a record
+    /// that names a harness but not its file does not count it. Two marked
+    /// `cfg` twins share one path and fail together. Negative: a marked
+    /// method inside `verus!` keeps the `fn NAME` rule alone.
+    #[test]
+    fn a_marked_function_outside_verus_needs_its_key_and_harness_named() {
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("lib.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        c.items(
+            &parse_file(
+                r#"
+                verus! {
+                impl V {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    #[verifier::external_body]
+                    fn new() {}
+                }
+                }
+                impl A {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn new() {}
+                }
+                impl<T> B<T> {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn new() {}
+                }
+                impl C {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn new() {}
+                }
+                impl From<u8> for A {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn from(v: u8) -> Self { A }
+                }
+                impl From<u16> for A {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn from(v: u16) -> Self { A }
+                }
+                #[cfg_attr(any(), discharged_by = "kani")]
+                fn free() {}
+                #[cfg_attr(any(), discharged_by = "kani")]
+                fn solo() {}
+                #[cfg_attr(any(), discharged_by = "kani")]
+                fn init() {}
+                mod a {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn init() {}
+                }
+                mod b {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn init() {}
+                }
+                #[cfg(unix)]
+                #[cfg_attr(any(), discharged_by = "kani")]
+                fn map() {}
+                #[cfg(windows)]
+                #[cfg_attr(any(), discharged_by = "kani")]
+                fn map() {}
+                "#,
+            )
+            .expect("parses")
+            .items,
+            false,
+        );
+        assert_eq!(c.errors, 0, "errors: got = {}, wanted = 0", c.errors);
+        let got: Vec<String> = c.outside.iter().map(OutsideMark::path).collect();
+        let want = [
+            "A::new",
+            "B<T>::new",
+            "C::new",
+            "<A as From<u8>>::from",
+            "<A as From<u16>>::from",
+            "free",
+            "solo",
+            "init",
+            "a::init",
+            "b::init",
+            "map",
+            "map",
+        ];
+        assert_eq!(got, want, "outside: got = {got:?}, wanted = {want:?}");
+        // The first record covers A::new, the u8 `from`, `free` and
+        // `a::init`, and names harnesses in `proofs.rs` that call each; it
+        // quotes `fn init` for `a::init`, which does not cover the
+        // top-level `init`. The second covers `b::init` but names only a
+        // harness that does not call it. The third covers `C::new` but
+        // names only a harness that calls `Vec::new`. The fourth covers
+        // `solo` and names its harness, but not the harness's file.
+        let records = [
+            "`A::new`, `<A as From<u8>>::from`, `free`, `a::init` (`lib.rs`): `proofs.rs`, `check_new`, `check_from`, `check_free`, `check_init`.\n\n```rust\nfn new() {}\nfn from(v: u8) -> Self { A }\nfn free() {}\nfn init() {}\nfn map() {}\n```\n".to_owned(),
+            "`b::init` (`lib.rs`): `proofs.rs`, `check_other`.\n\n```rust\nfn init() {}\n```\n".to_owned(),
+            "`C::new` (`lib.rs`): `proofs.rs`, `check_vec`.\n\n```rust\nfn new() {}\n```\n".to_owned(),
+            "`solo` (`lib.rs`): `elsewhere.rs`, `check_solo`.\n\n```rust\nfn solo() {}\n```\n".to_owned(),
+        ];
+        let harness = |name: &str, calls: &[&str], idents: &[&str]| Harness {
+            file: PathBuf::from("proofs.rs"),
+            name: name.to_owned(),
+            calls: calls.iter().map(|s| s.to_string()).collect(),
+            idents: idents.iter().map(|s| s.to_string()).collect(),
+        };
+        let harnesses = BTreeMap::from([
+            (
+                "k".to_owned(),
+                vec![
+                    harness("check_new", &["new"], &["A", "new"]),
+                    harness("check_from", &["from"], &["A", "from"]),
+                    harness("check_free", &["free"], &["free"]),
+                    harness("check_init", &["init"], &["a", "init"]),
+                    harness("check_other", &["other"], &["other"]),
+                    harness("check_vec", &["new"], &["Vec", "new"]),
+                    harness("check_solo", &["solo"], &["solo"]),
+                ],
+            ),
+            (
+                // Another crate's harness of the same name calls `init`; it
+                // does not check crate k's `b::init`.
+                "b".to_owned(),
+                vec![harness("check_other", &["init"], &["init"])],
+            ),
+        ]);
+        let got = unrecorded(&c.discharged, &records);
+        assert!(got.is_empty(), "unrecorded: got = {got:?}, wanted = []");
+        let got = outside_unchecked(&c.outside, &records, &harnesses, "verus/seams");
+        let unnamed = |p: &str| {
+            format!(
+                "lib.rs: `{p}` has the discharged_by = \"kani\" marker outside verus!, but no verus/seams/kani-*.md record names its file and `{p}` in backquotes"
+            )
+        };
+        let unharnessed = |p: &str, n: &str, owner: &str| {
+            format!(
+                "lib.rs: `{p}` has the discharged_by = \"kani\" marker outside verus!, but no verus/seams/kani-*.md record that covers it names, each in backquotes, the file and name of a #[kani::proof] harness of crate k whose body calls `{n}`{owner}"
+            )
+        };
+        let want = vec![
+            unnamed("B<T>::new"),
+            unharnessed("C::new", "new", " and mentions `C`"),
+            unnamed("<A as From<u16>>::from"),
+            unharnessed("solo", "solo", ""),
+            unnamed("init"),
+            unharnessed("b::init", "init", ""),
+            "lib.rs: 2 functions outside verus! with the discharged_by = \"kani\" marker share `map`, so no record can tell them apart; mark one of them, or rename one".to_owned(),
+        ];
+        assert_eq!(
+            got, want,
+            "outside_unchecked: got = {got:?}, wanted = {want:?}"
+        );
+    }
+
+    /// Harnesses are the `#[kani::proof]` functions at any depth of inline
+    /// modules and `impl`s, test-only ones included, with each name their
+    /// bodies call, through any path, receiver, turbofish or macro
+    /// argument. Negative: a function without the attribute is no
+    /// harness, a name not followed by a call is not a call, a `fn`
+    /// nested in a harness's body, at its top or in an inner block, adds
+    /// no call and no mention (a function pointer type, `fn(*mut u8)`,
+    /// is no such `fn`: the calls after it count), and a harness `make kani`
+    /// never runs is left out: one in a module, `impl` or function under a
+    /// `cfg` no build meets, or under `cfg(test)`. A harness under
+    /// `all(kani, not(test))` is read.
+    #[test]
+    fn kani_harnesses_and_the_names_they_call() {
+        let file = parse_file(
+            r#"
+            #[cfg(kani)]
+            mod proofs {
+                #[kani::proof]
+                fn check() {
+                    let s = A::new();
+                    s.open(1);
+                    helper::<u8>(2);
+                    assert!(close(s));
+                    let f = unused;
+                    fn nested() { hidden(); }
+                    {
+                        fn deep() { deeper(); }
+                    }
+                    if f { fn inner(x: u8) { innermost(x); } }
+                    let cb: Option<unsafe extern "C" fn(*mut u8)> = None;
+                    unsafe { set_cb(cb) };
+                    let g = f as extern "C" fn();
+                    unsafe { after_cast(g) };
+                }
+                fn not_harness() { other(); }
+                #[cfg(any())]
+                mod dead {
+                    #[kani::proof]
+                    fn check_dead() { dead(); }
+                }
+                #[cfg(any())]
+                #[kani::proof]
+                fn check_dead_fn() { dead_fn(); }
+                #[cfg(any())]
+                impl U {
+                    #[kani::proof]
+                    fn check_dead_impl() { dead_impl(); }
+                }
+                #[cfg(test)]
+                mod tests {
+                    #[kani::proof]
+                    fn check_test() { tested(); }
+                }
+                #[cfg(all(kani, not(test)))]
+                mod live {
+                    #[kani::proof]
+                    fn check_live() { live(); }
+                }
+                impl T {
+                    #[kani::proof_for_contract(T::m)]
+                    fn check_m() { T::m(); }
+                }
+            }
+            "#,
+        )
+        .expect("parses");
+        let mut found = Vec::new();
+        kani_harnesses(&file.items, Path::new("proofs.rs"), &mut found);
+        assert!(
+            found.iter().all(|h| h.file == Path::new("proofs.rs")),
+            "files: got = {found:?}, wanted = proofs.rs for each"
+        );
+        let got: Vec<(String, std::collections::BTreeSet<String>)> = found
+            .iter()
+            .map(|h| (h.name.clone(), h.calls.clone()))
+            .collect();
+        let set = |n: &[&str]| n.iter().map(|s| s.to_string()).collect();
+        let want = vec![
+            (
+                "check".to_owned(),
+                set(&["after_cast", "close", "helper", "new", "open", "set_cb"]),
+            ),
+            ("check_live".to_owned(), set(&["live"])),
+            ("check_m".to_owned(), set(&["m"])),
+        ];
+        assert_eq!(got, want, "harnesses: got = {got:?}, wanted = {want:?}");
+        // The first harness mentions `A` and `s`, but nothing of the `fn`s
+        // nested in its body, at the top or in inner blocks.
+        let idents = &found[0].idents;
+        for (name, want) in [
+            ("A", true),
+            ("s", true),
+            ("unused", true),
+            ("nested", false),
+            ("hidden", false),
+            ("deep", false),
+            ("deeper", false),
+            ("innermost", false),
+        ] {
+            assert_eq!(
+                idents.contains(name),
+                want,
+                "mentions {name}: got = {}, wanted = {want}",
+                !want
+            );
+        }
+    }
+
+    /// The key a record names a method by keeps generics and the trait,
+    /// and spaces only between two identifier characters.
+    #[test]
+    fn owner_keys_keep_generics_and_the_trait() {
+        for (owner, trait_, want) in [
+            ("A", None, Some("A")),
+            ("B < u8 >", None, Some("B<u8>")),
+            ("Box < dyn Tr >", None, Some("Box<dyn Tr>")),
+            ("& 'a A", None, Some("&'a A")),
+            ("A", Some("From < u8 >"), Some("<A as From<u8>>")),
+            ("Box < A >", Some("X"), Some("<Box<A> as X>")),
+            ("", None, None),
+        ] {
+            let got = owner_key(owner, trait_);
+            assert_eq!(
+                got.as_deref(),
+                want,
+                "owner_key({owner:?}, {trait_:?}): got = {got:?}, wanted = {want:?}"
+            );
+        }
+    }
+
+    /// A marked function outside `verus!` is discharged, but the functions
+    /// nested in its body (an exported `extern "C"` one included) stay
+    /// outside, for REACH too: its record and harness check none of them.
+    /// Negative: those nested in a verified function inside `verus!` keep
+    /// taking its class.
+    #[test]
+    fn functions_nested_in_a_marked_function_outside_verus_stay_outside() {
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("lib.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        c.items(
+            &parse_file(
+                r#"
+                #[cfg_attr(any(), discharged_by = "kani")]
+                pub fn init() {
+                    #[unsafe(no_mangle)]
+                    pub extern "C" fn lib_free(p: *mut u8) {}
+                    fn helper() {}
+                }
+                verus! {
+                fn verified() {
+                    fn inner() {}
+                }
+                }
+                "#,
+            )
+            .expect("parses")
+            .items,
+            false,
+        );
+        assert_eq!(c.errors, 0, "errors: got = {}, wanted = 0", c.errors);
+        let got: Vec<(String, Class)> = c.fns.iter().map(|f| (f.name.clone(), f.class)).collect();
+        let want = vec![
+            ("init".to_owned(), Class::Discharged),
+            ("lib_free".to_owned(), Class::Outside),
+            ("helper".to_owned(), Class::Outside),
+            ("verified".to_owned(), Class::Verified),
+            ("inner".to_owned(), Class::Verified),
+        ];
+        assert_eq!(got, want, "fns: got = {got:?}, wanted = {want:?}");
     }
 
     /// A marked function built only for Verus is discharged as a shipped
