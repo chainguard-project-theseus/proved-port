@@ -22,7 +22,9 @@
 #   - a row that reads stdin leaves the later rows to run, and a run
 #     whose perf writes no CSV (STUB_NOCSV=ARM:ROUND) gets empty counts,
 #     not the previous run's;
-#   - the raw lines read through stats relabel and stats check (clean);
+#   - the raw lines read through stats relabel and stats check (clean),
+#     and through stats gate (a within rule passing on one row and
+#     failing on the row whose outputs differ);
 #   - each refused setting exits 2 and writes no raw file;
 #   - -E: the kit's events.tsv aarch64 frontend list (the list and the
 #     six count columns written here by hand), ARCH from a stand-in
@@ -154,6 +156,13 @@ printf 'a\tA0\nb\tB0\n' > "$tmp/map"
 if "$stats" check -same A0,B0 "$tmp/reps" > "$tmp/found" 2> /dev/null; then fail "stats check -same passed differing outputs"; fi
 printf 'output-diff\tg1\tp\tA0\t1\tB0\t1\noutput-diff\tg1\tp\tA0\t2\tB0\t1\noutput-diff\tg1\tp\tB0\t2\tB0\t1\n' |
 	cmp - "$tmp/found" || fail "stats check -same findings: $(cat "$tmp/found")"
+# stats gate reads the same lines: both arms count 101 in round 1 and
+# 201 in round 2 (median 101), so a within rule holds on q and fails on
+# p, whose output names the arm and round.
+printf 'g1\tq\ta\twithin\t1/100\tb\ng1\tp\ta\twithin\t1/100\tb\n' > "$tmp/rules"
+if "$stats" gate -rules "$tmp/rules" "$tmp/rawg" > "$tmp/gate" 2> /dev/null; then fail "stats gate passed differing outputs"; fi
+printf 'g1\tq\ta\twithin\t1/100\tb\t101\t101\tpass\ng1\tp\ta\twithin\t1/100\tb\t101\t101\toutput-diff\n' |
+	cmp - "$tmp/gate" || fail "stats gate lines: $(cat "$tmp/gate")"
 "$rounds" -o "$tmp/rawe" -g g1 -r 1 -e gone:u,cycles:u "$tmp/arm1" "$tmp/rows"
 if "$stats" check "$tmp/rawe" > "$tmp/found" 2> /dev/null; then fail "stats check passed an empty counter"; fi
 printf 'counter\tg1\tp\tb\t1\tinstructions\t\ncounter\tg1\tq\tb\t1\tinstructions\t\n' |

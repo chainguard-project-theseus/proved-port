@@ -371,8 +371,13 @@ is deleted in that PR.
    counters, empty outputs, outputs that differ within a set of arms)
    and `md5` (a file with more than one md5 across the logs), checked
    by the go.yaml check `stats-test` against goldens the reference awk
-   in `kit/perf/stats/testdata/ref` writes. The package does not
-   install it yet. The box's run skeleton is `kit/perf/box` (#180):
+   in `kit/perf/stats/testdata/ref` writes. `gate` (#184) is the
+   sanity gate before the full run: rules from a file, each an arm's
+   median instructions below or within an exact P/Q of a reference
+   arm's on one row, with positive counts and the same non-empty
+   output, checked
+   by `stats-test` against hand-worked lines (port A's gate had no
+   saved results to compare). The package does not install it yet. The box's run skeleton is `kit/perf/box` (#180):
    `rounds.sh` (rounds with the arms rotated per round, one perf stat
    line per run in the layout stats reads) and `md5.sh` (one side of
    the md5 bracket), checked by the go.yaml check `box-test` with
@@ -384,8 +389,9 @@ is deleted in that PR.
    fetch, and the rest of section 3's item 5 (the box run skeleton):
    arms by sha with tarball and library md5s (the arm build), the box
    setup and phase lock, one
-   `systemd-run` unit per run, the sanity gate before the full run,
-   and start and stop with cost logging.
+   `systemd-run` unit per run, a phase that runs the gate's rows and
+   stops on the runner's exit and then on gate's (gate sees no exit
+   status), and start and stop with cost logging.
 7. **Emulator, codegen diff, fast-path budget, noalias check.**
    Emulator: the three variants reconciled into `kit/perf/emu/` (no port
    had it in tree). challoc: `scripts/codegen-diff.sh`, `ci/codegen.sh`,

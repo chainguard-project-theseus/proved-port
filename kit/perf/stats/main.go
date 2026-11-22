@@ -6,7 +6,8 @@
 //
 // Input files are tab-separated. A repetitions file (reps.tsv) has one
 // line per run: group, row, arm, round, instructions, cycles, and
-// optionally further columns (the run's output), which stats ignores. A
+// optionally further columns (the run's output), which only check and
+// gate read. A
 // medians file (med.tsv) is what `stats med` prints.
 //
 // Usage:
@@ -17,9 +18,10 @@
 //	stats relabel -map MAP REPS
 //	stats check [-same ARM,...]... REPS
 //	stats md5 LOG...
+//	stats gate -rules RULES REPS
 //
 // relabel, check and md5 are a pull's generic checks; pull.go documents
-// them.
+// them. gate is the sanity gate before a full run; gate.go documents it.
 //
 // med prints group, row, arm, median instructions, median cycles. The
 // median of an even count is the lower middle value.
@@ -83,6 +85,7 @@ const usage = `usage:
   stats relabel -map MAP REPS
   stats check [-same ARM,...]... REPS
   stats md5 LOG...
+  stats gate -rules RULES REPS
 `
 
 // errUsage marks an error that exits 2.
@@ -100,6 +103,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// fileOrder keeps the lines as the command returns them; findings
 	// makes any line exit 1 once printed.
 	fileOrder, findings := false, false
+	// failed is how many of gate's lines are failures (it prints passes
+	// too).
+	failed := 0
 	switch args[0] {
 	case "med":
 		lines, err = runMed(args[1:])
@@ -116,6 +122,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "md5":
 		lines, err = runMD5(args[1:])
 		findings = true
+	case "gate":
+		lines, failed, err = runGate(args[1:])
+		fileOrder = true
 	default:
 		err = errUsage{fmt.Sprintf("stats: unknown command %q", args[0])}
 	}
@@ -144,6 +153,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "stats %s: %d findings\n", args[0], len(lines))
 		return 1
 	}
+	if failed > 0 {
+		fmt.Fprintf(stderr, "stats gate: %d of %d rules failed\n", failed, len(lines))
+		return 1
+	}
 	return 0
 }
 
@@ -169,6 +182,9 @@ func oneFile(fs *flag.FlagSet, args []string) (string, error) {
 type rep struct {
 	group, row, arm string
 	insns, cycles   float64
+	// output is the columns after the sixth joined by tabs, as check
+	// reads them; only gate uses it.
+	output string
 }
 
 // key is a (group, row) pair.
@@ -253,7 +269,7 @@ func readReps(path string) ([]rep, error) {
 		if err != nil {
 			return err
 		}
-		reps = append(reps, rep{f[0], f[1], f[2], i, c})
+		reps = append(reps, rep{f[0], f[1], f[2], i, c, strings.Join(f[6:], "\t")})
 		return nil
 	})
 	return reps, err
