@@ -6,6 +6,7 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 )
 
@@ -453,6 +454,18 @@ func parseRules(file, data string) (*Rules, error) {
 			}
 		default:
 			bad("unknown rule %q", f[0])
+		}
+	}
+	// A cite-module DIR is exempt from the reach check, so it may not be
+	// SOURCE or hold it.
+	var mods []string
+	for name := range r.CiteModule {
+		mods = append(mods, name)
+	}
+	sort.Strings(mods)
+	for _, name := range mods {
+		if d := r.CiteModule[name]; strings.HasPrefix(r.Source+"/", d+"/") {
+			errs = append(errs, fmt.Sprintf("%s: cite-module %s: DIR %s is the source directory or holds it", file, name, d))
 		}
 	}
 	if r.Command == "" {

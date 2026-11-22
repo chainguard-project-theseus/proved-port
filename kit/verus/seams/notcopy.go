@@ -47,9 +47,13 @@ func (v *resolver) notCopy(ty, target string) bool {
 	}
 	// prev: the last line holding code (comment lines and block comments
 	// hold none), for an attribute above an impl.
-	n, inBlock, h, in, text, ic, il, prev := 0, false, false, false, "", false, false, ""
+	// depth: the delimiters open before the line; the assertion and the
+	// impls count at depth 0, the file's top level, not in a block.
+	n, inBlock, h, in, text, ic, il, prev, depth := 0, false, false, false, "", false, false, "", 0
 	for i, l := range f.raw {
 		c := f.code[i]
+		d0 := depth
+		depth += nest(c)
 		if in {
 			text += " " + c
 			in = !strings.HasSuffix(c, ");")
@@ -62,14 +66,14 @@ func (v *resolver) notCopy(ty, target string) bool {
 			inBlock = true
 			continue
 		}
-		if h && reAssertOpen.MatchString(l) {
+		if h && d0 == 0 && reAssertOpen.MatchString(l) {
 			n++
 			text, in = c, !strings.HasSuffix(c, ");")
 		}
 		inBlock, h = false, false
-		// An impl under an attribute (a cfg the build may not meet) is
-		// none, as a gated assertion is none.
-		ungated := !reAttrAbove.MatchString(prev)
+		// An impl under an attribute (a cfg the build may not meet), or in
+		// a block, is none, as a gated assertion is none.
+		ungated := d0 == 0 && !reAttrAbove.MatchString(prev)
 		ic = ic || ungated && reNotCopyImpl.MatchString(c)
 		il = il || ungated && reNotCloneImpl.MatchString(c)
 		if c != "" {
@@ -122,6 +126,10 @@ func notCopyChecks(root string, r *Rules, es []*entry, files []string) []string 
 	nc := r.NotCopyFile
 	how := func(ty string) string {
 		return fmt.Sprintf("`<%s as NotCopy<_>>::HOLDS` and `<%s as NotClone<_>>::HOLDS`", ty, ty)
+	}
+	// The checks hold only if every build compiles their file.
+	if why := v.reach(nc); why != "" {
+		out = append(out, fmt.Sprintf("seams: %s: may be left out of a build: %s", nc, why))
 	}
 	seen := map[string]bool{}
 	for _, file := range files {
