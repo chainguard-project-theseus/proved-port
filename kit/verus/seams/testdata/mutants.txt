@@ -189,8 +189,82 @@ render.go	r.Partial[c.tag] && !done[c.tag] {	!done[c.tag] {
 rules.go	f[2] != "partial"	false
 rules.go	min(max(len(f), 2), 3)	min(len(f), 3)
 rules.go	strings.ContainsAny(f[1], ";):")	strings.ContainsAny(f[1], ";)")
-rules.go	slices.Contains(r.CiteTags, f[1])	slices.Contains(r.CiteTags[:0], f[1])
+rules.go	if slices.Contains(r.CiteTags, f[1]) {	if slices.Contains(r.CiteTags[:0], f[1]) {
 rules.go	r.Partial[f[1]] = true	r.Partial[f[1]] = false
 main.go	strings.TrimPrefix(e.okey, e.file+":")	e.okey
 main.go	*write, *check, *entries, *cites}	*write, *check, *entries}
 main.go	x(c.tag), x(c.target)	c.tag, c.target
+#
+# #231: resolving Kani, callers and const assert citations.
+resolve.go	!reIdent.MatchString(s)	s == "\x00"
+resolve.go	path.Join(append([]string{dir}, segs[1:n]...)...)	path.Join(append([]string{dir}, segs[:n]...)...)
+resolve.go	v.exists(p + ".rs")	v.exists(p + ".rsx")
+resolve.go	v.exists(p + "/mod.rs")	false
+resolve.go	file == d+".rs" || 	false ||
+resolve.go	strings.HasPrefix(file, d+"/")	false
+resolve.go	f.ok = lx.depth == 0 && lx.str == 0	f.ok = true
+resolve.go	if !af.ok {	if false {
+resolve.go	d, ind, p, gate = d+1, ind+"    ", false, false	d, ind, gate = d+1, ind+"    ", false
+resolve.go	d, ind, p, gate = d+1, ind+"    ", false, false	d, ind, p = d+1, ind+"    ", false
+resolve.go	return p, gate	return p, false
+resolve.go	hash = true	hash = false
+resolve.go	hash, at, raw = false, "#"+at, ""	hash, at, raw = false, at, ""
+resolve.go	!slices.Contains(allow, strings.TrimSpace(raw))	!slices.Contains(allow[:0], strings.TrimSpace(raw))
+resolve.go	!slices.Contains(allow, strings.TrimSpace(raw))	!slices.Contains(allow, raw)
+resolve.go	isGate(text, raw)	isGate(text, raw[:0]+text)
+resolve.go	if !reOuterAttr.MatchString(at) {	if !reOuterAttr.MatchString(t) {
+resolve.go	if !reOuterAttr.MatchString(at) {	if !strings.HasPrefix(at, "#[") {
+resolve.go	regexp.MustCompile(`^#[ \t]*\[`)	regexp.MustCompile(`^#\[`)
+resolve.go	if strings.TrimSpace(target[:i]) == "" {	if false {
+resolve.go	if gated {	if gated && false {
+rules.go	"cite-fn": max(len(f), 3)	"cite-fn": 3
+rules.go	"#[cfg("+c+")]"	c
+resolve.go	p, gate = false, false	p = false
+resolve.go	if open <= 0 {	if false {
+resolve.go	if text += " " + t; open <= 0 {	if text += " " + t; false {
+resolve.go	if text += " " + t; open <= 0 {	if text = t; open <= 0 {
+resolve.go	open += strings.Count(t, "[") - strings.Count(t, "]")	open = 0
+resolve.go	open, text = strings.Count(at, "[")-strings.Count(at, "]"), at	open, text = 0, at
+resolve.go	regexp.MustCompile(`#[ \t]*\[[ \t]*(cfg	regexp.MustCompile(`^#[ \t]*\[[ \t]*(cfg
+resolve.go	regexp.MustCompile(`#[ \t]*\[[ \t]*(cfg	regexp.MustCompile(`#[ \t]*\[(cfg
+resolve.go	regexp.MustCompile(`#[ \t]*\[[ \t]*(cfg	regexp.MustCompile(`#\[[ \t]*(cfg
+resolve.go	(cfg|cfg_attr)[ \t]*	(cfg)[ \t]*
+resolve.go	|#[ \t]*\[[ \t]*ignore[ \t]*(\]|=)`)	`)
+resolve.go	ignore[ \t]*(\]|=)	ignore[ \t]*(\])
+resolve.go	if !v.crateFile(file) {	if false {
+resolve.go	!strings.HasSuffix(p, ".rs") || v.r.isTest(p)	v.r.isTest(p)
+resolve.go	!strings.HasSuffix(p, ".rs") || v.r.isTest(p)	!strings.HasSuffix(p, ".rs")
+resolve.go	strings.HasPrefix(p, v.r.Source+"/")	false
+resolve.go	p == d+".rs" || strings.HasPrefix(p, d+"/")	strings.HasPrefix(p, d+"/")
+resolve.go	p == d+".rs" || strings.HasPrefix(p, d+"/")	p == d+".rs"
+resolve.go	t == ind[4:]+"}"	false
+resolve.go	"[(<]"	"[(]"
+resolve.go	reVis + "fn "	"fn "
+resolve.go	reVis + "mod "	"mod "
+resolve.go	p = true	p = false
+resolve.go	if t == "" {	if t == "\x00" {
+resolve.go	if strings.TrimSpace(f.raw[i]) == "" {	if strings.TrimSpace(f.raw[i]) == "\x00" {
+resolve.go	if strings.TrimSpace(f.raw[i]) == "" {	if strings.TrimSpace(f.raw[i]) != "\x00" {
+resolve.go	if !strings.HasPrefix(t, ind+"#[") {	if true {
+resolve.go	af.clean[i] && strings.HasPrefix(l, "//")	(af.clean[i] || true) && strings.HasPrefix(l, "//")
+resolve.go	g = reAttrAbove.MatchString(prev)	g = reAttrAbove.MatchString(prev) && false
+resolve.go	h = strings.HasPrefix(l, label)	h = strings.HasPrefix(l, label) || true
+resolve.go	if g {	if g && false {
+resolve.go	inBlock, h = false, false	inBlock = false
+resolve.go	if af.code[i] != "" {	if true {
+resolve.go	($|.*\);$)	(.*)
+resolve.go	return n == 1	return n >= 1
+resolve.go	in = l == "## "+rw.heading	in = true
+resolve.go	!in || !strings.HasPrefix(l, "| ")	!in
+resolve.go	strings.Split(l, "|")[1]	l
+resolve.go	all = all && strings.Contains(l, p)	all = all || strings.Contains(l, p)
+resolve.go	if !seen[s] {	if true {
+resolve.go	f.clean = append(f.clean, lx.depth == 0 && lx.str == 0)	f.clean = append(f.clean, true)
+rules.go	"cite-row": max(len(f), 4)	"cite-row": len(f)
+rules.go	if !slices.Contains(r.CiteTags, f[1]) {	if false {
+rules.go	ok || r.CiteAssert[f[1]]	ok
+rules.go	ok || r.CiteAssert[f[1]]	(ok && false) || r.CiteAssert[f[1]]
+rules.go	strings.ContainsAny(f[2], "[] ")	false
+rules.go	if _, ok := r.CiteRow[f[1]]; ok {	if false {
+rules.go	bad("cite-module %s: want an identifier", name)	_ = name
+rules.go	if _, ok := r.CiteModule[f[1]]; ok {	if false {

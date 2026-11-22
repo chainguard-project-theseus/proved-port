@@ -62,8 +62,47 @@
 // escaped as -entries escapes; seams in -entries order, each status's
 // citations in the order they stand in it (a name that serves several
 // seams prints its citations once per seam). A port's checks resolve
-// each line (challoc's Isla citation reads `NAME in TARGET`, its
-// emptyasm, loom and GenMC ones `NAME @ TARGET`).
+// each line of a tag the rules give no check (challoc's Isla citation
+// reads `NAME in TARGET`, its emptyasm, loom and GenMC ones `NAME @
+// TARGET`).
+//
+// -check resolves each citation of a tag with a cite-fn, cite-assert or
+// cite-row line, and fails each that does not resolve (once, though a
+// name serves several seams), as seams.sh's checkcite() resolved Kani,
+// callers and const assert citations. A cite-fn citation is a path
+// `a::b::m::f`: the file is the longest leading run of the segments but
+// the last that names SOURCE/a/b.rs or else SOURCE/a/b/mod.rs (a first
+// segment a cite-module line names reads under its DIR, and a path that
+// reaches such a DIR any other way names nothing); each segment after
+// the file's but the last is an inline mod, one per level of rustfmt's
+// four-blank indentation, its line `mod m {` (`pub` or `pub(x)` before
+// it allowed); the first line at the innermost level that starts `fn f(`
+// or `fn f<` (visibility allowed) is the fn, and it resolves when the
+// line `#[ATTR]` stands at its indentation above it with only other
+// attributes (each on its lines, a wrapped one to its closing `]`) and
+// comment lines between. It then fails, as gated, when an attribute
+// that applies to the fn (any above it up to the previous line of other
+// code, across blank lines, comment lines and indentation, as Rust
+// applies them) is `#[cfg(..)]`, `#[cfg_attr(..)]` or `#[ignore]`,
+// wherever it stands on its line and with or without blanks (or a line
+// break) between `#` and `[`, other than `#[cfg(CFG)]` whole on its
+// line, as written (a literal in CFG byte for byte), for a CFG field of
+// the tag's cite-fn line: under such an
+// attribute no build may compile or run the fn. A cfg on a mod or on
+// the file's `mod` line is not read. A cite-assert citation is `LABEL
+// in FILE` (FILE after the last ` in `, a .rs file under SOURCE or a
+// cite-module DIR and not a test file; LABEL not blank): exactly one
+// top-level `const _: () = assert!(`, alone on its line or the whole
+// assertion on it, right under a block of `//` lines whose first starts
+// `// LABEL`, where the last line of code above the block (across
+// blank lines, comment lines and block comments) is no attribute (a
+// line starting `#[` or ending `]`). A cite-row citation, once
+// its cite-fn or cite-assert check passes, needs a line starting `| ` in
+// FILE's table under the line `## HEADING` (to the next `## ` line)
+// whose first cell holds the citation in backquotes and whose text holds
+// every PART. Each file is read with the lexer: a line in a block
+// comment or literal is no attribute, mod, fn, label or assertion, and
+// a file that ends inside one resolves nothing.
 //
 // -entries prints, per seam: source file, line, kind, id (the name, with
 // #N when shared in its file), category, tool, status, overrides file (or
@@ -96,6 +135,23 @@
 //	                           contract, which a discharged status may not
 //	                           cite. TAG holds no `;`, `)` or `:` and is
 //	                           given once
+//	cite-fn<TAB>TAG<TAB>ATTR[<TAB>CFG...]
+//	                           each TAG citation names a fn with the
+//	                           attribute line `#[ATTR]` (ATTR without `[`,
+//	                           `]` or blanks), under no cfg, cfg_attr or
+//	                           ignore attribute but `#[cfg(CFG)]` (the
+//	                           cfg the tool builds under, `kani`)
+//	cite-assert<TAB>TAG        each TAG citation names a labeled assertion
+//	                           (a tag takes cite-fn or cite-assert, once)
+//	cite-row<TAB>TAG<TAB>FILE<TAB>HEADING<TAB>PART...
+//	                           each TAG citation needs a row in FILE's
+//	                           `## HEADING` table holding every PART (once
+//	                           per tag)
+//	cite-module<TAB>NAME<TAB>DIR
+//	                           a cite-fn path starting `NAME::` reads under
+//	                           DIR (once per NAME); the TAG of cite-fn,
+//	                           cite-assert and cite-row is a cite-tag
+//	                           above the line
 //	guess<TAB>CAT|-<TAB>COND.. a category heuristic: the first guess whose
 //	                           conditions all hold names the category (-
 //	                           for none); COND is FIELD=RE or FIELD!RE,
@@ -214,6 +270,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	case *check:
+		res.drift = append(res.drift, resolveCites(*root, r, res.entries)...)
 		return checkLedger(*root, r, in, res, stdout, stderr)
 	case *cites:
 		x := entryField.Replace

@@ -25,9 +25,14 @@ type Rules struct {
 	PairForm   string   // "slash" (`fn a / b(`) or "list" (`fn f [a, b](`)
 	PairVars   []string // one template VAR for every name, or one per name
 	UnsupDoc   string
-	CiteTags   []string        // tags a status cites a check with (`Kani: ...`)
-	Partial    map[string]bool // cite tags a discharged status may not cite
-	Assumption string          // the tool of a seam no check applies to
+	CiteTags   []string            // tags a status cites a check with (`Kani: ...`)
+	Partial    map[string]bool     // cite tags a discharged status may not cite
+	CiteFn     map[string]string   // tag -> the attribute its fn carries (cite-fn)
+	CiteFnCfg  map[string][]string // tag -> the `#[cfg(CFG)]` lines its fn may carry
+	CiteAssert map[string]bool     // tags whose citations are labeled assertions
+	CiteRow    map[string]citeRow  // tag -> the table row each citation needs
+	CiteModule map[string]string   // a path's first segment -> the directory it reads
+	Assumption string              // the tool of a seam no check applies to
 	testRes    []*regexp.Regexp
 	testOnPath []bool
 }
@@ -153,7 +158,8 @@ func readRules(file string) (*Rules, error) {
 }
 
 func parseRules(file, data string) (*Rules, error) {
-	r := &Rules{Ledger: "verus/ledger", Source: "src", SeamsDoc: "verus/SEAMS.md", ToolOf: map[string]string{}, Partial: map[string]bool{}}
+	r := &Rules{Ledger: "verus/ledger", Source: "src", SeamsDoc: "verus/SEAMS.md", ToolOf: map[string]string{}, Partial: map[string]bool{},
+		CiteFn: map[string]string{}, CiteFnCfg: map[string][]string{}, CiteAssert: map[string]bool{}, CiteRow: map[string]citeRow{}, CiteModule: map[string]string{}}
 	tools := map[string]bool{}
 	seen := map[string]bool{}
 	var errs []string
@@ -258,6 +264,60 @@ func parseRules(file, data string) (*Rules, error) {
 			r.CiteTags = append(r.CiteTags, f[1])
 			if len(f) == 3 {
 				r.Partial[f[1]] = true
+			}
+		case "cite-fn", "cite-assert", "cite-row":
+			forms := map[string]string{"cite-fn": "cite-fn<TAB>TAG<TAB>ATTR[<TAB>CFG...]", "cite-assert": "cite-assert<TAB>TAG", "cite-row": "cite-row<TAB>TAG<TAB>FILE<TAB>HEADING<TAB>PART..."}
+			n := map[string]int{"cite-fn": max(len(f), 3), "cite-assert": 2, "cite-row": max(len(f), 4)}[f[0]]
+			if !want(n, forms[f[0]]) {
+				continue
+			}
+			if !slices.Contains(r.CiteTags, f[1]) {
+				bad("%s %s: not a cite-tag listed above it", f[0], f[1])
+				continue
+			}
+			switch f[0] {
+			case "cite-fn", "cite-assert":
+				if _, ok := r.CiteFn[f[1]]; ok || r.CiteAssert[f[1]] {
+					bad("%s %s: the tag already has a cite-fn or cite-assert line", f[0], f[1])
+					continue
+				}
+				if f[0] == "cite-assert" {
+					r.CiteAssert[f[1]] = true
+					continue
+				}
+				if strings.ContainsAny(f[2], "[] ") {
+					bad("cite-fn %s: ATTR %s: want the attribute's path without `#[`, `]` or blanks", f[1], f[2])
+					continue
+				}
+				r.CiteFn[f[1]] = f[2]
+				// Each CFG allows the one attribute `#[cfg(CFG)]`, whole
+				// on its line, on the fn: the cfg the tool builds under.
+				for _, c := range f[3:] {
+					r.CiteFnCfg[f[1]] = append(r.CiteFnCfg[f[1]], "#[cfg("+c+")]")
+				}
+			case "cite-row":
+				if _, ok := r.CiteRow[f[1]]; ok {
+					bad("cite-row %s is given twice", f[1])
+					continue
+				}
+				if c, ok := inTree(f[2]); ok {
+					r.CiteRow[f[1]] = citeRow{file: c, heading: f[3], parts: f[4:]}
+				}
+			}
+		case "cite-module":
+			if !want(3, "cite-module<TAB>NAME<TAB>DIR") {
+				continue
+			}
+			if name := f[1]; !reIdent.MatchString(name) {
+				bad("cite-module %s: want an identifier", name)
+				continue
+			}
+			if _, ok := r.CiteModule[f[1]]; ok {
+				bad("cite-module %s is given twice", f[1])
+				continue
+			}
+			if c, ok := inTree(f[2]); ok {
+				r.CiteModule[f[1]] = c
 			}
 		case "assumption-tool":
 			if want(2, "assumption-tool<TAB>TOOL") {

@@ -354,9 +354,13 @@ is deleted in that PR.
    (#219). `-cites` parses each status into its citations, one line
    each (seams.sh's `cites()`), and `-check` fails a `TAG: ` that names
    nothing and a discharged status citing a tag the rules mark
-   `partial` (challoc's loom and GenMC) (#229). Still to come:
-   resolving each citation (Kani harnesses, assertions, Isla, emptyasm,
-   loom, GenMC, guard tests), the not-Copy checks and the Kani pins,
+   `partial` (challoc's loom and GenMC) (#229). `-check` resolves the
+   citations of tags the rules give `cite-fn` (a path to a fn with an
+   attribute: Kani harnesses, guard tests), `cite-assert` (a labeled
+   assertion) and `cite-row` (a row in a table: the guard-test table)
+   lines, as seams.sh's `checkcite()` resolved Kani, callers and const
+   assert (#231). Still to come: resolving the rest (Isla, emptyasm,
+   loom, GenMC), the not-Copy checks and the Kani pins,
    which stay in challoc's script reading `-cites` and `-entries` until
    they move; challoc's switch; and installing the tool in the
    package, which does not install it yet.
