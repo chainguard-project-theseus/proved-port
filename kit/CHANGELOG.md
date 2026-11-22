@@ -595,6 +595,76 @@ where it reports drift.
   `;`, `)` or `:` is a rules error. On challoc's overrides at 7d10fca,
   `-cites` gives seams.sh's `cites()` lines (its forms put together)
   and `-check` passes. Nothing is installed; ports see no change.
+- The seam ledger generator resolves citations (#231). `-check` fails
+  each citation of a tag that does not resolve, when the rules give the
+  tag one of these lines:
+  - `cite-fn TAG ATTR [CFG...]`: the citation is a path to a fn with
+    the attribute line `#[ATTR]`. The fn is found in the path's file and
+    its inline mods, by rustfmt's indentation, with no cfg, cfg_attr or
+    ignore attribute on it but `#[cfg(CFG)]`. `cite-module NAME DIR` reads paths that
+    start `NAME::` under DIR.
+  - `cite-assert TAG`: one top-level labeled `const _: () = assert!(`
+    with no attribute above it, in a `.rs` file of the crate.
+  - `cite-row TAG FILE HEADING PART...`: a row in a table, checked after
+    the tag's first check passes.
+
+  These are seams.sh's `harness()`, `assertion()` and `guardrow()`, as
+  its `checkcite()` used them for Kani, callers and const assert. The
+  template rules give Kani `cite-fn Kani kani::proof kani` and
+  `cite-module kani_proofs src/kani`, give const assert `cite-assert`,
+  and carry challoc's callers lines as a comment.
+
+  On challoc 7d10fca the results match `checkcite()` on its 151
+  distinct Kani, callers and const assert citations and on 634 altered
+  ones (a renamed fn, a dropped or added
+  mod, `kani::` for `kani_proofs::`, a renamed label, the wrong file, a
+  Kani harness cited as a guard test). Where the two differ, it is by
+  design:
+  - Files are read with the lexer. An attribute, mod, fn, label or
+    assertion inside a block comment or literal counts for nothing,
+    where seams.sh read it, and a file that ends inside one resolves
+    nothing.
+  - A trailing `//` comment after `#[ATTR]` is accepted.
+  - Comment lines at any indentation, and block comment lines, keep the
+    attribute. seams.sh kept it only across `//` lines at the fn's own
+    indentation.
+  - A cite-fn fn under `#[cfg(..)]`, `#[cfg_attr(..)]` or `#[ignore]`
+    is refused as gated, since no build may compile or run it, as a
+    gated assertion already was. The failure says the fn is gated, not
+    that it is missing. Which attributes count:
+    - every attribute Rust applies to the fn: any above it, up to the
+      previous line of other code, across blank lines, comment lines
+      and indentation;
+    - the attribute anywhere on its line, or wrapped by rustfmt over
+      lines up to its closing `]`, with or without blanks between `#`
+      and `[` (two tokens in Rust's grammar), or a lone `#` line with
+      the `[..]` on the next line of code. The seam scanner itself
+      does not read `# [..]` yet (#233).
+
+    The tag's cite-fn line may allow `#[cfg(CFG)]`, whole on its line and
+    as written (`feature = "std"` matches only that literal), for each
+    CFG field after ATTR: the cfg the tool builds under. The
+    template allows `kani` for Kani and `test` for challoc's commented
+    callers line. seams.sh accepted all of these. A cfg on an enclosing
+    mod, or on the file's `mod` line, is not read (challoc's Kani mods
+    are `cfg(kani)`, and its guard tests sit in `cfg(test)` mods).
+  - A const assert LABEL that is blank is refused; it would match any
+    `// ` comment.
+  - An assertion is refused when the last line of code above its
+    label's comment block is an attribute, even across block comments
+    and comment lines. seams.sh looked only at the last nonblank line,
+    so a comment between the attribute and the label hid it.
+  - An assertion's FILE must be a `.rs` file under SOURCE or a
+    cite-module DIR, and not a test file, so that a build compiles it.
+    seams.sh read any file. Whether a `mod` line reaches FILE is not
+    read.
+  - `cite-module` applies to every cite-fn tag (seams.sh read
+    `kani_proofs::` only for Kani).
+  - Each failure names the seam.
+
+  The kit's challoc golden tree holds only nine of challoc's sources, so
+  `testdata/challoc.rules` gains no cite-fn lines. Nothing is installed;
+  ports see no change.
 
 ### Porting notes
 

@@ -88,7 +88,8 @@ checks:
       passes, and go test passes (seams.sh's hash and claims nothing
       self-tests, scanner cases, the ledger file written whole, -check's
       stale, leftover and drift cases, -entries, -cites and the citation
-      rules (challoc's golden cites too), the rules file's errors,
+      rules (challoc's golden cites too), the Kani, callers and const
+      assert citation checks on a fixture tree, the rules file's errors,
       the template rules file, and the cksum CRC against the system's
       cksum).
     trigger: [presubmit, postsubmit]

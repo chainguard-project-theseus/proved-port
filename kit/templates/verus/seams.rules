@@ -57,14 +57,36 @@ category	C ABI export	ABI tests
 # none, and on a `TAG: ` that names nothing. A third field `partial`
 # marks a check that covers only part of a contract (challoc's loom
 # models run a copy of the code, and its GenMC cases erase the
-# permissions): -check fails a discharged status that cites one. The
-# port's own checks resolve each citation (seams -cites, one line per
-# citation): until those checks move into the kit, -check alone does
-# not show that a cited harness, assertion or test exists.
+# permissions): -check fails a discharged status that cites one.
 cite-tag	Kani
 cite-tag	const assert
 cite-tag	loom	partial
 cite-tag	GenMC	partial
+#
+# -check resolves the citations of the tags these lines name and fails
+# each that does not resolve. A cite-fn tag cites `a::b::m::f`: a fn
+# with the attribute line `#[ATTR]` above it, in SOURCE/a/b.rs (or
+# SOURCE/a/b/mod.rs) and its inline `mod m`, laid out as rustfmt lays it
+# out, with no cfg, cfg_attr or ignore attribute on the fn but
+# `#[cfg(CFG)]` for a CFG field after ATTR (the cfg the tool builds
+# under: `kani` here, `test` for a #[test] fn). A cite-module NAME reads a path starting `NAME::` under DIR (here
+# challoc's `kani_proofs::m::f`, f in src/kani/m.rs). A cite-assert tag
+# cites `LABEL in FILE`, FILE a .rs file under SOURCE or a cite-module
+# DIR and not a test file: one top-level `const _: () = assert!(` right
+# under a `// LABEL` comment block, with no attribute above it. A
+# cite-row tag's citations each also need a row in FILE's table under
+# `## HEADING` that names the citation in backquotes in its first cell
+# and holds every PART. The other tags (loom and GenMC here) are the
+# port's own checks to resolve, from seams -cites (one line per
+# citation).
+cite-fn	Kani	kani::proof	kani
+cite-module	kani_proofs	src/kani
+cite-assert	const assert
+# challoc's guard tests: `callers: PATH` names a #[test] fn with its row
+# in the guard-test table:
+# cite-tag	callers
+# cite-fn	callers	test	test
+# cite-row	callers	verus/README.md	Guard tests	Mutants killed:	Known escapes:
 #
 # The heuristics: the first guess whose conditions all hold proposes its
 # category (- for none, which -check reports until an overrides line
