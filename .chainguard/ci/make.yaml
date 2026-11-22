@@ -5,8 +5,9 @@
 # commands verus, kani and the other targets run for each port's
 # settings and that the guards fail them; runs kani.sh with a stub cargo
 # and headers.sh over the filled templates; kit/skip-summary-test.sh,
-# kit/known-failures-test.sh and kit/header-check-test.sh run
-# skip-summary.sh, known-failures.sh and header-check.sh on their own,
+# kit/known-failures-test.sh, kit/header-check-test.sh and
+# kit/kani-quotes-test.sh run skip-summary.sh, known-failures.sh,
+# header-check.sh and kani-quotes.sh on their own,
 # and kit/glibc-max-test.sh and kit/abi-elf-test.sh run glibc-max.sh
 # and abi-elf.sh on their own, in their own environments. No Verus or Kani
 # runs. busybox for the tools a port's checks have, make (GNU) for the
@@ -116,3 +117,19 @@ checks:
     trigger: [presubmit, postsubmit]
     timeout: 5m
     cmd: [sh, kit/header-check-test.sh]
+
+  kani-quotes-test:
+    description: >-
+      kit/kani-quotes-test.sh: kit/make/kani-quotes.sh (make
+      kani-quotes) on hand-written Kani records and sources, each output
+      spelled out: a record that matches (two chunks, other indentation,
+      comments), a changed clause, a chunk past the source's end, an
+      end-of-line comment, which path names the source, a second root,
+      the record parts it needs, every block of section 1 (a drifted
+      second block fails), where a chunk must end (an added
+      trailing clause fails), several records in name order, SKIP (read,
+      a matching skipped record fails), a directory with no record and
+      usage, with BusyBox's tools.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [sh, kit/kani-quotes-test.sh]

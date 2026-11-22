@@ -2,7 +2,7 @@
 # theseus-proved-port package installs it, with kani.sh, headers.sh,
 # lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs,
 # skip-summary.sh, glibc-max.sh, known-failures.sh, header-check.sh,
-# abi-elf.sh and VERUS-FILES, in
+# abi-elf.sh, kani-quotes.sh and VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
@@ -103,6 +103,9 @@
 #                     needs, thread-locals, version nodes and exports
 #                     are the ones its version script ABI_ELF_MAP
 #                     declares (the PCRE2 port's abi checks 1 to 3).
+#   kani-quotes       kani-quotes.sh: each Kani record in KANI_QUOTES_DIR
+#                     still quotes, in its section 1, the source it
+#                     names (under KANI_QUOTES_ROOTS).
 #   verify           every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
@@ -318,7 +321,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -600,6 +603,25 @@ abi-elf: ## the library ABI_ELF_LIB's SONAME, needs, thread-locals, version node
 	$(if $(strip $(ABI_ELF_SONAME)),,$(error $(abi_elf_soname_empty)))
 	$(if $(strip $(ABI_ELF_NEEDED)),,$(error $(abi_elf_needed_empty)))
 	sh $(PROVED_PORT_MAKE)abi-elf.sh '$(strip $(ABI_ELF_LIB))' '$(strip $(ABI_ELF_MAP))' '$(strip $(ABI_ELF_SONAME))' '$(strip $(ABI_ELF_NEEDED))'$(if $(strip $(ABI_ELF_TLS_MAX) $(ABI_ELF_DEFAULTS)), '$(strip $(ABI_ELF_TLS_MAX))')$(if $(strip $(ABI_ELF_DEFAULTS)), '$(strip $(ABI_ELF_DEFAULTS))')
+# --- kani-quotes -------------------------------------------------------------
+# kani-quotes.sh DIR ROOTS [SKIP]; its header says what it does.
+# KANI_QUOTES_DIR holds the port's Kani records (kani-*.md, by default
+# verus/seams); KANI_QUOTES_ROOTS are the directories a record's source
+# path is looked up under, in turn (by default the port's tree, `.`; add
+# a vstd source tree for records that quote vstd's std_specs);
+# KANI_QUOTES_SKIP names records it does not read (kani-s3.md). The
+# target fails while the directory or the roots are empty.
+KANI_QUOTES_DIR ?= verus/seams
+KANI_QUOTES_ROOTS ?= .
+KANI_QUOTES_SKIP ?=
+kani_quotes_dir_empty = KANI_QUOTES_DIR is empty: name the directory of the port's Kani records (by default verus/seams)
+kani_quotes_roots_empty = KANI_QUOTES_ROOTS is empty: name the directories a record's source is looked up under (by default .)
+
+kani-quotes: ## each Kani record in KANI_QUOTES_DIR still quotes the source it names, in its section 1 (kani-quotes.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(KANI_QUOTES_DIR)),,$(error $(kani_quotes_dir_empty)))
+	$(if $(strip $(KANI_QUOTES_ROOTS)),,$(error $(kani_quotes_roots_empty)))
+	sh $(PROVED_PORT_MAKE)kani-quotes.sh '$(strip $(KANI_QUOTES_DIR))' '$(strip $(KANI_QUOTES_ROOTS))'$(if $(strip $(KANI_QUOTES_SKIP)), '$(strip $(KANI_QUOTES_SKIP))')
 
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
@@ -624,7 +646,7 @@ abi-elf: ## the library ABI_ELF_LIB's SONAME, needs, thread-locals, version node
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

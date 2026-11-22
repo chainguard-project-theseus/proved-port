@@ -325,6 +325,30 @@ where it reports drift.
   anonymous node or a second parent fails naming it (exit 1). A failed
   check prints a `FAIL:` line and exits 1; usage exits 2. No existing
   target or check changes.
+- `make kani-quotes` (#207, `kani-quotes.sh`, installed beside
+  perf-budget.sh): each Kani record (`kani-*.md` in `KANI_QUOTES_DIR`,
+  by default `verus/seams`) must still quote, in its section 1, the
+  source it names. The source is the first backquoted `.rs` path before
+  the record's first heading, looked up under each of
+  `KANI_QUOTES_ROOTS` in turn (by default `.`; a vstd source tree for a
+  record that quotes vstd's `std_specs/`). The quote is every fenced
+  block of section 1, cut into chunks at blank lines and at each
+  block's end; each chunk, read
+  with blanks squeezed and whole-line `//` comments dropped, must be
+  consecutive lines of the source read the same way, and end where its
+  item's text does (its last line ends with `{`, `;` or `}`, or the
+  source's next line opens with `{` or `;`, or the source ends), so a
+  clause added after the quote's last one fails. A failed record prints
+  the chunk and its first line the source does not hold (or the source
+  line it stops before), and the run exits 1; so does a record with no
+  source, a source under no root, no section 1 or fenced block, a quote
+  of comments alone, and a directory with no record. A record
+  `KANI_QUOTES_SKIP` names is still read: one that fails prints a
+  `skip` line, and one that matches fails the run, so the list only
+  shrinks; a name there that is no record is a usage error (exit 2).
+  The Kani record template's section 1 asks for the clauses through
+  the last, and its section 5 names the check. No existing target or
+  check changes.
 
 ### Porting notes
 
@@ -427,6 +451,17 @@ where it reports drift.
     guard in `kit/count/README.md` adds `abi-elf` to its
     `PROVED_PORT_TARGETS` when it starts to use it. A port that does
     neither changes nothing.
+11. Optional: a port with Kani records can run `make kani-quotes` in a
+    check (busybox is enough), with `KANI_QUOTES_ROOTS=". VSTD"` where a
+    record quotes vstd (VSTD: the vstd source of the version the port
+    pins, as cargo unpacks it). Its first run may fail on records whose
+    source has moved on since they were written; bring each record's
+    section 1 back to the source (and its harness, where the contract
+    changed), or name it in `KANI_QUOTES_SKIP` until it is, and take the
+    name out once it matches (the run fails while it stays). A port that
+    copied the no-kit guard in `kit/count/README.md` adds `kani-quotes`
+    to its `PROVED_PORT_TARGETS` when it starts to use it. A port that
+    does neither changes nothing.
 
 ## 0.4.11
 
