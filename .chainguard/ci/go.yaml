@@ -101,6 +101,23 @@ checks:
         f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
         go vet ./... && go test -count=1 ./...
 
+  seams-mutants:
+    description: >-
+      kit/verus/seams/mutants.sh: every hand mutant in
+      kit/verus/seams/testdata/mutants.txt is killed by the generator's
+      go test, or is marked equivalent with its reason and survives; a
+      mutant whose text no longer occurs once in its file fails (PLAN
+      step 3's seams-mutants.sh row). kit/seams-mutants-test.sh tests
+      the runner first on a stand-in package (killed, survived, marked
+      equivalent, the list's errors, usage).
+    trigger: [presubmit, postsubmit]
+    timeout: 20m
+    cmd:
+      - sh
+      - -c
+      - >-
+        sh kit/seams-mutants-test.sh && sh kit/verus/seams/mutants.sh
+
   box-test:
     description: >-
       kit/box-test.sh: kit/perf/box (PLAN step 6, the bench box's run
