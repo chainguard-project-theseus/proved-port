@@ -269,6 +269,36 @@ where it reports drift.
   for a crate the base read is a narrowing and needs a `[[narrowed]]`
   line; a new member that sets it, or turning it off, is not. The key
   is off by default, so no port's count moves.
+- `make header-check` (#203, `header-check.sh`, installed beside
+  perf-budget.sh): the PCRE2 port's header constant check
+  (`ci/header-check.sh`) as a kit target, in POSIX sh. A port names its
+  public headers in `HEADER_CHECK_HEADERS` and the prefixes of the C
+  library's macros in `HEADER_CHECK_PREFIXES` (both required: `FOO_
+  REG_`); each header's `#define`s and `#undef`s under those prefixes
+  must equal those of the file of its name in `HEADER_CHECK_UPSTREAM`
+  (default `/usr/include`, which the C library's -dev package fills),
+  continued lines joined as C splices them (blanks or a CR after the
+  backslash too, nothing left at the join), comments blanked as C
+  reads them (across lines, `//`, not inside a string or character
+  literal) and blanks outside the literals squeezed. The lines are compared as a set, in any order, so the
+  `#if`/`#ifdef` branch a line sits in is not seen: a header that
+  swaps the values of two branches passes (a limit; closing it needs
+  the preprocessor). A difference prints the unified diff and fails
+  (exit 1). On the same inputs its output and exit status are the PCRE2
+  port's script's, but for five cases: a continued definition's later
+  lines, and the text between two comments on a line, are compared
+  (that script read a definition's first line alone, and dropped
+  everything from a line's first `/*` to its last `*/`); comments are
+  read as C reads them, and `#undef` lines are compared; a
+  header with no definition under the prefixes on either side fails
+  (a prefix that matches nothing compares nothing), and so does a
+  prefix with no definition in any header of the run (`PCRE2_ REGX_`, a
+  misspelled `REG_`, beside one that matches); a missing header of
+  the port's fails with a line of its own (that script failed in grep);
+  and `#  define` and `#define` are the same line (that script kept the
+  blank after `#`, so the two spellings differed and its diff's hunk
+  offsets can differ from this one's). A prefix that is no C identifier
+  is a usage error (exit 2). No existing target or check changes.
 
 ### Porting notes
 
@@ -353,6 +383,14 @@ where it reports drift.
    for a member it already counts needs a `[[narrowed]]` line naming the
    change the run prints (`[crates] member "NAME" changes skip_packages
    from false to true`). A port that does neither changes nothing.
+9. Optional: a port with its own copy of the PCRE2 port's
+   `ci/header-check.sh` can call `make header-check
+   HEADER_CHECK_HEADERS="include/foo.h ..." HEADER_CHECK_PREFIXES="FOO_
+   ..."` in its place (its check environment keeps the C library's -dev
+   package for the upstream headers) and delete the copy. A port that
+   copied the no-kit guard in `kit/count/README.md` adds `header-check`
+   to its `PROVED_PORT_TARGETS` when it starts to use it. A port that
+   does neither changes nothing.
 
 ## 0.4.11
 

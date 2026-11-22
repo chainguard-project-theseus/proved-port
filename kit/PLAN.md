@@ -349,7 +349,12 @@ is deleted in that PR.
    **Status:** the glibc ceiling check is `kit/make/glibc-max.sh` (`make
    glibc-max GLIBC_MAX_LIB=... GLIBC_MAX=...`, #193), challoc's script
    in POSIX sh, with `make.yaml`'s `glibc-max-test`. challoc's switch to
-   it is to come. pcre3's ABI and header checks are not yet in the kit.
+   it is to come. The header constant check is `kit/make/header-check.sh`
+   (`make header-check HEADER_CHECK_HEADERS=... HEADER_CHECK_PREFIXES=...
+   [HEADER_CHECK_UPSTREAM=/usr/include]`, #203), pcre3's script with its
+   headers, prefixes and upstream directory as arguments, with
+   `make.yaml`'s `header-check-test`; pcre3's switch to it is to come.
+   pcre3's ABI check (`ci/abi.sh`) is not yet in the kit.
 5. **Comparison harnesses.** pcre3: `fuzz/diff/` splits into the kit's
    generic driver shell and pcre3's comparison file and `known.c`;
    `ci/fuzz-diff.sh` builds the kit driver against them, under the same
