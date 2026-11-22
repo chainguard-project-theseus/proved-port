@@ -68,7 +68,7 @@ pull request that lands that share lower (FLOOR's header).
 | `verus/SEAMS.md` | `verus/SEAMS.md` | the core-library seams table and its columns, for hand-written seams tables. A port on the counter's generated-ledger back end (`[ledger]`) keeps a SEAMS.md that defines the ledger's kinds, categories, tools and statuses, with a "Status" section, which verus/FLOOR's header cites (challoc's; kit step 3 templates it) |
 | `verus/THEOREMS.md` | `verus/THEOREMS.md` | the trusted base; each theorem file's first line is its index entry |
 | `verus/theorems/TEMPLATE.md` | `verus/theorems/<ID>.md` | one theorem: statement, mutants, checks, what it does not say, seams |
-| `verus/seams/kani-TEMPLATE.md` | `verus/seams/kani-<seam id>.md` | one Kani record: contract, statement, translation, review, tests |
+| `verus/seams/kani-TEMPLATE.md` | `verus/seams/kani-<seam id>.md`, or `verus/seams/kani-<crate>-<path under src/, / as ->.md`, one per source file, for functions outside `verus!` | one Kani record: contract, statement, translation, review, tests |
 | `docs/abi/README.md` | `docs/abi/README.md` | the `ABI-nnn` known-differences ledger: entry format, ID rules, the check |
 | `docs/abi/ABI-001.md` | `docs/abi/ABI-<nnn>.md` | one ledger entry, a file of its own whose first line is its heading |
 | `AGENTS.md` | `AGENTS.md` | outline: non-negotiables, workflow, proofs |

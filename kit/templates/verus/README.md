@@ -69,7 +69,8 @@ main later. verus/RLIMIT cites this section.}
 
 ## Kani
 
-{Which trusted functions Kani discharges, the `discharged_by = "kani"`
+{Which trusted functions, and functions outside `verus!`, Kani
+discharges, the `discharged_by = "kani"`
 marker, the records under verus/seams/, and how `make kani` runs them.
 verus/FLOOR cites this section.}
 

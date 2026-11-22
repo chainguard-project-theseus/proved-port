@@ -147,6 +147,20 @@ spellings.
   check), the row's status, and the inert
   `#[cfg_attr(any(), discharged_by = "kani")]` marker. The counter fails
   a marker with no record.
+- A shipped function outside `verus!` (plain Rust, such as FFI glue)
+  has no seam, row or Verus contract. Its Kani discharge needs three
+  things in the same change: the harness, its source file's record,
+  `verus/seams/kani-<crate>-<path under src/, / as ->.md`, one per
+  file for every marked function in it (the signature and marker
+  quoted, the properties the harnesses assert, and the rest as above;
+  each function named by its path in backquotes, as `A::new`,
+  `<A as From<u8>>::from`, `a::init` or `init`, and each harness by its
+  file and name in backquotes), and the marker. The counter fails the
+  run unless the record names the file and name of a `#[kani::proof]`
+  harness of the crate, outside `cfg(test)`, whose body calls the
+  function (and, for a method, mentions its owner), and when two marked
+  functions in one file share a path (`cfg` twins). With `[ledger]` the
+  marker is refused.
 - `make kani` (the kit's `kani.sh`) fails a run with no harness to
   check, since cargo kani passes a crate with none. Until its first
   harness, a port with the kani checks sets `KANI_NONE = yes` in its
