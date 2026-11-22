@@ -55,6 +55,27 @@ where it reports drift.
   The other entries keep "never gains a `lowered` line".
   `kit/count/README.md`'s "Lowering FLOOR is not the way to adopt a
   counter change" names the exception.
+- `make skip-summary` (#190, `skip-summary.sh`, installed beside
+  perf-budget.sh): challoc's expected-skips check (`ci/skip-summary.sh`)
+  as a kit target, in POSIX sh. A port whose gated tests print `SKIP
+  <key> <reason>` and pass when they cannot run names the test log in
+  `SKIP_LOG` and the manifest it is held to in `SKIP_MANIFEST` (both
+  required). A key the manifest lacks fails (exit 1, "new skip (lost
+  coverage)"); a manifest key that did not appear is a notice; a missing
+  manifest fails and prints the one to commit; a missing or empty log,
+  a log or manifest it cannot read, or a tool that fails on one, fails;
+  and `CI_SKIP_UPDATE=1` writes the observed keys and passes. A markdown
+  table of the skips goes to stdout. It is no proof that the tests ran
+  or passed: the caller still fails on the test step's own status. On
+  the same inputs its output, exit status and written manifest are
+  challoc's script's, but for three cases: a key that starts with `-`,
+  which challoc's `grep` read as an option (so the key showed as new in
+  the table, after a grep usage message) and the kit's matches; a log
+  that cannot be read, which challoc's script read as empty (so it
+  passed) and the kit's fails (an unreadable manifest fails in both;
+  challoc's exits with sed's status, under pipefail); and an empty log,
+  which challoc's passed and the kit's fails. No existing target or
+  check changes.
 
 ### Porting notes
 
@@ -80,6 +101,14 @@ where it reports drift.
    that leaves its prompt as it is changes nothing else: its kit bumps
    that cross such a counting-rule change stay drafts for a person, who
    writes the line.
+3. Optional: a port with its own copy of challoc's `ci/skip-summary.sh`
+   can call `make skip-summary SKIP_LOG=LOG SKIP_MANIFEST=MANIFEST` in
+   its place and delete the copy, keeping its test step's own status as
+   a separate failure (the target does not check that the tests ran or
+   passed). A port that copied the no-kit guard in
+   `kit/count/README.md` adds `skip-summary` to its
+   `PROVED_PORT_TARGETS` when it starts to use it. A port that does
+   neither changes nothing.
 
 ## 0.4.11
 

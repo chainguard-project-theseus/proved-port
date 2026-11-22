@@ -1,7 +1,7 @@
 # proved-port.mk: the proof targets every proved port shares. The
 # theseus-proved-port package installs it, with kani.sh, headers.sh,
-# lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs
-# and VERUS-FILES, in
+# lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs,
+# skip-summary.sh and VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
@@ -84,6 +84,10 @@
 #                     against the build's table, after a self-test
 #                     (challoc's perf-budget).
 #   perf-budget-print perf-budget.sh print: the measured table lines.
+#   skip-summary      skip-summary.sh: the test log SKIP_LOG's `SKIP
+#                     <key>` lines against the expected-skips manifest
+#                     SKIP_MANIFEST; a new skip fails, a gone one is a
+#                     notice (challoc's skip-summary).
 #   verify           every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
@@ -299,7 +303,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -472,6 +476,23 @@ perf-budget-print: ## the measured fast-path table lines of each build, to updat
 	$(perf_budget_check)
 	$(perf_budget_env) sh $(PROVED_PORT_MAKE)perf-budget.sh print
 
+# --- skip-summary ----------------------------------------------------------
+# skip-summary.sh LOG MANIFEST; its header says what it does. SKIP_LOG is
+# the test run's log and SKIP_MANIFEST the expected-skips manifest it is
+# held to (challoc's ci/expected-skips/<cell>.txt); the target fails while
+# either is empty. CI_SKIP_UPDATE=1 in the environment writes the
+# observed keys to SKIP_MANIFEST and passes.
+SKIP_LOG ?=
+SKIP_MANIFEST ?=
+skip_log_empty = SKIP_LOG is empty: name the test run's log (make skip-summary SKIP_LOG=test.log)
+skip_manifest_empty = SKIP_MANIFEST is empty: name the expected-skips manifest the log is held to (ci/expected-skips/<cell>.txt)
+
+skip-summary: ## the SKIP lines of the test log SKIP_LOG against the expected-skips manifest SKIP_MANIFEST: a new skip fails (skip-summary.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(SKIP_LOG)),,$(error $(skip_log_empty)))
+	$(if $(strip $(SKIP_MANIFEST)),,$(error $(skip_manifest_empty)))
+	sh $(PROVED_PORT_MAKE)skip-summary.sh '$(strip $(SKIP_LOG))' '$(strip $(SKIP_MANIFEST))'
+
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
 # order `make verify` runs them, each in its own make. A package build
@@ -495,7 +516,7 @@ perf-budget-print: ## the measured fast-path table lines of each build, to updat
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

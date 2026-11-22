@@ -463,6 +463,11 @@ expect "make -n perf-budget, one build" \
 expect "make -n perf-budget-print, challoc's two quanta" \
   "$(shows perf-budget-print PERF_BUDGET_LIB=libchalloc.so PERF_BUDGET_BUILDS='q16  q8' PERF_BUDGET_TABLE_q16=verus/perf-budget.txt PERF_BUDGET_TABLE_q8=verus/perf-budget-q8.txt PERF_BUDGET_FLAGS_q8='--no-default-features --features quantum8' PERF_BUDGET_CARGO_FLAGS=--locked CARGO_TARGET_DIR=/t PERF_BUDGET_SELFTEST_EXPORT=free)" \
   "PERF_BUDGET_LIB='libchalloc.so' PERF_BUDGET_BUILDS='q16 q8' PERF_BUDGET_TABLE_q16='verus/perf-budget.txt' PERF_BUDGET_FLAGS_q16='' PERF_BUDGET_TABLE_q8='verus/perf-budget-q8.txt' PERF_BUDGET_FLAGS_q8='--no-default-features --features quantum8' PERF_BUDGET_CARGO_FLAGS='--locked' PERF_BUDGET_TARGET_DIR='/t' PERF_BUDGET_SELFTEST_EXPORT='free' sh $home/make/perf-budget.sh print"
+# skip-summary passes the log and the manifest as skip-summary.sh's
+# two arguments, blanks around them dropped.
+expect "make -n skip-summary, challoc's cell" \
+  "$(shows skip-summary SKIP_LOG=' test.log ' SKIP_MANIFEST=ci/expected-skips/x86_64-glibc.txt)" \
+  "sh $home/make/skip-summary.sh 'test.log' 'ci/expected-skips/x86_64-glibc.txt'"
 
 # verify runs every target VERIFY_TARGETS lists, in order, each with the
 # command line's variables. Under -n make prints its loop (a line naming
@@ -545,6 +550,8 @@ for t in perf-budget perf-budget-print; do
   refuses_make "make -n $t with a blank PERF_BUDGET_BUILDS" "PERF_BUDGET_BUILDS is empty" \
     $t PERF_BUDGET_LIB=libalpha.so PERF_BUDGET_BUILDS=' '
 done
+refuses_make "make -n skip-summary with no SKIP_LOG" "SKIP_LOG is empty" skip-summary SKIP_MANIFEST=skips.txt
+refuses_make "make -n skip-summary with a blank SKIP_MANIFEST" "SKIP_MANIFEST is empty" skip-summary SKIP_LOG=test.log SKIP_MANIFEST=' '
 # The no-kit guard kit/count/README.md gives ports lists every kit
 # target, so each fails with the kit's message where the package is
 # missing: proved_port_phony and verify, in that order.
@@ -675,7 +682,7 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;

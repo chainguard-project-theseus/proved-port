@@ -354,6 +354,15 @@ is deleted in that PR.
    challoc: `ci/skip-summary.sh` and `ci/known-failures.sh` move, and
    `ci/cell.sh` calls the kit's; `ci/expected-skips/` and
    `ci/known-failures.txt` stay.
+   **Status:** the skip check is `kit/make/skip-summary.sh` (`make
+   skip-summary SKIP_LOG=... SKIP_MANIFEST=...`, #190), challoc's script
+   in POSIX sh, with `make.yaml`'s `skip-summary-test`; on the same
+   inputs its output and exit status are challoc's script's, but for the
+   three cases kit/CHANGELOG.md names: a key that starts with `-`
+   matches here, and an unreadable or empty log fails here where
+   challoc's passed it (so a challoc cell whose test step leaves a
+   zero-byte log fails once it switches). challoc's switch to it is to
+   come. `ci/known-failures.sh` is not yet in the kit.
 6. **Box skeleton, pull and stats.** Out of `kit/reference/` into
    `kit/perf/` (stats rewritten in Go). pcre3: the generic parts of
    `ci/bench.sh` (the four-way runner, the result-agreement check, the
