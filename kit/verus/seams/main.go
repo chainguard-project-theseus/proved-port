@@ -107,6 +107,28 @@
 // comment or literal is no attribute, mod, fn, label or assertion, and
 // a file that ends inside one resolves nothing.
 //
+// With a notcopy line, -check also holds the tracked types (`tracked
+// struct` or `tracked enum`, ghost tokens whose axioms may rely on their
+// not being Copy) to challoc's not-Copy checks, seams.sh's trackedcheck
+// and notcopycheck. A not-Copy check of TYPE, cited `LABEL in FILE`
+// (read as a cite-assert citation), is exactly one labeled top-level
+// `const _: () = assert!(` whose text, to the line that ends in `);`,
+// read as code, names `<TYPE as NotCopy<_>>::HOLDS` and `<TYPE as
+// NotClone<_>>::HOLDS` (TYPE alone or after a path, with or without
+// arguments that hold no `<` or `>`), in a FILE that also holds the
+// whole top-level lines `impl<T: Copy> NotCopy<..> for T {}` and
+// `impl<T: Clone> NotClone<..> for T {}`, each with no attribute as the
+// last line of code above it, without which the check compiles for any
+// type. -check fails each tracked type declared in a source or test
+// file (seam or not; `tracked struct` or `tracked enum` anywhere on a
+// code line, after attributes on it too) with no not-Copy check in the
+// notcopy FILE under the label TYPE in backquotes that is also a
+// cite-assert assertion (no attribute above it), each second tracked
+// type of a name
+// already seen (one check cannot stand for both), and each tracked-type
+// seam whose status cites TAG with none of those citations a not-Copy
+// check of its type.
+//
 // -entries prints, per seam: source file, line, kind, id (the name, with
 // #N when shared in its file), category, tool, status, overrides file (or
 // -), and the contract normalized as its hash reads it. Each seam is
@@ -155,6 +177,9 @@
 //	                           DIR (once per NAME); the TAG of cite-fn,
 //	                           cite-assert and cite-row is a cite-tag
 //	                           above the line
+//	notcopy<TAB>FILE<TAB>TAG   the tracked types' not-Copy checks are in
+//	                           FILE, and a tracked-type seam cites them with
+//	                           TAG, a tag with a cite-assert line above (once)
 //	guess<TAB>CAT|-<TAB>COND.. a category heuristic: the first guess whose
 //	                           conditions all hold names the category (-
 //	                           for none); COND is FIELD=RE or FIELD!RE,
@@ -274,6 +299,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case *check:
 		res.drift = append(res.drift, resolveCites(*root, r, res.entries)...)
+		var files []string
+		for _, f := range append(append([]namedText{}, in.sources...), in.tests...) {
+			files = append(files, f.name)
+		}
+		res.drift = append(res.drift, notCopyChecks(*root, r, res.entries, files)...)
 		return checkLedger(*root, r, in, res, stdout, stderr)
 	case *cites:
 		x := entryField.Replace
