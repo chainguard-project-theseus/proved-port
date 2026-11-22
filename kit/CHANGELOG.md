@@ -468,6 +468,52 @@ where it reports drift.
   port's said `<label>:  is not an absolute path`), and under
   `P_CONTINUE` the exit flushes stdout. No package recipe change (the package
   installs all of `kit/make/`); no existing target or check changes.
+- The seam ledger generator's generic core (#217, `kit/verus/seams`,
+  Go): challoc's `verus/seams.sh` scan, overrides, ledger files,
+  totals, hash rules and claims nothing rules, with what is challoc's
+  in a rules file the port keeps (`verus/seams.rules`; a commented
+  starting point is `kit/templates/verus/seams.rules`). `-write`
+  writes the ledger, `-check` fails where seams.sh's `--check` fails
+  for those rules, and `-entries` prints one line per seam for the
+  checks a port's statuses cite, which stay in the port. Unlike
+  seams.sh, a `|` in an item's name is escaped in the ledger's table
+  (seams.sh meant to, but BusyBox awk dropped the backslash), a source
+  file's last line without a newline stays its own line, a
+  `#[cfg(test)]` item whose body opens and closes on its first line
+  ends there (seams.sh skipped on to the next line that opens a brace,
+  dropping the seams between from the ledger), the source is read with
+  block comments (nesting), strings and raw strings (`r"..."`,
+  `r#"..."#`, `br`, `cr`) carried across lines, their contents no code
+  (seams.sh read each line alone, did not know block comments or raw
+  strings, and so could miss or invent a brace and swallow the seams
+  after it; and it read `'\''`, a non-ASCII char literal and
+  `'\u{10FFFF}'` wrongly, leaving a quote to open a false literal), a
+  file the scan ends inside a string, raw string, block comment,
+  attribute or item, or with its braces unbalanced, is an input error
+  naming the line where that began (seams.sh went on and could leave
+  seams out), an item on its
+  attribute's line is read (`#[a] fn f()`, `#[cfg(test)] mod t;`; seams.sh
+  took the whole line as the attribute), attribute paths split over
+  lines or spaced (`verifier :: external_body`, `cfg( test )`) are
+  matched, a trusting attribute on an item no kind reads (a macro-written
+  fn name, a lowercase const or static, a union) is an input error
+  naming the file and line (seams.sh left the seam out), a `discharged`
+  or partly checked status that holds no cite tag fails `-check` (as
+  seams.sh's citation checks did; resolving the citations stays in the
+  port), a hash leaves out block comments as well as `//` ones (seams.sh
+  kept a block comment's text) and keeps the
+  whitespace inside string and char literals, raw strings included,
+  while a quote in a comment opens none (seams.sh made every
+  whitespace run one space, so `"a  b"` edited to `"a b"` kept a
+  checked status's hashes; challoc's recorded hashes at deda0db are
+  unchanged), a fn under `#[verifier::external_fn_specification]` (the
+  older form of `assume_specification`) is an `assume_spec` seam named
+  by the fn (seams.sh did not read it), the paren form
+  `#[verifier(external_body)]` is read as external_body, a second
+  overrides line for one name is refused (seams.sh kept the last), and
+  a rules file is refused when a single-valued rule repeats or a path
+  leaves the tree. The package does not install it yet, so no port changes
+  anything; the go.yaml check `seams-test` runs its tests.
 
 ### Porting notes
 

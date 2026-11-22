@@ -1,0 +1,98 @@
+# verus/seams.rules: the port's rules for the kit's seam ledger generator
+# (kit/verus/seams; its doc comment is the full format). One rule a line,
+# fields separated by one tab, `#` comments. The generator scans SOURCE
+# for the items Verus takes on trust and writes one ledger file per
+# source file with seams under LEDGER; these lines are what is the
+# port's: where things are, the tools and categories its SEAMS.md names,
+# and the heuristics that propose a category for a seam no overrides line
+# names. This starting point is challoc's (verus/seams.sh as of its
+# deda0db); reshape the lists and the guesses to the port's code.
+#
+# Where the ledger and the sources are, and the command that writes the
+# ledger (named in each ledger file's header). The package does not
+# install the generator yet: build it from the kit's kit/verus/seams with
+# go at the tag the port pins, and write here how the port runs it.
+ledger	verus/ledger
+source	src
+command	seams -write
+seams-doc	verus/SEAMS.md
+#
+# Test files under SOURCE: not scanned for seams, read only for `unsafe
+# impl Send/Sync` (a claims nothing status refuses a type that has one).
+# A pattern with a / matches the path from the root, any other the base
+# name; * and ? match / too, as in find -path.
+test-file	tests.rs
+test-file	testutil.rs
+test-file	src/*/tests/*
+#
+# The tools, in the order the totals tables list them, and the one for
+# a seam no check applies to.
+tool	Islaris/Isla
+tool	RefinedRust
+tool	Kani
+tool	loom/GenMC
+tool	Verus
+tool	ABI tests
+tool	none (assumption)
+assumption-tool	none (assumption)
+#
+# The categories, in table order, each with the tool proposed for it.
+category	inline asm	Islaris/Isla
+category	FFI/syscall	none (assumption)
+category	function pointer	Kani
+category	UnsafeCell/volatile/transmute	RefinedRust
+category	raw pointer (internal)	RefinedRust
+category	raw pointer from C caller	none (assumption)
+category	panic/abort	Kani
+category	atomics primitive	loom/GenMC
+category	platform/kernel fact	none (assumption)
+category	C-program contract	none (assumption)
+category	termination	loom/GenMC
+category	core library	Kani
+category	allocator invariant	RefinedRust
+category	C ABI export	ABI tests
+#
+# A status holding `TAG: ` cites a check (a claims nothing status may
+# not); -check fails on a discharged or partly checked status that holds
+# none. The port's own checks resolve each citation (seams -entries):
+# until those checks move into the kit, -check alone does not show that
+# a cited harness, assertion or test exists.
+cite-tag	Kani
+cite-tag	const assert
+cite-tag	loom
+cite-tag	GenMC
+#
+# The heuristics: the first guess whose conditions all hold proposes its
+# category (- for none, which -check reports until an overrides line
+# names one). FIELD=RE matches, FIELD!RE does not; kind, name, file and
+# body (comments and literals blanked) are the fields, RE is RE2.
+guess	termination	kind=^no_decreases$
+guess	C ABI export	kind=^unsupported-attribute$
+guess	inline asm	body=asm!
+guess	atomics primitive	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$	name=Atomic
+guess	UnsafeCell/volatile/transmute	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$	name=UnsafeCell|volatile|transmute
+guess	raw pointer (internal)	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$	name=^(core::)?ptr::|^<\*|::add$|::offset$|from_raw_parts|null
+guess	-	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$	name=^crate::|^super::
+guess	core library	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$
+# challoc's C entry points are under src/api/: a pointer there came
+# from the C caller.
+guess	raw pointer from C caller	kind=^(ghost_)?assume_new$	file=^src/api/
+guess	raw pointer (internal)	kind=^(ghost_)?assume_new$
+guess	FFI/syscall	body=(raw::)?syscall[0-6]?\(
+guess	function pointer	body=\(\*?[a-z_.]*\.0\)\(|[^a-z]fn\(
+guess	panic/abort	body=panic!	body!write!|writeln!
+guess	function pointer	body=format_args!|write!|writeln!|panic!
+guess	UnsafeCell/volatile/transmute	body=volatile|UnsafeCell|transmute|\.get\(\)
+guess	atomics primitive	body=compare_exchange|fetch_[a-z]+\(|\.load\(|\.store\(
+guess	raw pointer from C caller	body=\*mut|\*const|ptr::|as_ptr|\.add\(|from_raw_parts	file=^src/api/
+guess	raw pointer (internal)	body=\*mut|\*const|ptr::|as_ptr|\.add\(|from_raw_parts
+#
+# The note on each unsupported-attribute entry (an item marked
+# `#[verifier::assume_unsupported_attributes]`): what backs the symbol.
+unsupported-doc	Verus takes every attribute it refuses on this item on trust (`#[verifier::assume_unsupported_attributes]`), its symbol and section attributes among them; the port's C ABI tests call the symbol.
+#
+# A port whose exports come from a macro (challoc's
+# `verified_export_pair! { fn malloc / je_malloc(..) }` writes two) names
+# it, its file and the two `fn $VAR(` lines whose attributes each export
+# takes:
+# pair	verified_export_pair	src/api/mod.rs	name	je

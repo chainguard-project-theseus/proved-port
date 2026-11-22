@@ -1,0 +1,20 @@
+# An abstract linear token: its `addr` and `value` get meaning only from
+# `HeapPerm::assemble`, `slot_heap_ref` and `TlsSlot::entry`; no
+# separation fact is stated.
+# The const assert checks that it is neither Copy nor Clone.
+HeapPerm	allocator invariant	none (assumption)	trusted (partly checked, const assert: `HeapPerm` in src/vspec/notcopy.rs; not checked: what its `addr` and `value` stand for, which `HeapPerm::assemble`, `slot_heap_ref` and `TlsSlot::entry` (through `slot_ok`) state; and linearity across tokens, which it does not have: each token `TlsSlot::entry` makes holds a heap's permission anew, so verified code cannot duplicate one within a token, but two tokens may each hold one with the same `addr`)	contract 513221394, body 1324333092
+# The whole-heap permission is abstract: that its value holds what
+# `init_fields` wrote through the raw permission (borrowed here, then kept
+# in the heap's ghost state, `Heap::head`) is trusted. Called once per heap,
+# at `heap_new` (pinned by `trusted_mint_sites_are_pinned`). The harness
+# runs the token's writers in `Heap::create`'s order, which
+# `crate::tests::assembled_writes_only_at_checked_sites` pins to heap
+# creation (and `heap_new` to `create_heap_for_thread`, whose token comes
+# from `Heap::create`), and checks the four fields the `ensures` state.
+HeapPerm::assemble	allocator invariant	Kani	trusted (partly checked, Kani: heap::fresh::kani_assemble::writers_store_the_assembled_fields; not checked: any order of the writers but `Heap::create`'s, the one the harness runs; the join itself, that the token's raw permission to the head and `perms`' home headers stand for the whole-heap permission, a premise of Verus's own model that no tool checks; that nothing else writes those fields between the writers and the axiom, which the token's linear permission gives verified code; and the provenance of `shared`, which Kani does not observe)	contract 1966992394, body none
+# A raw-pointer dereference through the abstract heap permission. The
+# harness runs the body on a heap of any bytes and checks that the
+# reference is `&*h`, writable and a valid `Heap`, that the call changes
+# no byte of the heap, and that a write through it is the heap's; the
+# loan, a `Tracked`, has no bytes.
+slot_heap_ref	raw pointer (internal)	Kani	trusted (partly checked, Kani: heap::tcaches::kani_slot_heap_ref::slot_heap_ref_is_the_heap; not checked: the abstract value of the loan's `HeapPerm` (that it describes the heap at `h` before the call and what the reference holds when it ends), a premise of Verus's own model that no tool checks; that nothing else reaches the heap while the reference lives, which the loan's linear `HeapPerm` gives verified code; and the provenance of `h` and of the reference, which Kani cannot observe (the harness compares addresses))	contract 854713595, body 3810982117
