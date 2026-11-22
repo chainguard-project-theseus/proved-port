@@ -4,9 +4,10 @@
 # as the package does, with a stub verus-count; shows with `make -n` the
 # commands verus, kani and the other targets run for each port's
 # settings and that the guards fail them; runs kani.sh with a stub cargo
-# and headers.sh over the filled templates; kit/skip-summary-test.sh
-# and kit/known-failures-test.sh run skip-summary.sh and
-# known-failures.sh on their own, and kit/glibc-max-test.sh runs
+# and headers.sh over the filled templates; kit/skip-summary-test.sh,
+# kit/known-failures-test.sh and kit/header-check-test.sh run
+# skip-summary.sh, known-failures.sh and header-check.sh on their own,
+# and kit/glibc-max-test.sh runs
 # glibc-max.sh on its own, in its own environment. No Verus or Kani
 # runs. busybox for the tools a port's checks have, make (GNU) for the
 # snippet. Blocks.
@@ -72,3 +73,19 @@ checks:
     trigger: [presubmit, postsubmit]
     timeout: 5m
     cmd: [sh, kit/known-failures-test.sh]
+
+  header-check-test:
+    description: >-
+      kit/header-check-test.sh: kit/make/header-check.sh (make
+      header-check) on hand-written upstream and port headers, each
+      output spelled out: matching headers (blanks, comments, directive
+      spacing, order, other prefixes), a continued definition, the value
+      between two comments, a comment marker in a string, comments over
+      lines and `//`, an added `#undef`, a changed value, a dropped suffix
+      or parentheses, a missing or extra definition, a prefix matched
+      only at a name's start, two headers with one differing, no
+      definition under the prefixes, a missing header (ours or
+      upstream's) and usage, with BusyBox's tools.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [sh, kit/header-check-test.sh]

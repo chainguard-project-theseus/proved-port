@@ -285,10 +285,24 @@ if [ "$rc" -ne 0 ] || ! grep -qxF "warning: known failure ($tmp/known.txt): api:
   fail "the installed known-failures.sh, a known failure: got = exit $rc, want = exit 0 with its warning"
 fi
 echo "ok the installed known-failures.sh passes a known failure"
+expect "make -n header-check: the package's header-check.sh" \
+  "$(shows "$installed" header-check HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_)" \
+  "sh $home/make/header-check.sh '/usr/include' 'FOO_' 'include/foo.h'"
+# The installed script runs: a header whose one definition is upstream's.
+[ -f "$home/make/header-check.sh" ] || fail "the installed header-check.sh: got = missing, want = installed"
+mkdir -p "$tmp/hc/up" "$tmp/hc/ours"
+printf '#define FOO_X 1\n' > "$tmp/hc/up/foo.h"
+printf '#define  FOO_X 1 /* ours */\n' > "$tmp/hc/ours/foo.h"
+if sh "$home/make/header-check.sh" "$tmp/hc/up" FOO_ "$tmp/hc/ours/foo.h" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qxF "ok   foo.h: 1 definitions match $tmp/hc/up/foo.h" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed header-check.sh, a matching header: got = exit $rc, want = exit 0 with its ok line"
+fi
+echo "ok the installed header-check.sh passes a matching header"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures verify; do
-  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so SKIP_LOG=test.log SKIP_MANIFEST=skips.txt GLIBC_MAX_LIB=libc.so GLIBC_MAX=2.44 KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=known.txt PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check verify; do
+  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so SKIP_LOG=test.log SKIP_MANIFEST=skips.txt GLIBC_MAX_LIB=libc.so GLIBC_MAX=2.44 KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=known.txt HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_ PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
     || { cat "$tmp/err" >&2; fail "make -n $t, PROVED_PORT_VERSION=$version (KIT's): got = failure, want = success"; }
   if make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$other" > "$tmp/out" 2> "$tmp/err"; then
     fail "make -n $t, PROVED_PORT_VERSION=$other: got = success, want = failure"

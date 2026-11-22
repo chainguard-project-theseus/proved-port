@@ -482,6 +482,14 @@ expect "make -n known-failures, no EXTRA" \
 expect "make -n known-failures, challoc's cgroup verdicts as EXTRA" \
   "$(shows known-failures KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=ci/known-failures.txt KNOWN_FAILURES_EXTRA=ci/cgroup-failures.sh)" \
   "sh $home/make/known-failures.sh 'test.log' 'ci/known-failures.txt' 'ci/cgroup-failures.sh'"
+# header-check passes the upstream directory and the prefixes as one
+# argument each, blanks around them dropped, and each header as its own.
+expect "make -n header-check, the PCRE2 port's headers, the default upstream" \
+  "$(shows header-check HEADER_CHECK_HEADERS=' include/pcre2.h  include/pcre2posix.h ' HEADER_CHECK_PREFIXES=' PCRE2_ REG_ ')" \
+  "sh $home/make/header-check.sh '/usr/include' 'PCRE2_ REG_' 'include/pcre2.h' 'include/pcre2posix.h'"
+expect "make -n header-check, another upstream" \
+  "$(shows header-check HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_ HEADER_CHECK_UPSTREAM=/opt/foo/include)" \
+  "sh $home/make/header-check.sh '/opt/foo/include' 'FOO_' 'include/foo.h'"
 
 # verify runs every target VERIFY_TARGETS lists, in order, each with the
 # command line's variables. Under -n make prints its loop (a line naming
@@ -570,6 +578,9 @@ refuses_make "make -n glibc-max with no GLIBC_MAX_LIB" "GLIBC_MAX_LIB is empty" 
 refuses_make "make -n glibc-max with a blank GLIBC_MAX" "GLIBC_MAX is empty" glibc-max GLIBC_MAX_LIB=libalpha.so GLIBC_MAX=' '
 refuses_make "make -n known-failures with no KNOWN_FAILURES_LOG" "KNOWN_FAILURES_LOG is empty" known-failures KNOWN_FAILURES_LIST=known.txt
 refuses_make "make -n known-failures with a blank KNOWN_FAILURES_LIST" "KNOWN_FAILURES_LIST is empty" known-failures KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=' '
+refuses_make "make -n header-check with no HEADER_CHECK_HEADERS" "HEADER_CHECK_HEADERS is empty" header-check HEADER_CHECK_PREFIXES=FOO_
+refuses_make "make -n header-check with a blank HEADER_CHECK_PREFIXES" "HEADER_CHECK_PREFIXES is empty" header-check HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=' '
+refuses_make "make -n header-check with a blank HEADER_CHECK_UPSTREAM" "HEADER_CHECK_UPSTREAM is empty" header-check HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_ HEADER_CHECK_UPSTREAM=' '
 # The no-kit guard kit/count/README.md gives ports lists every kit
 # target, so each fails with the kit's message where the package is
 # missing: proved_port_phony and verify, in that order.
@@ -700,7 +711,7 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;

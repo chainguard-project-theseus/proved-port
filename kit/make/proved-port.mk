@@ -1,7 +1,8 @@
 # proved-port.mk: the proof targets every proved port shares. The
 # theseus-proved-port package installs it, with kani.sh, headers.sh,
 # lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs,
-# skip-summary.sh, glibc-max.sh, known-failures.sh and VERUS-FILES, in
+# skip-summary.sh, glibc-max.sh, known-failures.sh, header-check.sh and
+# VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
@@ -94,6 +95,10 @@
 #   known-failures    known-failures.sh: after a failed test run, every
 #                     failure in KNOWN_FAILURES_LOG must be listed in
 #                     KNOWN_FAILURES_LIST (challoc's known-failures).
+#   header-check      header-check.sh: the macros HEADER_CHECK_PREFIXES
+#                     names in the port's headers HEADER_CHECK_HEADERS
+#                     equal the C library's in HEADER_CHECK_UPSTREAM
+#                     (the PCRE2 port's header-check).
 #   verify           every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
@@ -309,7 +314,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -537,6 +542,28 @@ known-failures: ## after a failed test run, every failure in KNOWN_FAILURES_LOG 
 	$(if $(strip $(KNOWN_FAILURES_LOG)),,$(error $(known_failures_log_empty)))
 	$(if $(strip $(KNOWN_FAILURES_LIST)),,$(error $(known_failures_list_empty)))
 	sh $(PROVED_PORT_MAKE)known-failures.sh '$(strip $(KNOWN_FAILURES_LOG))' '$(strip $(KNOWN_FAILURES_LIST))'$(if $(strip $(KNOWN_FAILURES_EXTRA)), '$(strip $(KNOWN_FAILURES_EXTRA))')
+# --- header-check ----------------------------------------------------------
+# header-check.sh UPSTREAM PREFIXES HEADER...; its header says what it
+# does. HEADER_CHECK_HEADERS are the port's public headers
+# (include/foo.h include/foo-posix.h), each compared with the file of its
+# name in HEADER_CHECK_UPSTREAM (the C library's installed headers, by
+# default /usr/include, which the C library's -dev package in the port's
+# check environment fills), for the macros named with a prefix of
+# HEADER_CHECK_PREFIXES (FOO_ REG_); the target fails while the headers
+# or the prefixes are empty.
+HEADER_CHECK_HEADERS ?=
+HEADER_CHECK_PREFIXES ?=
+HEADER_CHECK_UPSTREAM ?= /usr/include
+header_check_headers_empty = HEADER_CHECK_HEADERS is empty: name the port's public headers (make header-check HEADER_CHECK_HEADERS=include/foo.h)
+header_check_prefixes_empty = HEADER_CHECK_PREFIXES is empty: name the prefixes of the C library's macros to compare (HEADER_CHECK_PREFIXES="FOO_ REG_")
+header_check_upstream_empty = HEADER_CHECK_UPSTREAM is empty: name the C library's installed include directory (by default /usr/include)
+
+header-check: ## the macros HEADER_CHECK_PREFIXES names in the port's headers HEADER_CHECK_HEADERS equal the C library's in HEADER_CHECK_UPSTREAM (header-check.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(HEADER_CHECK_HEADERS)),,$(error $(header_check_headers_empty)))
+	$(if $(strip $(HEADER_CHECK_PREFIXES)),,$(error $(header_check_prefixes_empty)))
+	$(if $(strip $(HEADER_CHECK_UPSTREAM)),,$(error $(header_check_upstream_empty)))
+	sh $(PROVED_PORT_MAKE)header-check.sh '$(strip $(HEADER_CHECK_UPSTREAM))' '$(strip $(HEADER_CHECK_PREFIXES))' $(foreach h,$(HEADER_CHECK_HEADERS),'$(h)')
 
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
@@ -561,7 +588,7 @@ known-failures: ## after a failed test run, every failure in KNOWN_FAILURES_LOG 
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end
