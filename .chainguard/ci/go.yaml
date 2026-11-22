@@ -63,11 +63,13 @@ checks:
     description: >-
       kit/perf/stats, the bench stats tool (PLAN step 6, the Go
       replacement for a port's awk medians, comparison and tallies, and
-      its pull's relabel, output, counter and md5 checks): gofmt lists
-      no file, go vet passes, and go test passes (its medians,
-      comparisons, tallies, relabelling and findings against goldens the
-      reference awk in testdata/ref wrote, hand-worked bands, comparison
-      lines and findings, and the input and usage it refuses).
+      its pull's relabel, output, counter and md5 checks, and the
+      sanity gate before a full run): gofmt lists no file, go vet
+      passes, and go test passes (its medians, comparisons, tallies,
+      relabelling and findings against goldens the reference awk in
+      testdata/ref wrote, hand-worked bands, comparison lines and
+      findings, hand-worked gate lines with exact bounds, and the input
+      and usage it refuses).
     trigger: [presubmit, postsubmit]
     timeout: 10m
     cmd:
@@ -86,8 +88,8 @@ checks:
       rounds.sh's -n order against a hand-worked rotation, its raw lines
       (exact first-match counts, empty and not-counted counts, output
       flattening and -w, ARM and ROUND, -g, -c), a failing command's
-      line and exit, its refusals, the lines through stats relabel and
-      check, -E's event lists per arch (events.tsv's aarch64 frontend
+      line and exit, its refusals, the lines through stats relabel,
+      check and gate, -E's event lists per arch (events.tsv's aarch64 frontend
       list, a file of its own with -f and -a, uname -m by a stand-in,
       and the lookup's refusals; -g with other than two events is
       refused), and md5.sh's bracket, missing-file
