@@ -44,10 +44,17 @@ package main
 // spaces. The spacing between md5 and file does not matter, where the
 // awk compared whole lines.
 //
-// It exits 1 after printing any, and refuses (exit 1, naming the log and
-// line) a line that starts "md5sum: " (md5sum's error for a file it
-// could not read), and (exit 1) a log with no md5sum line. A pull read
-// each of those as no change.
+// A line "== LABEL" starts a side of the bracket (what md5.sh writes,
+// and port A's logs). Sides pair in order across the logs, (1, 2),
+// (3, 4) and so on, and both sides of a pair must name the same files.
+//
+// It exits 1 after printing any, and refuses (exit 1) what a pull read
+// as no change: a line that starts "md5sum: " (md5sum's error for a
+// file it could not read); an md5sum line with md5sum's leading
+// backslash (an escaped name, not read); an md5sum line before any side
+// line (each naming the log and line); a log with no md5sum line; fewer
+// than two sides or an odd number (a run that stopped after its before
+// side); and a file one side of a pair has and the other lacks.
 
 import (
 	"fmt"
@@ -230,17 +237,37 @@ func runMD5(args []string) ([]string, error) {
 	if fs.NArg() == 0 {
 		return nil, errUsage{"stats md5: want at least one log"}
 	}
+	// side is one side of a bracket: its "== LABEL" line and the files
+	// its md5sum lines name.
+	type side struct {
+		label, where string
+		files        map[string]bool
+	}
+	var sides []*side
 	sums := map[string]map[string]bool{}
 	for _, path := range fs.Args() {
 		n := 0
-		err := readTSV(path, func(f []string, _ int) error {
+		err := readTSV(path, func(f []string, ln int) error {
 			l := strings.Join(f, "\t")
+			if label, ok := strings.CutPrefix(l, "== "); ok {
+				sides = append(sides, &side{label, fmt.Sprintf("%s:%d", path, ln), map[string]bool{}})
+				return nil
+			}
 			// md5sum's own error line: a file it could not read.
 			if strings.HasPrefix(l, "md5sum: ") {
 				return fmt.Errorf("md5sum could not read a file: %s", l)
 			}
+			// md5sum escapes a name holding a backslash or newline and
+			// marks the line with a leading backslash.
+			if _, _, ok := md5Line(strings.TrimPrefix(l, `\`)); ok && strings.HasPrefix(l, `\`) {
+				return fmt.Errorf("an escaped file name (md5sum's leading backslash) is not read: %s", l)
+			}
 			if sum, file, ok := md5Line(l); ok {
+				if len(sides) == 0 {
+					return fmt.Errorf(`an md5sum line before any "== LABEL" side line`)
+				}
 				n++
+				sides[len(sides)-1].files[file] = true
 				if sums[file] == nil {
 					sums[file] = map[string]bool{}
 				}
@@ -253,6 +280,26 @@ func runMD5(args []string) ([]string, error) {
 		}
 		if n == 0 {
 			return nil, fmt.Errorf("stats md5: %s: no md5sum line", path)
+		}
+	}
+	// Sides pair in order, across the logs: (1, 2), (3, 4), ... A run
+	// that stopped after its before side, or a cut fetch, leaves one
+	// side unpaired or short of files.
+	if len(sides) < 2 || len(sides)%2 != 0 {
+		return nil, fmt.Errorf(`stats md5: %d "== LABEL" sides; want before-and-after pairs`, len(sides))
+	}
+	for i := 0; i < len(sides); i += 2 {
+		for _, p := range [][2]*side{{sides[i], sides[i+1]}, {sides[i+1], sides[i]}} {
+			var lack []string
+			for file := range p[0].files {
+				if !p[1].files[file] {
+					lack = append(lack, file)
+				}
+			}
+			if len(lack) > 0 {
+				sort.Strings(lack)
+				return nil, fmt.Errorf("stats md5: side %q (%s) has no md5 of %s, which side %q (%s) has", p[1].label, p[1].where, strings.Join(lack, ", "), p[0].label, p[0].where)
+			}
 		}
 	}
 	var out []string

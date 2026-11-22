@@ -372,8 +372,17 @@ is deleted in that PR.
    and `md5` (a file with more than one md5 across the logs), checked
    by the go.yaml check `stats-test` against goldens the reference awk
    in `kit/perf/stats/testdata/ref` writes. The package does not
-   install it yet. Still to come: the noise-baseline verdicts, the
-   table join, the box skeleton and the pull's fetch.
+   install it yet. The box's run skeleton is `kit/perf/box` (#180):
+   `rounds.sh` (rounds with the arms rotated per round, one perf stat
+   line per run in the layout stats reads) and `md5.sh` (one side of
+   the md5 bracket), checked by the go.yaml check `box-test` with
+   stand-in perf and taskset. Still to come: the noise-baseline
+   verdicts, the table join, the per-port workload files, the pull's
+   fetch, and the rest of section 3's item 5 (the box run skeleton):
+   arms by sha with tarball and library md5s (the arm build), the box
+   setup and phase lock, `perf stat` event lists per arch, one
+   `systemd-run` unit per run, the sanity gate before the full run,
+   and start and stop with cost logging.
 7. **Emulator, codegen diff, fast-path budget, noalias check.**
    Emulator: the three variants reconciled into `kit/perf/emu/` (no port
    had it in tree). challoc: `scripts/codegen-diff.sh`, `ci/codegen.sh`,
