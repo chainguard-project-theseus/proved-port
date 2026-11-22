@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -29,9 +30,8 @@ type scanner struct {
 	verifiedImpl map[string]bool
 	// unsafeImpl[type]: `FILE:LINE (unsafe impl T)` items joined by `, `.
 	unsafeImpl map[string]string
-	pairName   string // pair_attrs of the macro's first and second fn
-	pairJe     string
-	lex        lexer // the current file's literals and comments
+	pairTmpl   []pairTemplate // the export macro's template per VAR
+	lex        lexer          // the current file's literals and comments
 
 	file string
 	ln   int
@@ -47,7 +47,15 @@ type scanner struct {
 	inverus                    bool
 	verusd                     int
 	pairln, paird              int
-	pairdef                    bool // in the pair macro's macro_rules! body
+	pairAcc                    string // a list form's names read so far
+	pairAccAt                  int
+	pairAccAttrs               string       // the declaration's attributes
+	fileToks                   []ptok       // the file's tokens, for pairUses
+	pairUse                    map[int]bool // lines the line reader took as macro uses
+	pairDefs                   int          // definitions read in the rules' FILE
+	pairToks                   []ptok       // the open invocation's tokens
+	pairGot                    []string     // the names its lines gave
+	pairdef                    bool         // in the pair macro's macro_rules! body
 	pairdefd                   int
 	implname                   []string
 	impld                      []int
@@ -312,7 +320,9 @@ func (s *scanner) newFile(file string) {
 	s.lastfn, s.pendimpl = "", ""
 	s.inverus = false
 	s.pairln = 0
+	s.pairAcc, s.pairAccAttrs = "", ""
 	s.pairdef = false
+	s.fileToks, s.pairUse = nil, map[int]bool{}
 }
 
 // typeImpl records an `unsafe impl` of Send or Sync on the current line,
@@ -539,16 +549,24 @@ func (s *scanner) line(raw, c string) {
 			s.unread(t, strings.Trim(m, " \t#[]():,"))
 		}
 	}
-	if s.pairln != 0 {
-		if m, ok := match(rePairFn, t); ok {
-			p := strings.ReplaceAll(m[3:], " ", "")
-			pr := strings.Split(p, "/")
-			mac := s.rules.PairMacro
-			if s.pairName == "" || s.pairJe == "" {
-				s.errs = append(s.errs, fmt.Sprintf("seams: %s:%d: no %s! attributes in %s", s.file, s.ln, mac, s.rules.PairFile))
-			}
-			s.unsupported(pr[0], s.pairln, s.uattrs+pairAttrs(s.pairName)+"pub extern \"C\" fn "+pr[0]+" ("+mac+"!)")
-			s.unsupported(pr[1], s.pairln, s.uattrs+pairAttrs(s.pairJe)+"pub extern \"C\" fn "+pr[1]+" ("+mac+"!)")
+	// A line directly inside an export macro invocation: each `fn` line
+	// there names exports, in the rules' form. One the form does not
+	// read would leave its exports out: fail instead.
+	// A list form's names may run over lines (`fn f [` then one name a
+	// line, as rustfmt writes them): read on through the `]`.
+	// The declaration's own attributes (above its `fn` line) go with
+	// the names, wherever the `]` falls.
+	if s.pairAcc != "" {
+		s.pairAcc += " " + t
+		if strings.Contains(t, "]") {
+			s.pairExports(s.pairAcc, s.pairAccAttrs)
+			s.pairAcc, s.pairAccAttrs = "", ""
+		}
+	} else if s.pairln != 0 && s.depth == s.paird+1 && reFnLine.MatchString(t) {
+		if s.rules.PairForm == "list" && reListOpen.MatchString(t) && !strings.Contains(t, "]") {
+			s.pairAcc, s.pairAccAt, s.pairAccAttrs = t, s.ln, s.uattrs
+		} else {
+			s.pairExports(t, s.uattrs)
 		}
 	}
 
@@ -588,15 +606,47 @@ func (s *scanner) line(raw, c string) {
 		s.inverus = true
 		s.verusd = s.depth
 	}
-	if s.rules.PairMacro != "" && strings.HasPrefix(t, s.rules.PairMacro+"!") && pairOpen(t[len(s.rules.PairMacro)+1:]) {
-		s.pairln = s.ln
-		s.paird = s.depth
-	}
 	// The pair macro's own definition: its exports' attributes are read
-	// at each invocation, so they are no unread item here.
+	// at each invocation, so they are no unread item here, and a call
+	// of itself in it (its first line included) is no invocation.
 	if s.rules.PairMacro != "" && !s.pairdef && macroDef(t, s.rules.PairMacro) && opens > closes {
 		s.pairdef = true
 		s.pairdefd = s.depth
+	}
+	if s.rules.PairMacro != "" && !s.pairdef {
+		u := pairInvocation(t, s.rules.PairMacro)
+		if u != invNone {
+			s.pairUse[s.ln] = true
+		}
+		switch u {
+		case invOpen:
+			if s.pairln != 0 {
+				s.errs = append(s.errs, fmt.Sprintf("seams: %s:%d: a %s! invocation inside another, which the scan does not read: %s", s.file, s.ln, s.rules.PairMacro, t))
+				break
+			}
+			s.pairln = s.ln
+			s.paird = s.depth
+		case invUnread:
+			s.errs = append(s.errs, fmt.Sprintf("seams: %s:%d: a use of %s! the scan does not read as an invocation (write `%s! {` or `path::%s! {`, its fn lines below it): %s", s.file, s.ln, s.rules.PairMacro, s.rules.PairMacro, s.rules.PairMacro, t))
+		}
+	}
+	// The definition ends at its closing brace, not at its line's end:
+	// code after that brace on the line (`} exports! {`) would be read
+	// as part of the definition, exempt. Refuse it.
+	if s.pairdef {
+		d := s.depth
+		for i := 0; i < len(c); i++ {
+			if c[i] == '{' {
+				d++
+			} else if c[i] == '}' {
+				if d--; d <= s.pairdefd {
+					if rest := trim(c[i+1:]); rest != "" && rest != ";" {
+						s.errs = append(s.errs, fmt.Sprintf("seams: %s:%d: code after the closing brace of macro_rules! %s on its line, which the scan would read as part of the definition (start it on a line of its own): %s", s.file, s.ln, s.rules.PairMacro, rest))
+					}
+					break
+				}
+			}
+		}
 	}
 	s.depth += opens - closes
 	s.popImpls()
@@ -605,72 +655,505 @@ func (s *scanner) line(raw, c string) {
 	}
 	if s.pairln != 0 && s.depth <= s.paird {
 		s.pairln = 0
+		if s.pairAcc != "" {
+			s.errs = append(s.errs, fmt.Sprintf("seams: %s:%d: the %s! invocation ends inside the list of names that starts here", s.file, s.pairAccAt, s.rules.PairMacro))
+			s.pairAcc, s.pairAccAttrs = "", ""
+		}
 	}
 	if s.pairdef && s.depth <= s.pairdefd {
 		s.pairdef = false
 	}
 }
 
-// pairOpen: the rest of a `MACRO!` line is ` *\{`.
-func pairOpen(rest string) bool {
-	return strings.HasPrefix(strings.TrimLeft(rest, " "), "{")
+const (
+	invNone   = iota // no use of the macro on the line
+	invOpen          // the line opens an invocation the scan reads
+	invUnread        // a use of the macro the scan cannot read
+)
+
+// pairInvocation reads the code line t for uses of the export macro.
+// It opens an invocation when the line is `MACRO! {` with nothing after
+// the brace, the name alone or at the end of a path (`width::MACRO! {`,
+// `crate::width::MACRO! {`, `::m::MACRO! {`). Any other use (another
+// delimiter, an expression, names on the line itself) would write
+// exports the scan never reads, so it is invUnread. Blanks may stand
+// between the name and its `!` (`MACRO ! {`; a comment there is blanks
+// in the lexed line t).
+func pairInvocation(t, macro string) int {
+	found := false
+	for i := 0; ; {
+		j := strings.Index(t[i:], macro)
+		if j < 0 {
+			break
+		}
+		j += i
+		i = j + len(macro)
+		if j > 0 && isIdentByte(t[j-1]) {
+			continue // another name that ends in this one
+		}
+		k := i
+		for k < len(t) && (t[k] == ' ' || t[k] == '\t') {
+			k++
+		}
+		if k >= len(t) || t[k] != '!' || k+1 < len(t) && t[k+1] == '=' {
+			continue // the name, not a macro call (`use w::MACRO;`, MACRO_x)
+		}
+		i = k + 1
+		found = true
+		if p := t[:j]; p != "" && !rePathPrefix.MatchString(p) {
+			return invUnread
+		}
+		rest := strings.TrimLeft(t[i:], " \t")
+		if !strings.HasPrefix(rest, "{") || trim(rest[1:]) != "" {
+			return invUnread
+		}
+	}
+	if found {
+		return invOpen
+	}
+	return invNone
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= 0x80
+}
+
+// pairExports reads the export names on an invocation's `fn` line t in
+// the rules' form and writes an unsupported-attribute entry for each,
+// with the declaration's own attribute lines (uattrs), the template's
+// attributes and its item line; a line the form does not read, names
+// that do not fit the VARs, or a template not found in the macro's file
+// is an input error.
+func (s *scanner) pairExports(t, uattrs string) {
+	r := s.rules
+	mac := r.PairMacro
+	fail := func(format string, a ...any) {
+		s.errs = append(s.errs, fmt.Sprintf("seams: %s:%d: ", s.file, s.ln)+fmt.Sprintf(format, a...))
+	}
+	var names []string
+	switch r.PairForm {
+	case "slash":
+		if m, ok := match(rePairFn, t); ok {
+			names = strings.Split(strings.ReplaceAll(m[3:], " ", ""), "/")
+		}
+	case "list":
+		if m, ok := match(reListFn, t); ok {
+			l := m[strings.IndexByte(m, '[')+1 : len(m)-1]
+			for _, n := range strings.Split(l, ",") {
+				if n = strings.Trim(n, " \t"); n != "" {
+					names = append(names, n)
+				}
+			}
+		}
+	}
+	if names == nil {
+		form := "fn a / b(..)"
+		if r.PairForm == "list" {
+			form = "fn f [a, b, ...] (..)"
+		}
+		fail("a fn line in a %s! invocation that the %s form (%s, its names on that line) does not read: %s", mac, r.PairForm, form, t)
+		return
+	}
+	if len(r.PairVars) != 1 && len(r.PairVars) != len(names) {
+		fail("%s! names %d exports here, but the rules give %d template VARs (want one for every name, or one per name)", mac, len(names), len(r.PairVars))
+		return
+	}
+	for i, n := range names {
+		k := 0
+		if len(r.PairVars) > 1 {
+			k = i
+		}
+		tp := s.pairTmpl[k]
+		if tp.attrs == "" {
+			fail("no %s! attributes in %s", mac, r.PairFile)
+		}
+		item := tp.item + " fn "
+		if tp.item == "" {
+			item = "fn "
+		}
+		s.unsupported(n, s.pairln, uattrs+pairAttrs(tp.attrs)+item+n+" ("+mac+"!)")
+		s.pairGot = append(s.pairGot, n)
+	}
+}
+
+// ptok is a token of an invocation's code, with its line.
+type ptok struct {
+	s   string
+	ln  int
+	def bool // on a line of the export macro's definition
+}
+
+// pairUses reads a source file's tokens, so a name, its `!` and its
+// `{` split over lines are seen as one use: a `macro_rules! MACRO` in
+// a file other than the rules' FILE, or a second one in FILE, would be
+// exempted while its exports take FILE's template; a `MACRO !` outside
+// the definition on a line the line reader did not take as an
+// invocation (or refuse), or `MACRO as`, would leave exports out. Each
+// is an input error.
+func (s *scanner) pairUses() {
+	mac := s.rules.PairMacro
+	t := s.fileToks
+	at := func(k int) string {
+		if k < len(t) {
+			return t[k].s
+		}
+		return ""
+	}
+	bad := func(ln int, format string, a ...any) {
+		s.errs = append(s.errs, fmt.Sprintf("seams: %s:%d: ", s.file, ln)+fmt.Sprintf(format, a...))
+	}
+	for k, x := range t {
+		if x.s == "macro_rules" && at(k+1) == "!" && at(k+2) == mac {
+			switch {
+			case s.file != s.rules.PairFile:
+				bad(x.ln, "a macro_rules! %s outside %s, the file the rules read its exports' attributes from (rename one, or name this file in the rules)", mac, s.rules.PairFile)
+			case s.pairDefs > 0:
+				bad(x.ln, "a second macro_rules! %s in %s: the rules read the attributes of the first only", mac, s.file)
+			}
+			if s.file == s.rules.PairFile {
+				s.pairDefs++
+			}
+			continue
+		}
+		if x.def || x.s != mac || s.pairUse[x.ln] {
+			continue
+		}
+		switch {
+		case at(k+1) == "as":
+			bad(x.ln, "%s renamed with `as`, so the scan cannot find its invocations (import and invoke it by its own name)", mac)
+		case at(k+1) == "!" && at(k+2) != "=":
+			bad(x.ln, "a use of %s! the scan does not read as an invocation (write `%s! {` with the name, its `!` and the `{` on one line, its fn lines below it)", mac, mac)
+		}
+	}
+}
+
+// tokens splits a lexed code line into identifiers (and numbers) and
+// single punctuation bytes; a literal's blanked contents are an
+// identifier between its quotes.
+func tokens(c string, ln int) []ptok {
+	var out []ptok
+	for i := 0; i < len(c); {
+		switch ch := c[i]; {
+		case ch == ' ' || ch == '\t' || ch == '\r' || ch == '\f':
+			i++
+		case isIdentByte(ch):
+			j := i
+			for j < len(c) && isIdentByte(c[j]) {
+				j++
+			}
+			out = append(out, ptok{s: c[i:j], ln: ln})
+			i = j
+		default:
+			out = append(out, ptok{s: c[i : i+1], ln: ln})
+			i++
+		}
+	}
+	return out
+}
+
+// pairCollect follows an export macro invocation over lines: called
+// after each source line with the invocation line before it, it keeps
+// the tokens of the lines inside one and checks them when it closes.
+func (s *scanner) pairCollect(before int, beforeDef bool, c string) {
+	if s.rules.PairMacro == "" {
+		return
+	}
+	// Every line's tokens, for pairUses; those of the definition's
+	// lines marked.
+	inDef := beforeDef || s.pairdef
+	for _, k := range tokens(c, s.ln) {
+		k.def = inDef
+		s.fileToks = append(s.fileToks, k)
+	}
+	if before == 0 {
+		if s.pairln == s.ln {
+			s.pairToks, s.pairGot = nil, nil
+		}
+		return
+	}
+	s.pairToks = append(s.pairToks, tokens(c, s.ln)...)
+	if s.pairln == 0 {
+		s.pairCheck(before)
+	}
+}
+
+// pairCheck reads a closed invocation's tokens as the macro's grammar
+// in the rules' form, a sequence of declarations, each
+//
+//	#[attr]* fn NAME / NAME ...      (slash)
+//	#[attr]* fn BODY [NAME, ...] ... (list)
+//
+// whose rest runs to a `;` outside brackets or through a `{...}` group
+// (then an optional `;`), up to the invocation's closing `}`. The names
+// it declares must be the names the line reader gave: a declaration the
+// lines did not read (its `fn` and names split over lines, two on one
+// line, a grammar with no `fn`, macro-written tokens) would otherwise
+// leave exports out of the ledger.
+func (s *scanner) pairCheck(at int) {
+	t := s.pairToks
+	mac := s.rules.PairMacro
+	i := 0
+	fail := func(what string) {
+		ln := s.ln
+		got := "the end of the file"
+		if i < len(t) {
+			ln, got = t[i].ln, "`"+t[i].s+"`"
+		}
+		s.errs = append(s.errs, fmt.Sprintf("seams: %s:%d: the %s! invocation at line %d does not read as %s declarations: want %s, got %s", s.file, ln, mac, at, s.rules.PairForm, what, got))
+	}
+	is := func(x string) bool { return i < len(t) && t[i].s == x }
+	ident := func() (string, bool) {
+		if i < len(t) && (t[i].s[0] == '_' || t[i].s[0] >= 'A' && t[i].s[0] <= 'Z' || t[i].s[0] >= 'a' && t[i].s[0] <= 'z') {
+			i++
+			return t[i-1].s, true
+		}
+		return "", false
+	}
+	var names []string
+	for !is("}") {
+		for is("#") {
+			i++
+			if is("!") {
+				i++
+			}
+			if !is("[") {
+				fail("`[` after `#`")
+				return
+			}
+			d := 0
+			for ; i < len(t); i++ {
+				if t[i].s == "[" {
+					d++
+				} else if t[i].s == "]" {
+					if d--; d == 0 {
+						break
+					}
+				}
+			}
+			if i >= len(t) {
+				fail("the attribute's `]`")
+				return
+			}
+			i++
+		}
+		if !is("fn") {
+			fail("`fn` (or `#[` or the invocation's `}`)")
+			return
+		}
+		i++
+		first, ok := ident()
+		if !ok {
+			fail("a name after `fn`")
+			return
+		}
+		if s.rules.PairForm == "slash" {
+			if !is("/") {
+				fail("`/` after `fn " + first + "`")
+				return
+			}
+			i++
+			second, ok := ident()
+			if !ok {
+				fail("a second name after `/`")
+				return
+			}
+			names = append(names, first, second)
+		} else {
+			if !is("[") {
+				fail("`[` after `fn " + first + "`")
+				return
+			}
+			i++
+			for {
+				n, ok := ident()
+				if !ok {
+					fail("a name in the list")
+					return
+				}
+				names = append(names, n)
+				if is(",") {
+					i++
+				} else if !is("]") {
+					fail("`,` or `]` after a name")
+					return
+				}
+				if is("]") {
+					i++
+					break
+				}
+			}
+		}
+		// The declaration's rest: to a `;` outside brackets, or through
+		// a `{...}` group outside brackets.
+		d := 0
+		for {
+			if i >= len(t) {
+				fail("the declaration's end (`;` or a `{...}` body)")
+				return
+			}
+			x := t[i].s
+			i++
+			if x == "(" || x == "[" || x == "{" {
+				d++
+				continue
+			}
+			if x == ")" || x == "]" || x == "}" {
+				if d == 0 {
+					i--
+					fail("the declaration's end (`;` or a `{...}` body)")
+					return
+				}
+				if d--; d == 0 && x == "}" {
+					if is(";") {
+						i++
+					}
+					break
+				}
+				continue
+			}
+			if x == ";" && d == 0 {
+				break
+			}
+		}
+	}
+	if strings.Join(names, " ") != strings.Join(s.pairGot, " ") {
+		s.errs = append(s.errs, fmt.Sprintf("seams: %s:%d: the %s! invocation declares %s, but its lines read as %s (write each declaration's `fn` and names on one line of their own)", s.file, at, mac, orNone(names), orNone(s.pairGot)))
+	}
+}
+
+func orNone(n []string) string {
+	if len(n) == 0 {
+		return "no exports"
+	}
+	return strings.Join(n, ", ")
 }
 
 // pairAttrs is the `@@`-joined attribute lines one per line.
 func pairAttrs(s string) string { return strings.ReplaceAll(s, "@@", "\n") }
 
-// readPairAttrs is seams.sh's pair_attrs: the attribute lines the pair
-// macro writes above its `fn $VAR(` export, `$(#[$m])*` included, joined
-// by `@@`; "" when the macro or the line is missing. An attribute that
-// spans lines is read through its closing bracket.
-func readPairAttrs(text, macro, v string) string {
-	brackets := func(x string) int { return strings.Count(x, "[") - strings.Count(x, "]") }
-	fn := "fn $" + v + "("
+// pairTemplate is an export's template in the macro's definition: the
+// attribute lines above its `fn $VAR(` (`@@`-joined, "" when the macro
+// or the line is missing) and the item's qualifiers before the `fn`
+// (`pub extern "C"`, `pub unsafe extern "C"`).
+type pairTemplate struct {
+	attrs, item string
+	found, dup  int // the template's line, and a second one's (0: none)
+	split       int // a template whose head runs over lines (0: none)
+}
+
+// readPairAttrs is seams.sh's pair_attrs: the attribute lines the export
+// macro writes directly above its `fn $VAR(` export, `$(#[$m])*`
+// included, lines that hold only comments (`//` and block comments, a
+// block comment over several lines too) or nothing skipped; any other
+// line starts the list again. The file is read with the lexer, so a
+// comment or literal never counts as code; an attribute's text has its
+// comments dropped. An attribute that spans lines is read through its
+// closing bracket.
+func readPairAttrs(text, macro, v string) pairTemplate {
+	brackets := func(c string) int { return strings.Count(c, "[") - strings.Count(c, "]") }
+	// A template head is `fn $VAR` as tokens, followed by anything but a
+	// `:` (a matcher's `fn $VAR:ident`) or more of a name (`fn $VARx`):
+	// `(`, `<'a>(` and the line's end alike. Blanks may stand between
+	// the tokens (a macro body is not rustfmt'd).
+	fnRe := regexp.MustCompile(`(^|[^A-Za-z0-9_])(fn[ \t]+\$[ \t]*` + regexp.QuoteMeta(v) + `)[ \t]*([^A-Za-z0-9_: \t]|$)`)
+	fnAt := func(c string) int {
+		if m := fnRe.FindStringSubmatchIndex(c); m != nil {
+			return m[4]
+		}
+		return -1
+	}
+	// The same across line ends, over the definition's whole code: a
+	// template split over lines (`fn` then `$VAR`) is still one.
+	fnAll := regexp.MustCompile(`(^|[^A-Za-z0-9_])(fn\s+\$\s*` + regexp.QuoteMeta(v) + `)\s*([^A-Za-z0-9_:\s]|$)`)
+	var def strings.Builder
+	var defLn []int // the line of each byte of def
+	var lx lexer
 	on := false
 	open := 0
 	a, cur := "", ""
-	for _, l := range splitLines(text) {
-		if macroDef(l, macro) {
-			on = true
-			continue
+	var tp pairTemplate
+	// The definition's brace depth: the search ends where it closes, and
+	// a second `fn $VAR(` in it (another arm) is reported, since only the
+	// first one's attributes are read.
+	depth, started := 0, false
+	for n, l := range splitLines(text) {
+		c := lx.code(l)
+		if on {
+			if started && depth <= 0 {
+				break
+			}
+			depth += strings.Count(c, "{") - strings.Count(c, "}")
+			if depth > 0 {
+				started = true
+			}
+			def.WriteString(c + "\n")
+			for range len(c) + 1 {
+				defLn = append(defLn, n+1)
+			}
 		}
 		if !on {
+			on = macroDef(trim(c), macro)
+			if on {
+				depth = strings.Count(c, "{") - strings.Count(c, "}")
+				started = depth > 0
+				// A definition that closes on its own line holds no
+				// template the search reads: stop, not run on into
+				// whatever macro follows.
+				if strings.Contains(c, "{") && depth <= 0 {
+					break
+				}
+			}
+			continue
+		}
+		if tp.found != 0 {
 			continue
 		}
 		if open > 0 {
-			x := trim(l)
-			cur += " " + x
-			open += brackets(x)
+			cur += " " + trim(strip(l, c))
+			open += brackets(c)
 			if open <= 0 {
 				a += cur + "@@"
 				open = 0
 			}
 			continue
 		}
-		if strings.Contains(l, fn) {
-			return a
+		if i := fnAt(c); i >= 0 {
+			tp = pairTemplate{attrs: a, item: trim(strip(l[:i], c[:i])), found: n + 1}
+			continue
 		}
-		if rePairAttr.MatchString(l) {
-			x := sub(reLead, "", l)
-			open = brackets(x)
+		if rePairAttr.MatchString(c) {
+			x := sub(reLead, "", strip(l, c))
+			open = brackets(c)
 			if open > 0 {
-				cur = sub(reTrail, "", x)
+				cur = x
 				continue
 			}
 			a += x + "@@"
 			open = 0
 			continue
 		}
-		if reExternFn.MatchString(l) {
+		if trim(c) != "" {
 			a = ""
 		}
 	}
-	return ""
+	// Every template in the definition, line ends included: a second one
+	// is reported, and so is one the line-by-line read did not find (its
+	// head split over lines), since its attributes cannot be read.
+	ms := fnAll.FindAllStringSubmatchIndex(def.String(), -1)
+	switch {
+	case len(ms) >= 2:
+		tp.found, tp.dup = defLn[ms[0][4]], defLn[ms[1][4]]
+	case len(ms) == 1 && tp.found == 0:
+		tp.split = defLn[ms[0][4]]
+	}
+	return tp
 }
 
 var (
-	rePairAttr = re("^[ \t]*(\\$\\()?#\\[")
-	reExternFn = re("^[ \t]*pub extern \"C\" fn ")
+	rePairAttr   = re("^[ \t]*(\\$\\()?#\\[")
+	rePathPrefix = re("^(::)?([A-Za-z_][A-Za-z0-9_]*[ \t]*::[ \t]*)+$")
+	reListOpen   = re("^fn [A-Za-z_][A-Za-z0-9_]*[ \t]*\\[")
+	reListFn     = re("^fn [A-Za-z_][A-Za-z0-9_]*[ \t]*\\[[ \t]*[A-Za-z_][A-Za-z0-9_]*([ \t]*,[ \t]*[A-Za-z_][A-Za-z0-9_]*)*[ \t]*,?[ \t]*\\]")
 )
 
 // splitLines splits text into awk records: a final newline ends the

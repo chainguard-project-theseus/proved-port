@@ -19,9 +19,10 @@ type Rules struct {
 	Categories []string // the categories, in table order
 	ToolOf     map[string]string
 	Guesses    []Guess
-	PairMacro  string // a verified_export_pair!-style macro, or ""
+	PairMacro  string // the export macro (export-macro or pair), or ""
 	PairFile   string
-	PairVars   [2]string
+	PairForm   string   // "slash" (`fn a / b(`) or "list" (`fn f [a, b](`)
+	PairVars   []string // one template VAR for every name, or one per name
 	UnsupDoc   string
 	CiteTags   []string // tags a status cites a check with (`Kani: ...`)
 	Assumption string   // the tool of a seam no check applies to
@@ -136,6 +137,8 @@ func (r *Rules) isTest(p string) bool {
 	return false
 }
 
+var reIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 var guessFields = map[string]bool{"kind": true, "name": true, "file": true, "body": true}
 
 // readRules reads a rules file; the errors name its lines.
@@ -180,12 +183,18 @@ func parseRules(file, data string) (*Rules, error) {
 		// A rule that holds one value may be given once: a second
 		// would silently replace the first.
 		switch f[0] {
-		case "ledger", "source", "command", "seams-doc", "unsupported-doc", "assumption-tool", "pair":
-			if seen[f[0]] {
-				bad("%s given twice", f[0])
+		case "ledger", "source", "command", "seams-doc", "unsupported-doc", "assumption-tool", "pair", "export-macro":
+			// pair is the slash form of export-macro: the two name
+			// the one macro the scan reads, so either is given once.
+			k := f[0]
+			if k == "pair" {
+				k = "export-macro"
+			}
+			if seen[k] {
+				bad("%s given twice", k)
 				continue
 			}
-			seen[f[0]] = true
+			seen[k] = true
 		}
 		// A path is relative to the root and inside it, and is not the
 		// root itself: -write removes every *.rs.md under the ledger.
@@ -303,9 +312,45 @@ func parseRules(file, data string) (*Rules, error) {
 		case "pair":
 			if want(5, "pair<TAB>MACRO<TAB>FILE<TAB>VAR<TAB>VAR") {
 				if c, ok := inTree(f[2]); ok {
-					r.PairMacro, r.PairFile = f[1], c
-					r.PairVars = [2]string{f[3], f[4]}
+					r.PairMacro, r.PairFile, r.PairForm = f[1], c, "slash"
+					r.PairVars = []string{f[3], f[4]}
 				}
+			}
+		case "export-macro":
+			if len(f) < 5 {
+				bad("want export-macro<TAB>MACRO<TAB>FILE<TAB>slash|list<TAB>VAR...")
+				continue
+			}
+			if !want(len(f), "export-macro<TAB>MACRO<TAB>FILE<TAB>slash|list<TAB>VAR...") {
+				continue
+			}
+			if !reIdent.MatchString(f[1]) {
+				bad("export-macro %s: want a macro name (an identifier, no path or !)", f[1])
+				continue
+			}
+			if f[3] != "slash" && f[3] != "list" {
+				bad("export-macro %s: form %s: want slash or list", f[1], f[3])
+				continue
+			}
+			// slash names two exports: one VAR for both or one each.
+			if f[3] == "slash" && len(f) > 6 {
+				bad("export-macro %s: the slash form names two exports: want one VAR or two", f[1])
+				continue
+			}
+			vok := true
+			for _, v := range f[4:] {
+				if !reIdent.MatchString(v) {
+					bad("export-macro %s: VAR %s: want an identifier (the name after $ in the definition's `fn $VAR(`)", f[1], v)
+					vok = false
+					break
+				}
+			}
+			if !vok {
+				continue
+			}
+			if c, ok := inTree(f[2]); ok {
+				r.PairMacro, r.PairFile, r.PairForm = f[1], c, f[3]
+				r.PairVars = append([]string(nil), f[4:]...)
 			}
 		default:
 			bad("unknown rule %q", f[0])

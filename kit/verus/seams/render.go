@@ -95,8 +95,16 @@ func generate(r *Rules, in input, hashes bool) *result {
 
 	s := newScanner(r)
 	if r.PairMacro != "" {
-		s.pairName = readPairAttrs(in.pairText, r.PairMacro, r.PairVars[0])
-		s.pairJe = readPairAttrs(in.pairText, r.PairMacro, r.PairVars[1])
+		for _, v := range r.PairVars {
+			tp := readPairAttrs(in.pairText, r.PairMacro, v)
+			if tp.dup != 0 {
+				s.errs = append(s.errs, fmt.Sprintf("seams: %s:%d: a second `fn $%s(` in macro_rules! %s (the first is line %d): the rules read the first one's attributes only (give each template its own VAR)", r.PairFile, tp.dup, v, r.PairMacro, tp.found))
+			}
+			if tp.split != 0 {
+				s.errs = append(s.errs, fmt.Sprintf("seams: %s:%d: the `fn $%s(` of macro_rules! %s runs over lines, so the scan cannot read its attributes (write `fn $%s(` on one line)", r.PairFile, tp.split, v, r.PairMacro, v))
+			}
+			s.pairTmpl = append(s.pairTmpl, tp)
+		}
 	}
 	for _, f := range in.sources {
 		s.newFile(f.name)
@@ -104,9 +112,14 @@ func generate(r *Rules, in input, hashes bool) *result {
 			s.ln++
 			c := s.code(l)
 			s.typeImpl(c)
+			before, beforeDef := s.pairln, s.pairdef
 			s.line(l, c)
+			s.pairCollect(before, beforeDef, c)
 		}
 		s.endFile(true)
+		if r.PairMacro != "" {
+			s.pairUses()
+		}
 	}
 	for _, f := range in.tests {
 		s.file = f.name

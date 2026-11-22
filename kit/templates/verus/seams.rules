@@ -91,8 +91,14 @@ guess	raw pointer (internal)	body=\*mut|\*const|ptr::|as_ptr|\.add\(|from_raw_pa
 # `#[verifier::assume_unsupported_attributes]`): what backs the symbol.
 unsupported-doc	Verus takes every attribute it refuses on this item on trust (`#[verifier::assume_unsupported_attributes]`), its symbol and section attributes among them; the port's C ABI tests call the symbol.
 #
-# A port whose exports come from a macro (challoc's
-# `verified_export_pair! { fn malloc / je_malloc(..) }` writes two) names
-# it, its file and the two `fn $VAR(` lines whose attributes each export
-# takes:
-# pair	verified_export_pair	src/api/mod.rs	name	je
+# A port whose exports come from a macro names it, its file, the form of
+# an invocation's `fn` lines and the `fn $VAR(` templates whose
+# attributes each export takes (one for every name, or one per name).
+# challoc's `verified_export_pair! { fn malloc / je_malloc(..) }` writes
+# two, from `fn $name(` and `fn $je(` (the older `pair` line says the
+# same: pair<TAB>MACRO<TAB>FILE<TAB>VAR<TAB>VAR):
+# export-macro	verified_export_pair	src/api/mod.rs	slash	name	je
+# A list form, `fn body [f_8, f_16, f_32] (..)` (the names may run over
+# lines to the `]`), writes one export per name; invoked as
+# `width::exports! {` too:
+# export-macro	exports	src/width.rs	list	name
