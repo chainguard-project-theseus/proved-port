@@ -7,9 +7,10 @@
 # table, the verdict lines, a new skip, a gone one, a missing manifest,
 # a missing or empty log, a log or manifest it cannot read or a tool
 # that fails on one, CI_SKIP_UPDATE=1, the manifest's comments and
-# blanks, the keys it drops, a key that starts with `-`, the bytewise
-# order, its temporary files, and usage. Run it from the repository root. It needs only a POSIX shell
-# and BusyBox's tools.
+# blanks, the keys it drops, a SKIP after a libtest prefix, a key that
+# starts with `-`, the bytewise order, its temporary files, and usage.
+# Run it from the repository root. It needs only a POSIX shell and
+# BusyBox's tools.
 set -eu
 
 script=$(pwd)/kit/make/skip-summary.sh
@@ -185,6 +186,32 @@ cat > want <<'EOF'
 skips match ci/empty.txt
 EOF
 want "lone test/ok keys, an empty key and SKIP not at a line's start are no skips" 0
+
+# --- a SKIP after a libtest prefix (#195) ----------------------------------------------
+# libtest wrote `test foo ... ` and another test's SKIP landed before
+# foo's result: the SKIP is read from the first ` ... SKIP ` on, keyed
+# by its first word (a doctest name with blanks too); a prefix that is
+# not libtest's, a SKIP with no key, and `... SKIPPED` are not skips.
+printf '%s\n' 'test foo ... SKIP c_new no mseal' 'test src/lib.rs - f (line 3) ... SKIP thp/auto off' \
+  'test bar ... SKIP' 'test baz ... SKIPPED x' 'note foo ... SKIP n_x' 'test qux ... ok SKIP o_x' \
+  'test q ... SKIP test' > test.log
+printf '%s\n' thp/auto > ci/prefix.txt
+run test.log ci/prefix.txt
+cat > want <<'EOF'
+### Skips: prefix
+
+2 distinct skips.
+
+| skip | status |
+|---|---|
+| `c_new` | **NEW** |
+| `thp/auto` | expected |
+error: new skip (lost coverage) not in ci/prefix.txt: c_new
+observed skip keys (the manifest if all are expected):
+c_new
+thp/auto
+EOF
+want "a SKIP after a libtest prefix is a skip; other prefixes are not" 1
 
 # --- bytewise order, and a key that starts with - ----------------------------------
 printf '%s\n' 'SKIP alpha a' 'SKIP Zed z' 'SKIP -dash d' 'SKIP _under u' > test.log

@@ -32,6 +32,7 @@ checks:
       skip-summary) on hand-written test logs and manifests, each
       output spelled out: every skip expected, a new skip, a gone one,
       no skips, the manifest's comments and blanks, the keys it drops,
+      a SKIP after a libtest prefix,
       bytewise order, a missing manifest, a missing or empty log, a log
       or manifest it cannot read or a tool that fails on one (stub grep,
       sed and awk), CI_SKIP_UPDATE=1 and usage, with BusyBox's tools.
