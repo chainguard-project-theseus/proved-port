@@ -76,6 +76,28 @@ where it reports drift.
   challoc's exits with sed's status, under pipefail); and an empty log,
   which challoc's passed and the kit's fails. No existing target or
   check changes.
+- `make glibc-max` (#193, `glibc-max.sh`, installed beside
+  perf-budget.sh): challoc's glibc ceiling check (`ci/glibc-max.sh`) as
+  a kit target, in POSIX sh. A port that ships a glibc-linked library
+  names it in `GLIBC_MAX_LIB` and the highest `GLIBC_` symbol version it
+  may need in `GLIBC_MAX` (both required; 2.44 is Wolfi's glibc stream).
+  It reads the library's version needs (`.gnu.version_r`) with
+  binutils' `readelf -V`, prints them, and fails (exit 1) when the
+  highest is above `GLIBC_MAX`, when there is none (not a glibc build),
+  or when the library is missing or readelf cannot read it. A `GLIBC_`
+  node the library defines (`.gnu.version_d`) is no need. An ABI marker
+  need (`GLIBC_ABI_DT_RELR`, from `-z pack-relative-relocs`) needs the
+  glibc release that added it (2.36), printed on a line of its own and
+  held to `GLIBC_MAX` too; a marker the script's table lacks fails,
+  naming it. On the same inputs its output and exit status are
+  challoc's script's, but for five cases: the versions line has no
+  trailing blank; a readelf failure prints `error: readelf -V cannot
+  read SO` (challoc's exits with readelf's status and no line of its
+  own); a `GLIBC_MAX` that is not a version (`2.44a`, empty) is a usage
+  error (exit 2), where challoc's compared it with `sort -V` as given; a
+  library that defines `GLIBC_` nodes, whose definitions challoc's
+  counted as needs; and a library with an ABI marker need, which
+  challoc's did not read. No existing target or check changes.
 
 ### Porting notes
 
@@ -109,6 +131,12 @@ where it reports drift.
    `kit/count/README.md` adds `skip-summary` to its
    `PROVED_PORT_TARGETS` when it starts to use it. A port that does
    neither changes nothing.
+4. Optional: a port with its own copy of challoc's `ci/glibc-max.sh`
+   can call `make glibc-max GLIBC_MAX_LIB=SO GLIBC_MAX=VERSION` in its
+   place (its check environment keeps binutils for readelf) and delete
+   the copy. A port that copied the no-kit guard in
+   `kit/count/README.md` adds `glibc-max` to its `PROVED_PORT_TARGETS`
+   when it starts to use it. A port that does neither changes nothing.
 
 ## 0.4.11
 

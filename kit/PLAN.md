@@ -346,6 +346,10 @@ is deleted in that PR.
    patching and calls the kit ratchet for the per-block comparison;
    `ci/README.md` rows follow. challoc: `ci/glibc-max.sh` moves and its
    callers change the same way.
+   **Status:** the glibc ceiling check is `kit/make/glibc-max.sh` (`make
+   glibc-max GLIBC_MAX_LIB=... GLIBC_MAX=...`, #193), challoc's script
+   in POSIX sh, with `make.yaml`'s `glibc-max-test`. challoc's switch to
+   it is to come. pcre3's ABI and header checks are not yet in the kit.
 5. **Comparison harnesses.** pcre3: `fuzz/diff/` splits into the kit's
    generic driver shell and pcre3's comparison file and `known.c`;
    `ci/fuzz-diff.sh` builds the kit driver against them, under the same
