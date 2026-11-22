@@ -2,7 +2,8 @@
 # theseus-proved-port package installs it, with kani.sh, headers.sh,
 # lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs,
 # skip-summary.sh, glibc-max.sh, known-failures.sh, header-check.sh,
-# abi-elf.sh, kani-quotes.sh, deviations.sh and VERUS-FILES, in
+# abi-elf.sh, kani-quotes.sh, deviations.sh, ledger-active.sh,
+# known-cites.sh and VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
@@ -111,6 +112,11 @@
 #                     DEVIATIONS_LIST holds, each citing an active entry
 #                     of DEVIATIONS_LEDGER (the PCRE2 port's conformance
 #                     ratchet).
+#   known-cites       known-cites.sh: each row of the known-divergence
+#                     table KNOWN_CITES_FILE cites an active entry of
+#                     KNOWN_CITES_LEDGER or an open issue of
+#                     KNOWN_CITES_REPO (the PCRE2 port's fuzz-diff
+#                     known-citations check).
 #   verify           every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
@@ -326,7 +332,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -656,6 +662,40 @@ deviations: ## the failing keys of DEVIATIONS_RESULTS are exactly those DEVIATIO
 	$(if $(filter-out 1,$(strip $(DEVIATIONS_UPDATE))),$(error $(deviations_update_bad)))
 	sh $(PROVED_PORT_MAKE)deviations.sh $(if $(strip $(DEVIATIONS_UPDATE)),--update )'$(strip $(DEVIATIONS_RESULTS))' '$(strip $(DEVIATIONS_LIST))' '$(strip $(DEVIATIONS_LEDGER))'
 
+# --- known-cites -------------------------------------------------------------
+# known-cites.sh FILE LEDGER REPO; its header says what it does.
+# KNOWN_CITES_FILE is the known-divergence table's source (the PCRE2
+# port's fuzz/diff/known.c), KNOWN_CITES_LEDGER the ABI ledger an
+# `ABI-nnn` cite names (by default docs/abi, the kit template's
+# directory; or one file of entries), and KNOWN_CITES_REPO the
+# repository a `TODO(#n)` cite's issue is in, `owner/name`, then any
+# names it had before it moved; the target fails while any is empty.
+# KNOWN_CITES_MACRO names the row macro (empty: KNOWN). The pull
+# request's description is read from KNOWN_CITES_PR_BODY in the
+# environment, where the port's check binds it. An issue whose live
+# state gh cannot check fails the target; KNOWN_CITES_OFFLINE=1 (a
+# local run without gh) makes it a NOTE, and any other non-blank value
+# fails the target. Both are passed to the script stripped, always: make
+# exports a command-line value to the recipe's environment as given, and
+# the script reads an empty one as unset.
+KNOWN_CITES_OFFLINE ?=
+KNOWN_CITES_FILE ?=
+KNOWN_CITES_LEDGER ?= docs/abi
+KNOWN_CITES_REPO ?=
+KNOWN_CITES_MACRO ?=
+known_cites_file_empty = KNOWN_CITES_FILE is empty: name the known-divergence table's source (make known-cites KNOWN_CITES_FILE=fuzz/diff/known.c)
+known_cites_ledger_empty = KNOWN_CITES_LEDGER is empty: name the ABI ledger the ABI-nnn cites name (by default docs/abi)
+known_cites_repo_empty = KNOWN_CITES_REPO is empty: name the repository the TODO cites' issues are in (owner/name)
+known_cites_offline_bad = KNOWN_CITES_OFFLINE is '$(strip $(KNOWN_CITES_OFFLINE))': set it to 1 for a run without gh, or leave it empty
+
+known-cites: ## each row of the known-divergence table KNOWN_CITES_FILE cites an active entry of KNOWN_CITES_LEDGER or an open issue of KNOWN_CITES_REPO (known-cites.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(KNOWN_CITES_FILE)),,$(error $(known_cites_file_empty)))
+	$(if $(strip $(KNOWN_CITES_LEDGER)),,$(error $(known_cites_ledger_empty)))
+	$(if $(strip $(KNOWN_CITES_REPO)),,$(error $(known_cites_repo_empty)))
+	$(if $(filter-out 1,$(strip $(KNOWN_CITES_OFFLINE))),$(error $(known_cites_offline_bad)))
+	KNOWN_CITES_OFFLINE='$(strip $(KNOWN_CITES_OFFLINE))' KNOWN_CITES_MACRO='$(strip $(KNOWN_CITES_MACRO))' sh $(PROVED_PORT_MAKE)known-cites.sh '$(strip $(KNOWN_CITES_FILE))' '$(strip $(KNOWN_CITES_LEDGER))' '$(strip $(KNOWN_CITES_REPO))'
+
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
 # order `make verify` runs them, each in its own make. A package build
@@ -679,7 +719,7 @@ deviations: ## the failing keys of DEVIATIONS_RESULTS are exactly those DEVIATIO
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

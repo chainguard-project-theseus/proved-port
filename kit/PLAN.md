@@ -393,6 +393,16 @@ is deleted in that PR.
    `make.yaml`'s `known-failures-test`; it also counts a failing test
    whose name has a blank (a should_panic test or a doctest), which
    challoc's did not. challoc's switch to it is to come.
+   pcre3's known-table citation check is `kit/make/known-cites.sh`
+   (`make known-cites KNOWN_CITES_FILE=... KNOWN_CITES_REPO=...
+   [KNOWN_CITES_LEDGER=docs/abi] [KNOWN_CITES_MACRO=KNOWN]`, #211),
+   its `--check-known` in POSIX sh with the table, macro and
+   repositories as inputs, reading the ledger with
+   `kit/make/ledger-active.sh` (moved out of deviations.sh, so both
+   read a ledger alike), and `make.yaml`'s `known-cites-test`; on
+   pcre3's table and ledger it passes the same 29 rows. pcre3's switch
+   to it is to come; the rest of the driver shell (loading, preflight,
+   voices, reproducers) is still to split.
 6. **Box skeleton, pull and stats.** Out of `kit/reference/` into
    `kit/perf/` (stats rewritten in Go). pcre3: the generic parts of
    `ci/bench.sh` (the four-way runner, the result-agreement check, the
