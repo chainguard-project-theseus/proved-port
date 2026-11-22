@@ -2,7 +2,7 @@
 # theseus-proved-port package installs it, with kani.sh, headers.sh,
 # lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs,
 # skip-summary.sh, glibc-max.sh, known-failures.sh, header-check.sh,
-# abi-elf.sh, kani-quotes.sh and VERUS-FILES, in
+# abi-elf.sh, kani-quotes.sh, deviations.sh and VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
@@ -106,6 +106,11 @@
 #   kani-quotes       kani-quotes.sh: each Kani record in KANI_QUOTES_DIR
 #                     still quotes, in its section 1, the source it
 #                     names (under KANI_QUOTES_ROOTS).
+#   deviations        deviations.sh: the failing keys of a run's results
+#                     DEVIATIONS_RESULTS are exactly those the list
+#                     DEVIATIONS_LIST holds, each citing an active entry
+#                     of DEVIATIONS_LEDGER (the PCRE2 port's conformance
+#                     ratchet).
 #   verify           every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
@@ -321,7 +326,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -622,6 +627,34 @@ kani-quotes: ## each Kani record in KANI_QUOTES_DIR still quotes the source it n
 	$(if $(strip $(KANI_QUOTES_DIR)),,$(error $(kani_quotes_dir_empty)))
 	$(if $(strip $(KANI_QUOTES_ROOTS)),,$(error $(kani_quotes_roots_empty)))
 	sh $(PROVED_PORT_MAKE)kani-quotes.sh '$(strip $(KANI_QUOTES_DIR))' '$(strip $(KANI_QUOTES_ROOTS))'$(if $(strip $(KANI_QUOTES_SKIP)), '$(strip $(KANI_QUOTES_SKIP))')
+# --- deviations --------------------------------------------------------------
+# deviations.sh [--update] RESULTS LIST LEDGER; its header says what it
+# does. DEVIATIONS_RESULTS is the port's run's `PASS KEY` / `FAIL KEY`
+# file (the PCRE2 port's conformance run writes one, a key per pattern
+# block), DEVIATIONS_LIST the deviations list it is held to
+# (tests/upstream/deviations.txt), and DEVIATIONS_LEDGER the ABI ledger
+# each reason cites (by default docs/abi, the kit template's directory;
+# or one file of entries); the target fails while any is empty.
+# DEVIATIONS_UPDATE=1 drops the listed keys that pass or are gone, then
+# checks; any other non-blank value (0, no) fails the target, so a value
+# meant as "off" never rewrites the list. DEVIATIONS_OUT, in the environment or on the command line,
+# names a directory for the full lists.
+DEVIATIONS_RESULTS ?=
+DEVIATIONS_LIST ?=
+DEVIATIONS_LEDGER ?= docs/abi
+DEVIATIONS_UPDATE ?=
+deviations_results_empty = DEVIATIONS_RESULTS is empty: name the run's PASS/FAIL results file (make deviations DEVIATIONS_RESULTS=target/conformance/results)
+deviations_list_empty = DEVIATIONS_LIST is empty: name the deviations list the results are held to (tests/upstream/deviations.txt)
+deviations_ledger_empty = DEVIATIONS_LEDGER is empty: name the ABI ledger the reasons cite (by default docs/abi)
+deviations_update_bad = DEVIATIONS_UPDATE is '$(strip $(DEVIATIONS_UPDATE))': set it to 1 to drop the listed keys that pass or are gone, or leave it empty
+
+deviations: ## the failing keys of DEVIATIONS_RESULTS are exactly those DEVIATIONS_LIST lists, each citing an active entry of DEVIATIONS_LEDGER (deviations.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(DEVIATIONS_RESULTS)),,$(error $(deviations_results_empty)))
+	$(if $(strip $(DEVIATIONS_LIST)),,$(error $(deviations_list_empty)))
+	$(if $(strip $(DEVIATIONS_LEDGER)),,$(error $(deviations_ledger_empty)))
+	$(if $(filter-out 1,$(strip $(DEVIATIONS_UPDATE))),$(error $(deviations_update_bad)))
+	sh $(PROVED_PORT_MAKE)deviations.sh $(if $(strip $(DEVIATIONS_UPDATE)),--update )'$(strip $(DEVIATIONS_RESULTS))' '$(strip $(DEVIATIONS_LIST))' '$(strip $(DEVIATIONS_LEDGER))'
 
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
@@ -646,7 +679,7 @@ kani-quotes: ## each Kani record in KANI_QUOTES_DIR still quotes the source it n
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

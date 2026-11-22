@@ -360,7 +360,15 @@ is deleted in that PR.
    `kit/make/abi-elf.sh` (`make abi-elf ABI_ELF_LIB=... ABI_ELF_MAP=...
    ABI_ELF_SONAME=...`, #205), with `make.yaml`'s `abi-elf-test`;
    pcre3's C tests, consumer binding and install checks stay in the
-   port, and its switch to the kit target is to come.
+   port, and its switch to the kit target is to come. The deviations
+   ratchet is `kit/make/deviations.sh` (`make deviations
+   DEVIATIONS_RESULTS=... DEVIATIONS_LIST=... [DEVIATIONS_LEDGER=docs/abi]
+   [DEVIATIONS_UPDATE=1]`, #209), pcre3's per-block comparison (a
+   `PASS`/`FAIL` line per key against the reasoned list, strict both
+   ways, reasons citing active ledger entries, `--update` only
+   removes), with `make.yaml`'s `deviations-test` in place of its
+   selftest; pcre3's run, block splitting and display of a new
+   failure's block stay in the port, and its switch is to come.
 5. **Comparison harnesses.** pcre3: `fuzz/diff/` splits into the kit's
    generic driver shell and pcre3's comparison file and `known.c`;
    `ci/fuzz-diff.sh` builds the kit driver against them, under the same

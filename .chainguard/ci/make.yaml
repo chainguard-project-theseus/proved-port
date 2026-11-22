@@ -5,9 +5,10 @@
 # commands verus, kani and the other targets run for each port's
 # settings and that the guards fail them; runs kani.sh with a stub cargo
 # and headers.sh over the filled templates; kit/skip-summary-test.sh,
-# kit/known-failures-test.sh, kit/header-check-test.sh and
-# kit/kani-quotes-test.sh run skip-summary.sh, known-failures.sh,
-# header-check.sh and kani-quotes.sh on their own,
+# kit/known-failures-test.sh, kit/header-check-test.sh,
+# kit/kani-quotes-test.sh and kit/deviations-test.sh run
+# skip-summary.sh, known-failures.sh, header-check.sh, kani-quotes.sh
+# and deviations.sh on their own,
 # and kit/glibc-max-test.sh and kit/abi-elf-test.sh run glibc-max.sh
 # and abi-elf.sh on their own, in their own environments. No Verus or Kani
 # runs. busybox for the tools a port's checks have, make (GNU) for the
@@ -133,3 +134,17 @@ checks:
     trigger: [presubmit, postsubmit]
     timeout: 5m
     cmd: [sh, kit/kani-quotes-test.sh]
+
+  deviations-test:
+    description: >-
+      kit/deviations-test.sh: kit/make/deviations.sh (make deviations)
+      on hand-written results, deviations lists and ABI ledgers (one
+      file, a directory), each output spelled out: a list that matches,
+      a new failure, a listed key that passes or is gone, each kind of
+      unexplained line, the Status forms that count as active, more
+      than 50 of a kind, malformed results, --update (drops, keeps,
+      never adds), DEVIATIONS_OUT's files, names with `|`, `&` and a
+      backslash, missing inputs and usage, with BusyBox's tools.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [sh, kit/deviations-test.sh]

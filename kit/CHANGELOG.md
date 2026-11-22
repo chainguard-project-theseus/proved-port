@@ -349,6 +349,37 @@ where it reports drift.
   The Kani record template's section 1 asks for the clauses through
   the last, and its section 5 names the check. No existing target or
   check changes.
+- `make deviations` (#209, `deviations.sh`, installed beside
+  perf-budget.sh): the deviations ratchet, the per-block comparison of
+  the PCRE2 port's conformance check. The port's run writes
+  `DEVIATIONS_RESULTS`, a `PASS KEY` or `FAIL KEY` line per key (a
+  pattern block); `DEVIATIONS_LIST` holds `KEY ABI-nnn: reason` lines
+  (`#` comments, blank lines); `DEVIATIONS_LEDGER` is the ABI ledger, a
+  directory of `ABI-nnn.md` entries (by default `docs/abi`, the kit
+  template's) or one file of `### ABI-nnn:` entries. Strict both ways
+  (exit 1): a failing key that is not listed; a listed key that passes
+  or is not a key of the run; a listed key with no reason, listed
+  twice, whose reason does not start with `ABI-nnn:` or says nothing
+  after it, or whose entry's Status is not `active`. Malformed results
+  (another word, a key twice, a third field, a blank line, none) fail,
+  and so does a malformed ledger (an entry with no `- **Status:**` line
+  or more than one, fenced code not counting; a Status line outside
+  any entry, or one in another form (`* **Status:**`, indented); a
+  code fence never closed, or an indented one still open at a line
+  indented less, an opener indented with a tab, or a closer indented
+  otherwise than its opener; a line starting with raw HTML (`<!--`,
+  `<details>`, at any indentation or after list or quote markers)
+  outside a fence; a run of three backticks or tildes on a line that
+  is not a fence line (`- ```` included); an ID with
+  two entry headings; in the directory form, an
+  `ABI-*.md` file not named `ABI-<digits>.md` or not
+  holding exactly its own ID's heading), before anything is checked or
+  updated. `DEVIATIONS_UPDATE=1` drops the listed keys that pass or are
+  gone, keeping comments, blank lines and every other line, then
+  checks; it never adds a line, and any other non-blank value fails the
+  target. Each kind prints at most 50 lines; `DEVIATIONS_OUT`
+  names a directory for the full lists. No existing target or check
+  changes.
 
 ### Porting notes
 
@@ -462,6 +493,40 @@ where it reports drift.
     copied the no-kit guard in `kit/count/README.md` adds `kani-quotes`
     to its `PROVED_PORT_TARGETS` when it starts to use it. A port that
     does neither changes nothing.
+12. Optional: a port with a conformance ratchet (the PCRE2 port's
+    `ci/conformance.sh`) can keep its run, have it write a `PASS KEY` /
+    `FAIL KEY` line per block, and call `make deviations
+    DEVIATIONS_RESULTS=... DEVIATIONS_LIST=...` (with
+    `DEVIATIONS_LEDGER=docs/abi-changes.md` where its ledger is one
+    file) in place of its own comparison, its selftest and its update
+    step (`DEVIATIONS_UPDATE=1`). It keeps showing a new failure's
+    block itself, from the full lists `DEVIATIONS_OUT` names. Its run
+    must still fail on its own when it does not finish (each step's
+    status checked, none lost in a pipeline): the target cannot tell a
+    run cut short from a small one, so a short `DEVIATIONS_RESULTS`
+    must never reach it. Some
+    things a port's own ratchet may have let through now fail, so it
+    checks them before it switches: a listed reason of `ABI-nnn:`
+    alone, with nothing after it; a ledger entry with no
+    `- **Status:**` line or more than one outside fenced code (an old
+    line left behind); a Status line outside any entry, or in another
+    form than `- **Status:**` at a line's start; a code fence never
+    closed, an indented one still open at a line indented less, or a
+    closer indented otherwise than its opener, or an opener indented
+    with a tab; a line starting with raw HTML (`<!--`, `<details>`,
+    also indented or after a list marker) outside a fence (an entry retired by commenting it out is marked
+    `removed` instead, and a folded recipe goes unfolded); a run of
+    three backticks or tildes on a line that is not a fence line (a
+    recipe's fence starts on its own line, not after `- `); an ID with
+    two
+    entry headings in its ledger (a
+    copied heading, a reused ID); and, in a `docs/abi/`
+    directory, an `ABI-*.md` file not named `ABI-<digits>.md`, or not
+    holding exactly one entry heading, its own ID's (as the template's
+    README checks: `grep -m1 '^### ABI-' docs/abi/ABI-*.md`). A
+    port that copied the no-kit guard in `kit/count/README.md` adds
+    `deviations` to its `PROVED_PORT_TARGETS` when it starts to use
+    it. A port that does neither changes nothing.
 
 ## 0.4.11
 
