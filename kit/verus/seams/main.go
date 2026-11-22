@@ -49,7 +49,12 @@
 //
 // -entries prints, per seam: source file, line, kind, id (the name, with
 // #N when shared in its file), category, tool, status, overrides file (or
-// -), and the contract normalized as its hash reads it. It is for a
+// -), and the contract normalized as its hash reads it. Each seam is
+// one line of nine fields: in every field a backslash, newline, tab and
+// carriage return are written `\\`, `\n`, `\t` and `\r` (an
+// unsupported-attribute contract holds a newline after each attribute
+// line, and a literal may hold a tab), so a reader splits lines and
+// tabs, then undoes those four to get the text its hash reads. It is for a
 // port's own checks of the checks its statuses cite (Kani harnesses,
 // assertions and the like), which stay in the port.
 //
@@ -164,13 +169,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 			if e.okey != "" {
 				of = path.Join(r.Ledger, e.file) + ".overrides"
 			}
-			fmt.Fprintf(stdout, "%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", e.file, e.line, e.kind, e.id, e.cat, e.tool, e.stat, of, norm(e.hc))
+			x := entryField.Replace
+			fmt.Fprintf(stdout, "%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", x(e.file), e.line, x(e.kind), x(e.id), x(e.cat), x(e.tool), x(e.stat), x(of), x(norm(e.hc)))
 		}
 		return 0
 	}
 	fmt.Fprint(stdout, res.summary)
 	return 0
 }
+
+// entryField writes an -entries field on one line, tabs only between
+// fields. The replacer makes one pass and a source `\` becomes `\\`, so
+// the escapes read back unambiguously.
+var entryField = strings.NewReplacer(`\`, `\\`, "\n", `\n`, "\t", `\t`, "\r", `\r`)
 
 // walk lists the regular files (and links) under root/dir whose names
 // end in suffix, as paths from the root, in byte order; none when dir
