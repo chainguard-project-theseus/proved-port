@@ -65,10 +65,14 @@ where it reports drift.
   manifest fails and prints the one to commit; a missing or empty log,
   a log or manifest it cannot read, or a tool that fails on one, fails;
   and `CI_SKIP_UPDATE=1` writes the observed keys and passes. A markdown
-  table of the skips goes to stdout. It is no proof that the tests ran
+  table of the skips goes to stdout. A `SKIP` after a libtest `test
+  NAME ... ` prefix on the same line (the skip landed before that
+  test's result) counts too (#195). It is no proof that the tests ran
   or passed: the caller still fails on the test step's own status. On
   the same inputs its output, exit status and written manifest are
-  challoc's script's, but for three cases: a key that starts with `-`,
+  challoc's script's, but for four cases: such a prefixed `SKIP`, which
+  challoc's did not count (so a new one passed there and fails here); a
+  key that starts with `-`,
   which challoc's `grep` read as an option (so the key showed as new in
   the table, after a grep usage message) and the kit's matches; a log
   that cannot be read, which challoc's script read as empty (so it

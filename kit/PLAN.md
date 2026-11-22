@@ -362,10 +362,11 @@ is deleted in that PR.
    skip-summary SKIP_LOG=... SKIP_MANIFEST=...`, #190), challoc's script
    in POSIX sh, with `make.yaml`'s `skip-summary-test`; on the same
    inputs its output and exit status are challoc's script's, but for the
-   three cases kit/CHANGELOG.md names: a key that starts with `-`
-   matches here, and an unreadable or empty log fails here where
-   challoc's passed it (so a challoc cell whose test step leaves a
-   zero-byte log fails once it switches). challoc's switch to it is to
+   four cases kit/CHANGELOG.md names: a key that starts with `-`
+   matches here, an unreadable or empty log fails here where challoc's
+   passed it (so a challoc cell whose test step leaves a zero-byte log
+   fails once it switches), and a `SKIP` after a libtest `test NAME ...
+   ` prefix counts here (#195). challoc's switch to it is to
    come. The known-failures check is `kit/make/known-failures.sh`
    (`make known-failures KNOWN_FAILURES_LOG=... KNOWN_FAILURES_LIST=...
    [KNOWN_FAILURES_EXTRA=...]`, #196), challoc's script in POSIX sh with

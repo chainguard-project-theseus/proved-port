@@ -12,6 +12,9 @@
 # ...`). Only the first word: parallel tests write to the same stream and
 # another test's output can land inside a line after it (a lone `test` or
 # `ok` key, from a libtest line cut in two the same way, is dropped).
+# The reverse cut counts too: a `SKIP` after a libtest `test NAME ... `
+# prefix on the same line (`test foo ... SKIP c_new reason`, the skip
+# landing before foo's result) is a skip, keyed the same way (#195).
 # Then:
 #
 #   - a key not in MANIFEST fails (exit 1): coverage was lost;
@@ -27,9 +30,9 @@
 # ran or passed (a cut-short log with no SKIP lines passes; the caller
 # fails on the test step's own status, as challoc's ci/cell.sh does);
 # anything but key names (no libtest totals; an `ignored` test is no
-# skip); a skip whose `SKIP` does not start its line (another test's
-# output landed before it on the same line), which is not counted; and
-# a key that stopped appearing, which is only a notice, so leaving it in
+# skip); a skip whose `SKIP` starts neither its line nor follows a
+# libtest `test NAME ... ` prefix (other output landed before it on the
+# same line), which is not counted; and a key that stopped appearing, which is only a notice, so leaving it in
 # MANIFEST lets that test go back to skipping later without a failure.
 #
 # A markdown table of the skips goes to stdout, headed with MANIFEST's
@@ -64,9 +67,16 @@ trap 'rm -f "$seen" "$want" "$hits" "$keys"' EXIT
 # check sees it fail. grep exits 1 for no match and 2 or more when it
 # cannot read the log: only the first is no skips.
 rc=0
-grep -a '^SKIP ' "$log" > "$hits" || rc=$?
+grep -aE '^(test .+ \.\.\. )?SKIP ' "$log" > "$hits" || rc=$?
 [ "$rc" -le 1 ] || { echo "error: cannot read $log (grep exit $rc)"; exit 1; }
-awk '$2 != "" && $2 != "test" && $2 != "ok" { print $2 }' "$hits" > "$keys" \
+# A SKIP after a libtest `test NAME ... ` prefix (the skip landed before
+# that test's result) is read from the first ` ... SKIP ` on.
+awk '{
+  s = $0
+  if (substr(s, 1, 5) != "SKIP ") s = substr(s, index(s, " ... SKIP ") + 5)
+  split(s, w, " "); k = w[2]
+  if (k != "" && k != "test" && k != "ok") print k
+}' "$hits" > "$keys" \
   || { echo "error: awk failed on the SKIP lines of $log"; exit 1; }
 sort -u "$keys" > "$seen"
 if [ -f "$manifest" ]; then
