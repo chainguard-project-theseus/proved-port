@@ -13,6 +13,36 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.12
+
+### Changes
+
+- `make lint-unsafe` reads each member's crate roots from cargo
+  metadata (#186). They are the files of its lib and bin targets,
+  wherever they are, or, for a member with no lib and no bin target (one
+  of benches or tests alone), the files of its test, bench and example
+  targets. Each must forbid unsafe code as before
+  (`#![forbid(unsafe_code)]`, or both lines of the Verus pair). Before,
+  the roots were the files at cargo's default paths (`src/lib.rs`,
+  `src/main.rs`, `src/bin/`), so a bench-only member failed with "has no
+  crate root", a lib or bin at a path of its own (`[lib] path`,
+  `[[bin]] path`) was not read (a member with only such roots failed the
+  same way), and a file at a default path that cargo does not build
+  (`autolib = false`, `autobins = false`) was read. The forbid check on
+  the command line is unchanged; it already reached every target.
+
+### Porting notes
+
+1. Run `make lint-unsafe` after the bump. A port that kept a bench-only
+   or test-only member out of it (or carried a local patch for it) can
+   check it now: add `#![forbid(unsafe_code)]` to each of its test,
+   bench and example roots. Two cases can newly fail, each naming the
+   file: a lib or bin at a path of its own without the forbid (add it),
+   and a member with no lib or bin target that still has a file at a
+   default path cargo does not build, which was read in place of its
+   test, bench and example roots (add the forbid to those). A port with
+   neither changes nothing.
+
 ## 0.4.11
 
 ### Changes
