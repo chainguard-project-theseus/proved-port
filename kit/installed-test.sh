@@ -311,9 +311,25 @@ if [ "$rc" -ne 1 ] || ! grep -qxF "error: $tmp/no.so missing" "$tmp/out"; then
   fail "the installed abi-elf.sh, a missing library: got = exit $rc, want = exit 1 naming it"
 fi
 echo "ok the installed abi-elf.sh fails a missing library"
+expect "make -n kani-quotes: the package's kani-quotes.sh" \
+  "$(shows "$installed" kani-quotes)" \
+  "sh $home/make/kani-quotes.sh 'verus/seams' '.'"
+# The installed script runs: a record whose one quoted line is its
+# source's.
+[ -f "$home/make/kani-quotes.sh" ] || fail "the installed kani-quotes.sh: got = missing, want = installed"
+mkdir -p "$tmp/kq/seams" "$tmp/kq/src"
+printf 'pub fn get(v: &Vec<u8>) -> (r: u8)\n' > "$tmp/kq/src/a.rs"
+# shellcheck disable=SC2016 # the record's Markdown backquotes are literal text
+printf '# `get`\n\nSeam S1: `get` (`src/a.rs`).\n\n## 1. Contract\n\n```rust\npub fn get(v: &Vec<u8>) -> (r: u8)\n```\n' > "$tmp/kq/seams/kani-s1.md"
+if (cd "$tmp/kq" && sh "$home/make/kani-quotes.sh" seams .) > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qxF "ok   kani-s1.md: 1 chunks match ./src/a.rs" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed kani-quotes.sh, a matching record: got = exit $rc, want = exit 0 with its ok line"
+fi
+echo "ok the installed kani-quotes.sh passes a matching record"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes verify; do
   make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so SKIP_LOG=test.log SKIP_MANIFEST=skips.txt GLIBC_MAX_LIB=libc.so GLIBC_MAX=2.44 KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=known.txt HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_ ABI_ELF_LIB=libc.so ABI_ELF_MAP=c.map ABI_ELF_SONAME=libc.so PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
     || { cat "$tmp/err" >&2; fail "make -n $t, PROVED_PORT_VERSION=$version (KIT's): got = failure, want = success"; }
   if make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$other" > "$tmp/out" 2> "$tmp/err"; then

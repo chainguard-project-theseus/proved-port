@@ -37,7 +37,8 @@ At this record's commit:
 
 ```rust
 {CONTRACT: quoted from the source: the doc comment, the signature
-with `requires` and `ensures`, and, for a trusted function, its
+with `requires` and `ensures` through the last clause (up to the
+body's `{` or the closing `;`), and, for a trusted function, its
 `#[cfg_attr(any(), discharged_by = "kani")]` marker line.}
 ```
 
@@ -75,6 +76,10 @@ Written by {AUTHOR} for {CHANGE}, {DATE}. {Reviewed by {PERSON} on
 Mutation check (Kani reports `VERIFICATION:- FAILED` for each):
 {MUTANT: a change to the harness or the function that breaks one
 `ensures`}. `make kani` re-runs the harnesses on every pull request (the
-`verus` check). {Until a check compares section 1 with the source: a
-change to the contract, or to the types the proofs use it at, needs the
+`verus` check). {Where the port's checks run `make kani-quotes`, it
+fails once section 1 no longer quotes the source through the end of
+each quoted item's contract, so a changed or added clause brings this
+record and the harness back for review; a change
+to the types the proofs use it at still needs them revisited by hand.
+Without it: a change to the contract, or to those types, needs the
 harness and this record revisited by hand.}
