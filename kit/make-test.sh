@@ -473,6 +473,15 @@ expect "make -n skip-summary, challoc's cell" \
 expect "make -n glibc-max, challoc's library" \
   "$(shows glibc-max GLIBC_MAX_LIB=' .ci/target/release/libchalloc.so ' GLIBC_MAX=2.44)" \
   "sh $home/make/glibc-max.sh '.ci/target/release/libchalloc.so' '2.44'"
+# known-failures passes the log and the list as known-failures.sh's
+# arguments, blanks around them dropped, and EXTRA as a third only when
+# it is set.
+expect "make -n known-failures, no EXTRA" \
+  "$(shows known-failures KNOWN_FAILURES_LOG=' test.log ' KNOWN_FAILURES_LIST=ci/known-failures.txt KNOWN_FAILURES_EXTRA=' ')" \
+  "sh $home/make/known-failures.sh 'test.log' 'ci/known-failures.txt'"
+expect "make -n known-failures, challoc's cgroup verdicts as EXTRA" \
+  "$(shows known-failures KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=ci/known-failures.txt KNOWN_FAILURES_EXTRA=ci/cgroup-failures.sh)" \
+  "sh $home/make/known-failures.sh 'test.log' 'ci/known-failures.txt' 'ci/cgroup-failures.sh'"
 
 # verify runs every target VERIFY_TARGETS lists, in order, each with the
 # command line's variables. Under -n make prints its loop (a line naming
@@ -559,6 +568,8 @@ refuses_make "make -n skip-summary with no SKIP_LOG" "SKIP_LOG is empty" skip-su
 refuses_make "make -n skip-summary with a blank SKIP_MANIFEST" "SKIP_MANIFEST is empty" skip-summary SKIP_LOG=test.log SKIP_MANIFEST=' '
 refuses_make "make -n glibc-max with no GLIBC_MAX_LIB" "GLIBC_MAX_LIB is empty" glibc-max GLIBC_MAX=2.44
 refuses_make "make -n glibc-max with a blank GLIBC_MAX" "GLIBC_MAX is empty" glibc-max GLIBC_MAX_LIB=libalpha.so GLIBC_MAX=' '
+refuses_make "make -n known-failures with no KNOWN_FAILURES_LOG" "KNOWN_FAILURES_LOG is empty" known-failures KNOWN_FAILURES_LIST=known.txt
+refuses_make "make -n known-failures with a blank KNOWN_FAILURES_LIST" "KNOWN_FAILURES_LIST is empty" known-failures KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=' '
 # The no-kit guard kit/count/README.md gives ports lists every kit
 # target, so each fails with the kit's message where the package is
 # missing: proved_port_phony and verify, in that order.
@@ -689,7 +700,7 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;

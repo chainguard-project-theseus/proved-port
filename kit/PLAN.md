@@ -366,7 +366,13 @@ is deleted in that PR.
    matches here, and an unreadable or empty log fails here where
    challoc's passed it (so a challoc cell whose test step leaves a
    zero-byte log fails once it switches). challoc's switch to it is to
-   come. `ci/known-failures.sh` is not yet in the kit.
+   come. The known-failures check is `kit/make/known-failures.sh`
+   (`make known-failures KNOWN_FAILURES_LOG=... KNOWN_FAILURES_LIST=...
+   [KNOWN_FAILURES_EXTRA=...]`, #196), challoc's script in POSIX sh with
+   its cgroup verdicts moved out to the port's EXTRA script, and
+   `make.yaml`'s `known-failures-test`; it also counts a failing test
+   whose name has a blank (a should_panic test or a doctest), which
+   challoc's did not. challoc's switch to it is to come.
 6. **Box skeleton, pull and stats.** Out of `kit/reference/` into
    `kit/perf/` (stats rewritten in Go). pcre3: the generic parts of
    `ci/bench.sh` (the four-way runner, the result-agreement check, the
