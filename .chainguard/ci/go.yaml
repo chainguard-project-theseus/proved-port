@@ -87,8 +87,12 @@ checks:
       (exact first-match counts, empty and not-counted counts, output
       flattening and -w, ARM and ROUND, -g, -c), a failing command's
       line and exit, its refusals, the lines through stats relabel and
-      check, and md5.sh's bracket, missing-file line and refusals
-      through stats md5. It builds stats with this file's go.
+      check, -E's event lists per arch (events.tsv's aarch64 frontend
+      list, a file of its own with -f and -a, uname -m by a stand-in,
+      and the lookup's refusals; -g with other than two events is
+      refused), and md5.sh's bracket, missing-file
+      line and refusals through stats md5. It builds stats with this
+      file's go.
     trigger: [presubmit, postsubmit]
     timeout: 10m
     cmd: [sh, kit/box-test.sh]
