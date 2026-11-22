@@ -359,8 +359,10 @@ is deleted in that PR.
    attribute: Kani harnesses, guard tests), `cite-assert` (a labeled
    assertion) and `cite-row` (a row in a table: the guard-test table)
    lines, as seams.sh's `checkcite()` resolved Kani, callers and const
-   assert (#231). Still to come: resolving the rest (Isla, emptyasm,
-   loom, GenMC), the not-Copy checks and the Kani pins,
+   assert (#231). A `notcopy` line holds tracked types to challoc's
+   not-Copy checks, seams.sh's trackedcheck and notcopycheck (#235).
+   Still to come: resolving the rest (Isla, emptyasm, loom, GenMC) and
+   the Kani pins,
    which stay in challoc's script reading `-cites` and `-entries` until
    they move; challoc's switch; and installing the tool in the
    package, which does not install it yet.

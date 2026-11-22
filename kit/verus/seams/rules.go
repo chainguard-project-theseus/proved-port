@@ -11,30 +11,32 @@ import (
 
 // Rules is a port's rules file: what seams.sh hard-coded for challoc.
 type Rules struct {
-	Ledger     string   // ledger directory, relative to the root
-	Source     string   // source directory scanned
-	Command    string   // the command the ledger header names
-	SeamsDoc   string   // the SEAMS.md each ledger file links to
-	TestFiles  []string // find-style patterns of test files
-	Tools      []string // the tools, in table order
-	Categories []string // the categories, in table order
-	ToolOf     map[string]string
-	Guesses    []Guess
-	PairMacro  string // the export macro (export-macro or pair), or ""
-	PairFile   string
-	PairForm   string   // "slash" (`fn a / b(`) or "list" (`fn f [a, b](`)
-	PairVars   []string // one template VAR for every name, or one per name
-	UnsupDoc   string
-	CiteTags   []string            // tags a status cites a check with (`Kani: ...`)
-	Partial    map[string]bool     // cite tags a discharged status may not cite
-	CiteFn     map[string]string   // tag -> the attribute its fn carries (cite-fn)
-	CiteFnCfg  map[string][]string // tag -> the `#[cfg(CFG)]` lines its fn may carry
-	CiteAssert map[string]bool     // tags whose citations are labeled assertions
-	CiteRow    map[string]citeRow  // tag -> the table row each citation needs
-	CiteModule map[string]string   // a path's first segment -> the directory it reads
-	Assumption string              // the tool of a seam no check applies to
-	testRes    []*regexp.Regexp
-	testOnPath []bool
+	Ledger      string   // ledger directory, relative to the root
+	Source      string   // source directory scanned
+	Command     string   // the command the ledger header names
+	SeamsDoc    string   // the SEAMS.md each ledger file links to
+	TestFiles   []string // find-style patterns of test files
+	Tools       []string // the tools, in table order
+	Categories  []string // the categories, in table order
+	ToolOf      map[string]string
+	Guesses     []Guess
+	PairMacro   string // the export macro (export-macro or pair), or ""
+	PairFile    string
+	PairForm    string   // "slash" (`fn a / b(`) or "list" (`fn f [a, b](`)
+	PairVars    []string // one template VAR for every name, or one per name
+	UnsupDoc    string
+	CiteTags    []string            // tags a status cites a check with (`Kani: ...`)
+	Partial     map[string]bool     // cite tags a discharged status may not cite
+	CiteFn      map[string]string   // tag -> the attribute its fn carries (cite-fn)
+	CiteFnCfg   map[string][]string // tag -> the `#[cfg(CFG)]` lines its fn may carry
+	CiteAssert  map[string]bool     // tags whose citations are labeled assertions
+	CiteRow     map[string]citeRow  // tag -> the table row each citation needs
+	CiteModule  map[string]string   // a path's first segment -> the directory it reads
+	NotCopyFile string              // the file of the tracked types' not-Copy checks, or ""
+	NotCopyTag  string              // the cite-assert tag a tracked-type seam cites them with
+	Assumption  string              // the tool of a seam no check applies to
+	testRes     []*regexp.Regexp
+	testOnPath  []bool
 }
 
 // Guess is one `guess` line: the category when every condition holds.
@@ -303,6 +305,21 @@ func parseRules(file, data string) (*Rules, error) {
 				if c, ok := inTree(f[2]); ok {
 					r.CiteRow[f[1]] = citeRow{file: c, heading: f[3], parts: f[4:]}
 				}
+			}
+		case "notcopy":
+			if !want(3, "notcopy<TAB>FILE<TAB>TAG") {
+				continue
+			}
+			if r.NotCopyFile != "" {
+				bad("notcopy given twice")
+				continue
+			}
+			if !r.CiteAssert[f[2]] {
+				bad("notcopy %s: not a tag with a cite-assert line above it", f[2])
+				continue
+			}
+			if c, ok := inTree(f[1]); ok {
+				r.NotCopyFile, r.NotCopyTag = c, f[2]
 			}
 		case "cite-module":
 			if !want(3, "cite-module<TAB>NAME<TAB>DIR") {

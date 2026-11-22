@@ -88,6 +88,15 @@ cite-assert	const assert
 # cite-fn	callers	test	test
 # cite-row	callers	verus/README.md	Guard tests	Mutants killed:	Known escapes:
 #
+# challoc's not-Copy checks: each `tracked` struct or enum needs a check
+# in the file that it is neither Copy nor Clone (`<T as NotCopy<_>>::HOLDS`
+# and `<T as NotClone<_>>::HOLDS` under a `// `T`` label), and a
+# tracked-type seam citing `const assert:` cites its type's check. Write
+# a generic type's check at Copy arguments (`K<u8>`): a const assertion
+# checks only the arguments it names, so one at a non-Copy argument
+# passes for a type that is Copy whenever its argument is:
+# notcopy	src/vspec/notcopy.rs	const assert
+#
 # The heuristics: the first guess whose conditions all hold proposes its
 # category (- for none, which -check reports until an overrides line
 # names one). FIELD=RE matches, FIELD!RE does not; kind, name, file and

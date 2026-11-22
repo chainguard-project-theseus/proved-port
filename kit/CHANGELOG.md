@@ -684,6 +684,47 @@ where it reports drift.
   challoc's ledgers (7d10fca and 11 older trees) and a second port's 684
   `-entries` lines are unchanged. Nothing is installed; ports see no
   change.
+- The seam ledger generator's not-Copy checks of tracked types (#235),
+  seams.sh's `trackedcheck()` and `notcopycheck()`. The rules line
+  `notcopy FILE TAG` names the file of the checks and the cite-assert
+  tag that tracked-type seams cite them with. Then `-check` fails:
+  - each `tracked struct` or `tracked enum` in a source or test file,
+    seam or not, with no check in FILE under its label that it is
+    neither Copy nor Clone (`<T as NotCopy<_>>::HOLDS` and `<T as
+    NotClone<_>>::HOLDS`), or with one gated by an attribute;
+  - each second tracked type of a name already seen;
+  - each tracked-type seam whose TAG citations hold no such check of
+    its type.
+
+  A check counts only in a FILE that also holds the second impls
+  (`impl<T: Copy> NotCopy<..> for T {}` and its Clone twin), neither
+  under an attribute, since a cfg the build does not meet would let
+  every check compile for Copy types too. Where this differs from
+  seams.sh, it is stricter:
+  - Files are read with the lexer, so a declaration, check or impl
+    inside a comment or literal counts for nothing. seams.sh read them,
+    and dropped only `//` comments from a check's text.
+  - A `tracked struct`/`enum` counts anywhere on its code line, after
+    attributes on that line too. seams.sh required indentation and a
+    visibility alone before it.
+  - A gated impl is refused; seams.sh accepted it.
+  - Every declaration on a line is read, not only the first.
+  - A declaration whose name is not an identifier is an error, since no
+    check can be held to it by name: a macro's `tracked struct $n`, or
+    the name on a later line. seams.sh skipped it.
+
+  A const assertion checks a generic type only at the arguments it
+  names. The doc and the template comment tell a port to write it at
+  Copy arguments (`K<u8>`). Whether a `mod` line reaches FILE, and under
+  what cfg, is not read (as for cite-assert, #232; follow-up #237).
+
+  The template carries challoc's line as a comment.
+
+  On challoc 7d10fca, `-check` with the line passes. I removed each of
+  its 60 tracked types' checks in turn, then the NotCopy impl: the
+  failing types equal `trackedcheck()`'s every time, and the two
+  tracked-type seams it fails equal `seams.sh --check`'s
+  `notcopycheck` lines. Nothing is installed; ports see no change.
 
 ### Porting notes
 

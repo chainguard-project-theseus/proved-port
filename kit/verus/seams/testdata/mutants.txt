@@ -281,3 +281,38 @@ scan.go	return !strings.HasSuffix(strings.TrimRight(s, "#"), "\"")	return true
 scan.go	return !strings.HasSuffix(strings.TrimRight(s, "#"), "\"")	return !strings.HasSuffix(s[:len(s)-1], "\"")
 scan.go	if reOuterAttr.MatchString(s.at) {	if strings.HasPrefix(s.at, "#[") {
 scan.go	rePairAttr   = re("^[ \t]*(\\$\\()?#[ \t]*\\[")	rePairAttr   = re("^[ \t]*(\\$\\()?#\\[")
+#
+# #235: the not-Copy checks of tracked types.
+notcopy.go	if i < 0 || strings.TrimSpace(target[:i]) == "" {	if i < 0 {
+notcopy.go	if !v.crateFile(file) {	if false {
+notcopy.go	if !f.ok {	if false {
+notcopy.go	text += " " + c	text += ""
+notcopy.go	in = !strings.HasSuffix(c, ");")	in = false
+notcopy.go	text, in = c, !strings.HasSuffix(c, ");")	text, in = c, false
+notcopy.go	h = strings.HasPrefix(l, label)	h = strings.HasPrefix(l, label) || true
+notcopy.go	if n != 1 || !ic || !il {	if n < 1 || !ic || !il {
+notcopy.go	if n != 1 || !ic || !il {	if n != 1 || !il {
+notcopy.go	if n != 1 || !ic || !il {	if n != 1 || !ic {
+notcopy.go	q := regexp.QuoteMeta(ty) + `(<[^<>]*>)?`	q := regexp.QuoteMeta(ty)
+notcopy.go	regexp.MustCompile(`[<:]`+q+` as NotCopy<_>>::HOLDS`).MatchString(text) &&	regexp.MustCompile(q+` as NotCopy<_>>::HOLDS`).MatchString(text) &&
+notcopy.go	regexp.MustCompile(`[<:]`+q+` as NotCopy<_>>::HOLDS`).MatchString(text) &&	true &&
+notcopy.go	if r.NotCopyFile == "" {	if false {
+notcopy.go	if seen[ty] {	if false {
+notcopy.go	!v.notCopy(ty, cite) || !v.assertion(cite)	!v.notCopy(ty, cite)
+notcopy.go	!v.notCopy(ty, cite) || !v.assertion(cite)	!v.assertion(cite)
+notcopy.go	if !reTrackedType.MatchString(e.hc) {	if false {
+notcopy.go	if c.tag == r.NotCopyTag {	if true {
+notcopy.go	if len(cited) == 0 {	if false {
+notcopy.go	ok = ok || v.notCopy(ty, t)	ok = v.notCopy(ty, t)
+notcopy.go	ic = ic || ungated && reNotCopyImpl.MatchString(c)	ic = true
+notcopy.go	il = il || ungated && reNotCloneImpl.MatchString(c)	il = true
+notcopy.go	ungated := !reAttrAbove.MatchString(prev)	ungated := prev == prev
+notcopy.go	if c != "" {	if true {
+notcopy.go	`(^|[^A-Za-z0-9_])tracked	`^[ \t]*(pub(\([^)]*\))?[ \t]+)?tracked
+rules.go	if r.NotCopyFile != "" {	if false {
+rules.go	if !r.CiteAssert[f[2]] {	if false {
+main.go	res.drift = append(res.drift, notCopyChecks(*root, r, res.entries, files)...)	_ = files
+main.go	append(append([]namedText{}, in.sources...), in.tests...)	in.sources
+notcopy.go	reTrackedDecl.FindAllStringIndex(c, -1)	reTrackedDecl.FindAllStringIndex(c, 1)
+notcopy.go	if ty == "" {	if false {
+notcopy.go	regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*`)	regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
