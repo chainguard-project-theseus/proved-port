@@ -7751,3 +7751,1235 @@ fn a_file_without_decreases_is_trusted() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A member with `skip_packages = true` (#198) leaves out of its walk each
+/// directory below its `src/` that holds a Cargo.toml (another package's
+/// sources, at any depth), and reads the rest: its own files, and a
+/// directory without one. Without the key, or with it false, or for a
+/// crate of `dir`, every file counts. Negative: a module declaration (a
+/// `#[path]`) or a target's root file in a left-out directory fails the
+/// run, since rustc compiles that file as part of the crate; without the
+/// key both pass, the file read.
+#[test]
+fn skip_packages_leaves_other_packages_out_of_the_walk() {
+    let lib = "pub fn f() {}\npub fn c_mint() {}\n";
+    let dir = crate_of("skip-packages", &[("lib.rs", lib)]);
+    let src = dir.join("crates/a/src");
+    let package = |name: &str| format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\n");
+    for (path, text) in [
+        ("uu/x/Cargo.toml", package("x")),
+        (
+            "uu/x/src/lib.rs",
+            "pub fn g() {}\npub fn h() {}\n".to_owned(),
+        ),
+        ("uu/deep/y/Cargo.toml", package("y")),
+        ("uu/deep/y/src/main.rs", "fn main() {}\n".to_owned()),
+        ("own/k.rs", "pub fn k() {}\n".to_owned()),
+    ] {
+        let p = src.join(path);
+        fs::create_dir_all(p.parent().expect("a parent")).expect("mkdir");
+        fs::write(p, text).expect("write");
+    }
+    // Each left-out directory is a configured crate of its own.
+    let member = |skip: &str| {
+        format!(
+            "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"x\", path = \"crates/a/src/uu/x\" }}, {{ name = \"y\", path = \"crates/a/src/uu/deep/y\" }}]\n"
+        )
+    };
+    let row = |outside: usize| format!("a\t0\t0\t0\t{outside}\t");
+    let shown = [
+        "crate a leaves out crates/a/src/uu/deep/y (counted as crate y)",
+        "crate a leaves out crates/a/src/uu/x (counted as crate x)",
+    ];
+    for (config, want) in [
+        (PLAIN.to_owned(), 6),
+        (member(""), 6),
+        (member(", skip_packages = false"), 6),
+        (member(", skip_packages = true"), 3),
+    ] {
+        fs::write(dir.join("verus/count.toml"), &config).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        let lines = shown.iter().filter(|l| out.contains(*l)).count();
+        let wanted_lines = if want == 3 { 2 } else { 0 };
+        assert!(
+            got == 0 && out.lines().any(|l| l.starts_with(&row(want))) && lines == wanted_lines,
+            "{config:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, {want} outside, {wanted_lines} leaves-out lines"
+        );
+    }
+    // A left-out directory no configured crate reads would count nowhere,
+    // so the run fails, naming it.
+    fs::write(
+        dir.join("verus/count.toml"),
+        "[crates]\nmembers = [{ name = \"a\", path = \"crates/a\", skip_packages = true }, { name = \"x\", path = \"crates/a/src/uu/x\" }]\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    let want = "FAIL skip_packages: crate a leaves out crates/a/src/uu/deep/y, which holds a Cargo.toml, but no configured crate reads it";
+    assert!(
+        got == 1 && err.contains(want) && !err.contains("src/uu/x,"),
+        "y unread: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+    );
+    // Fail closed: what the crate itself compiles from a left-out
+    // directory: a `#[path]` module, a target's root, and an `include!`
+    // of a literal path (resolved from the including file's directory).
+    // An `include!` of a path the counter cannot resolve fails nothing.
+    let manifest = fs::read_to_string(dir.join("crates/a/Cargo.toml")).expect("read");
+    std::os::unix::fs::symlink("src/uu/x/src/lib.rs", dir.join("crates/a/z.rs")).expect("ln");
+    for (lib, bin, want) in [
+        (
+            "#[path = \"uu/x/src/lib.rs\"]\nmod x;\npub fn f() {}\n",
+            "",
+            "uu/x/src/lib.rs, which the counter does not read",
+        ),
+        (
+            lib,
+            "[[bin]]\nname = \"y\"\npath = \"src/uu/deep/y/src/main.rs\"\n",
+            "a target's root file is",
+        ),
+        // A root outside src/ that links into a left-out directory.
+        (
+            lib,
+            "[[bin]]\nname = \"z\"\npath = \"z.rs\"\n",
+            "a target's root file is",
+        ),
+        (
+            "include!(\"uu/x/src/lib.rs\");\npub fn f() {}\n",
+            "",
+            "include!(\"uu/x/src/lib.rs\") names",
+        ),
+        // The raw identifier is the same macro.
+        (
+            "r#include!(\"uu/x/src/lib.rs\");\npub fn f() {}\n",
+            "",
+            "include!(\"uu/x/src/lib.rs\") names",
+        ),
+        (
+            "mod own;\n",
+            "",
+            "include!(\"../uu/deep/y/src/main.rs\") names",
+        ),
+    ] {
+        if lib == "mod own;\n" {
+            fs::write(
+                src.join("own/mod.rs"),
+                "pub mod k;\nfn wrap() { include!(\"../uu/deep/y/src/main.rs\"); }\n",
+            )
+            .expect("write");
+        } else {
+            let _ = fs::remove_file(src.join("own/mod.rs"));
+        }
+        fs::write(src.join("lib.rs"), lib).expect("write");
+        fs::write(dir.join("crates/a/Cargo.toml"), format!("{manifest}{bin}")).expect("write");
+        for (skip, code) in [(", skip_packages = true", 1), ("", 0)] {
+            fs::write(dir.join("verus/count.toml"), member(skip)).expect("write");
+            let (got, out, err) = count(&dir, &[]);
+            assert!(
+                got == code && (code == 0 || err.contains(want)),
+                "{lib:?} {bin:?} {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+            );
+        }
+    }
+    let _ = fs::remove_file(src.join("own/mod.rs"));
+    fs::write(dir.join("crates/a/Cargo.toml"), &manifest).expect("write");
+    fs::write(
+        dir.join("verus/count.toml"),
+        member(", skip_packages = true"),
+    )
+    .expect("write");
+    // Neither an include! the counter cannot resolve, nor one of a path
+    // outside src/ (through `..` to a file that is not there), is in a
+    // left-out directory.
+    for lib in [
+        "include!(concat!(env!(\"OUT_DIR\"), \"/uu/x/src/lib.rs\"));\npub fn f() {}\n",
+        "include!(\"../nowhere.rs\");\npub fn f() {}\n",
+    ] {
+        fs::write(src.join("lib.rs"), lib).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 0,
+            "{lib:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// In a crate with `skip_packages = true`, an `include!` whose argument
+/// the counter cannot resolve fails the run (#198): `uu/x/gen.rs` sits in
+/// package `x`'s directory, outside `x`'s own `src/`, so an include of it
+/// through `concat!` of literals, or through a `macro_rules!` forwarding
+/// `$p` to `include!($p)`, would count it in no row. `x` is a configured
+/// member, so the every-left-out-directory check passes and the include
+/// check alone decides. Negative: `concat!(env!("OUT_DIR"), ..)`, which
+/// is outside `src/`, and `include_str!`, which reads no code, pass; and
+/// without the key every case passes.
+#[test]
+fn skip_packages_fails_an_include_it_cannot_resolve() {
+    let dir = crate_of("skip-include", &[("lib.rs", "pub fn f() {}\n")]);
+    let src = dir.join("crates/a/src");
+    fs::create_dir_all(src.join("uu/x/src")).expect("mkdir");
+    fs::write(
+        src.join("uu/x/Cargo.toml"),
+        "[package]\nname = \"x\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(src.join("uu/x/src/lib.rs"), "pub fn g() {}\n").expect("write");
+    fs::write(src.join("uu/x/gen.rs"), "pub fn hidden() {}\n").expect("write");
+    let config = |skip: &str| {
+        format!(
+            "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"x\", path = \"crates/a/src/uu/x\" }}]\n"
+        )
+    };
+    let unresolved = "names a file the counter cannot resolve in a crate with skip_packages";
+    let in_macro = "is inside a macro_rules! definition, so rustc resolves its path from wherever the macro is invoked";
+    let imported = "imports `include`, and the counter cannot follow a renamed or imported include in a crate with skip_packages";
+    let forwarded = "name include outside an include! invocation, which the macro may forward to one, and the counter cannot follow that in a crate with skip_packages";
+    for (lib, code, want) in [
+        // `include` handed to a macro as an identifier it may invoke, as
+        // written or raw: no `include !` pair, no `use`.
+        (
+            "macro_rules! call { ($m:ident, $p:literal) => { $m!($p); }; }\ncall!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        (
+            "macro_rules! call { ($m:ident, $p:literal) => { $m!($p); }; }\ncall!(r#include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        // A single `:` is no path separator (`$m:ident : $p:literal`).
+        (
+            "macro_rules! call { ($m:ident : $p:literal) => { $m!($p); }; }\ncall!(include: \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        // Nor are two `:` with space between them.
+        (
+            "macro_rules! call { ($m:ident : : $p:literal) => { $m!($p); }; }\ncall!(include : : \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        // A path through a module named `include` in a macro body passes.
+        (
+            "mod include { pub fn g() {} }\nmacro_rules! p { () => { include::g() }; }\npub fn f() { p!() }\n",
+            0,
+            "",
+        ),
+        // An invocation spliced from a macro's input in its body, with no
+        // group after `!` (`include!$g`), or no `!` at all.
+        (
+            "macro_rules! m { ($g:tt) => { include!$g; }; }\nm!((\"uu/x/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include !$ g is inside a macro_rules! definition",
+        ),
+        (
+            "macro_rules! m { ($b:tt $g:tt) => { include $b $g; }; }\nm!(! (\"uu/x/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include $ b $ is inside a macro_rules! definition",
+        ),
+        // A matcher reaches into groups, so the rule holds at any depth.
+        (
+            "macro_rules! call { ([$m:ident] $p:literal) => { $m!($p); }; }\ncall!([include] \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        // A std macro's name the crate defines for itself is held as any
+        // other macro is.
+        (
+            "macro_rules! println { ($m:ident, $p:literal) => { $m!($p); }; }\nprintln!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        // So is one a `use` brings in from another crate, or renames
+        // anything to: it outranks the prelude's.
+        (
+            "use dep::vec;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::call as println;\nprintln!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        // So is one invoked through another crate's path; one through
+        // std's path is std's.
+        (
+            "dep::vec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:1: a macro invocation's arguments name include",
+        ),
+        (
+            "::dep::println!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:1: a macro invocation's arguments name include",
+        ),
+        // A std name the crate rebinds is another crate's: a path through
+        // it, or an import through it, is held.
+        (
+            "use dep as core;\ncore::vec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep as core;\nuse core::vec;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:3: a macro invocation's arguments name include",
+        ),
+        (
+            "extern crate dep as std;\nstd::vec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        (
+            "extern crate dep as std;\nuse std::vec;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:3: a macro invocation's arguments name include",
+        ),
+        // An import of a std name, not renamed, rebinds it too.
+        (
+            "use dep::core;\ncore::vec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::{core, other};\nuse core::vec;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:3: a macro invocation's arguments name include",
+        ),
+        // A `#[macro_use] extern crate` of another crate, crate-wide, or
+        // a glob of another crate's in the file, may bring in a macro of
+        // any name, which outranks the std prelude's: a std value macro's
+        // arguments, and the OUT_DIR form, are held.
+        (
+            "#[macro_use]\nextern crate dep;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:3: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::*;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::*;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:2: include!(concat",
+        ),
+        (
+            "#[macro_use]\nextern crate dep;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:3: include!(concat",
+        ),
+        // Under a `cfg_attr` too, whatever its condition.
+        (
+            "#[cfg_attr(all(), macro_use)]\nextern crate dep;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:3: a macro invocation's arguments name include",
+        ),
+        (
+            "#[cfg_attr(all(), macro_use)]\nextern crate dep;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:3: include!(concat",
+        ),
+        // A glob at a std root leaves std's macros std's.
+        (
+            "use std::collections::*;\npub fn f() -> bool { let include = true; assert!(include); include }\n",
+            0,
+            "",
+        ),
+        // A rebinding of another name leaves a std path std's.
+        (
+            "use dep as other;\npub fn f() -> bool { let include = true; core::assert!(include); include }\n",
+            0,
+            "",
+        ),
+        (
+            "pub fn f() -> bool { let include = true; std::assert!(include); include }\n",
+            0,
+            "",
+        ),
+        // A field, method or variable named `include`, also one passed to
+        // std's formatting macros, is not handed to an invocation.
+        (
+            "pub struct S { pub include: bool }\nimpl S { pub fn include(&self) -> bool { self.include } }\npub fn f(s: &S) -> S {\n    let include = s.include();\n    println!(\"{}\", include);\n    assert!(include || !include);\n    S { include }\n}\n",
+            0,
+            "",
+        ),
+        // A path through a module named `include`, handed to a macro.
+        (
+            "mod include { pub fn g() {} }\nmacro_rules! run { ($e:path) => { $e() }; }\npub fn f() { run!(include::g) }\n",
+            0,
+            "",
+        ),
+        // `include` imported under another name, alone, grouped, from
+        // std, or from inside a function: an invocation through the new
+        // name is not one the scan sees, so the import fails.
+        (
+            "use core::include as inc;\ninc!(\"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:1: `use core :: include as inc`",
+        ),
+        (
+            "use ::core::{include as inc, primitive};\ninc!(\"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:1: `use :: core :: { include as inc , primitive }`",
+        ),
+        // The raw identifier `r#include` is the same macro to rustc,
+        // invoked or imported.
+        (
+            "r#include!(concat!(\"uu/x/\", \"gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (\"uu/x/\" , \"gen.rs\"))",
+        ),
+        (
+            "use core::r#include as inc;\ninc!(\"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:1: `use core :: r#include as inc`",
+        ),
+        (
+            "pub fn f() {\n    use std::include as inc;\n    inc!(\"uu/x/gen.rs\");\n}\n",
+            1,
+            "lib.rs:2: `use std :: include as inc`",
+        ),
+        // A glob names no `include` leaf, nor does a path through a
+        // module of that name.
+        (
+            "use std::prelude::v1::*;\nuse self::include::g;\nmod include { pub fn g() {} }\npub fn f() {}\n",
+            0,
+            "",
+        ),
+        (
+            "include!(concat!(\"uu/x/\", \"gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (\"uu/x/\" , \"gen.rs\"))",
+        ),
+        (
+            "macro_rules! inc { ($p:literal) => { include!($p); }; }\ninc!(\"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!($ p) is inside a macro_rules! definition",
+        ),
+        // Only `OUT_DIR`, and only through `concat!`, is outside src/.
+        (
+            "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/uu/x/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (env ! (\"CARGO_MANIFEST_DIR\")",
+        ),
+        // The OUT_DIR form's tail must be string literals that climb out
+        // of OUT_DIR nowhere: any build.rs sets OUT_DIR, and a `..` tail
+        // can reach back into a left-out directory.
+        (
+            "include!(concat!(env!(\"OUT_DIR\"), \"/../../../../../crates/a/src/uu/x/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (env ! (\"OUT_DIR\") , \"/../",
+        ),
+        (
+            "include!(concat!(env!(\"OUT_DIR\"), \"/a/\", \"..\", \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (env ! (\"OUT_DIR\") , \"/a/\"",
+        ),
+        (
+            "include!(concat!(env!(\"OUT_DIR\"), other!()));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (env ! (\"OUT_DIR\") , other !",
+        ),
+        (
+            "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\",));\npub fn f() {}\n",
+            0,
+            "",
+        ),
+        (
+            "include!(concat!(dir!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (dir !",
+        ),
+        (
+            "include!(joined!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(joined !",
+        ),
+        (
+            "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            0,
+            "",
+        ),
+        // A `concat` or `env` the crate defines, or renames a macro to,
+        // shadows the builtin, so the OUT_DIR form could name any file.
+        (
+            "macro_rules! concat { ($($t:tt)*) => { \"uu/x/tests/gen.rs\" }; }\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:2: include!(concat ! (env ! (\"OUT_DIR\") , \"/gen.rs\"))",
+        ),
+        (
+            "macro_rules! env { ($v:literal) => { \"uu/x/tests\" }; }\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:2: include!(concat ! (env ! (\"OUT_DIR\") , \"/gen.rs\"))",
+        ),
+        (
+            "use crate::p as env;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: `use crate :: p as env`",
+        ),
+        // An explicit import of another crate's `concat` or `env`, plain
+        // or grouped, outranks the prelude too.
+        (
+            "use dep::concat;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: `use dep :: concat`",
+        ),
+        (
+            "use dep::{env};\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: `use dep :: { env }`",
+        ),
+        // A plain `use std::env;` imports the module and shadows nothing.
+        (
+            "use std::env;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            0,
+            "",
+        ),
+        (
+            "pub const S: &str = include_str!(concat!(\"uu/x/\", \"gen.rs\"));\npub fn f() {}\n",
+            0,
+            "",
+        ),
+    ] {
+        fs::write(src.join("lib.rs"), lib).expect("write");
+        // uu/x/gen.rs, which no row counts, fails the run by itself (the
+        // coverage backstop), so it is there only where the include check
+        // is to fail too, and the passing cases have no such file.
+        if code == 1 {
+            fs::write(src.join("uu/x/gen.rs"), "pub fn hidden() {}\n").expect("write");
+        } else {
+            let _ = fs::remove_file(src.join("uu/x/gen.rs"));
+        }
+        for (skip, code) in [(", skip_packages = true", code), ("", 0)] {
+            fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+            let (got, out, err) = count(&dir, &[]);
+            let failed = err.contains(unresolved)
+                || err.contains(in_macro)
+                || err.contains(imported)
+                || err.contains(forwarded);
+            let named = code == 0 || (err.contains(want) && failed);
+            assert!(
+                got == code && named && (code == 1 || !failed),
+                "{lib:?} {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+            );
+        }
+    }
+    // A glob binds names in its own module only: one in another file of
+    // the crate leaves the OUT_DIR form trusted here (uutils' uucore has
+    // `pub use uucore_procs::*;` at its root and the form in a module).
+    fs::write(src.join("m.rs"), "pub use dep::*;\npub fn h() {}\n").expect("write");
+    fs::write(
+        src.join("lib.rs"),
+        "mod m;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+    )
+    .expect("write");
+    let _ = fs::remove_file(src.join("uu/x/gen.rs"));
+    fs::write(
+        dir.join("verus/count.toml"),
+        config(", skip_packages = true"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "a glob in another module: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    fs::remove_file(src.join("m.rs")).expect("rm");
+    // A Cargo dependency of a renamed to a std name rebinds it in a's own
+    // walk: a path through it is held, though no file binds the name.
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[package.metadata.verus]\nverify = true\n[dependencies]\ncore = { package = \"dep\", path = \"../dep\" }\n",
+    )
+    .expect("write");
+    fs::write(
+        src.join("lib.rs"),
+        "core::vec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+    )
+    .expect("write");
+    fs::write(src.join("uu/x/gen.rs"), "pub fn hidden() {}\n").expect("write");
+    for (skip, code) in [(", skip_packages = true", 1), ("", 0)] {
+        fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        let named = err.contains("lib.rs:1: a macro invocation's arguments name include")
+            && err.contains(forwarded);
+        assert!(
+            got == code && (code == 0) != named,
+            "renamed dependency {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// rustc resolves a relative `include!` path written in a `macro_rules!`
+/// body from the file that invokes the macro (#198): `inc!()`, defined in
+/// lib.rs with `include!("x/gen.rs")` and invoked in uu/mod.rs, reads
+/// uu/x/gen.rs, in package `x`'s directory and outside `x`'s src/, so no
+/// row would count it. With `skip_packages = true`, an `include!` inside
+/// any `macro_rules!` definition (nested ones too) fails the run, its
+/// literal path notwithstanding. Negative: one of the
+/// `concat!(env!("OUT_DIR"), ..)` form there passes; without the key
+/// every case passes.
+#[test]
+fn skip_packages_fails_an_include_in_a_macro_body() {
+    let dir = crate_of("skip-include-macro", &[]);
+    let src = dir.join("crates/a/src");
+    fs::create_dir_all(src.join("uu/x/src")).expect("mkdir");
+    fs::write(
+        src.join("uu/x/Cargo.toml"),
+        "[package]\nname = \"x\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(src.join("uu/x/src/lib.rs"), "pub fn g() {}\n").expect("write");
+    fs::write(src.join("uu/x/gen.rs"), "pub fn hidden() {}\n").expect("write");
+    fs::write(src.join("uu/mod.rs"), "inc!();\n").expect("write");
+    let config = |skip: &str| {
+        format!(
+            "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"x\", path = \"crates/a/src/uu/x\" }}]\n"
+        )
+    };
+    let in_macro = "is inside a macro_rules! definition, so rustc resolves its path from wherever the macro is invoked";
+    for (lib, code) in [
+        (
+            "macro_rules! inc { () => { include!(\"x/gen.rs\"); }; }\nmod uu;\n",
+            1,
+        ),
+        (
+            "macro_rules! outer { () => { macro_rules! inc { () => { include!(\"x/gen.rs\"); }; } }; }\nouter!();\nmod uu;\n",
+            1,
+        ),
+        (
+            "macro_rules! inc { () => { include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\")); }; }\nmod uu;\n",
+            0,
+        ),
+    ] {
+        fs::write(src.join("lib.rs"), lib).expect("write");
+        // As above: uu/x/gen.rs fails by the coverage backstop alone.
+        if code == 1 {
+            fs::write(src.join("uu/x/gen.rs"), "pub fn hidden() {}\n").expect("write");
+        } else {
+            let _ = fs::remove_file(src.join("uu/x/gen.rs"));
+        }
+        for (skip, code) in [(", skip_packages = true", code), ("", 0)] {
+            fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+            let (got, out, err) = count(&dir, &[]);
+            let named = err.contains("lib.rs:1: include!(\"x/gen.rs\")") && err.contains(in_macro);
+            assert!(
+                got == code && (code == 0) != named,
+                "{lib:?} {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}"
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The crate counting a left-out directory reads its own src/ alone
+/// (#198), so a library or binary root it declares outside its src/
+/// (`[lib] path = "lib.rs"`, `[[bin]] path = "tool.rs"`) would count in
+/// no row once the outer crate leaves the directory out: with
+/// `skip_packages = true` the run fails, naming the root and the
+/// directory. `x` is a configured member with a src/, so the earlier
+/// checks pass. Negative: roots under src/, and a test target outside it
+/// (which ships nothing), pass; without the key every case passes.
+#[test]
+fn skip_packages_fails_a_counting_crate_s_root_outside_its_src() {
+    let dir = crate_of("skip-counting-root", &[("lib.rs", "pub fn f() {}\n")]);
+    let x = dir.join("crates/a/src/uu/x");
+    fs::create_dir_all(x.join("src")).expect("mkdir");
+    fs::create_dir_all(x.join("tests")).expect("mkdir");
+    fs::write(x.join("src/main.rs"), "fn main() {}\n").expect("write");
+    fs::write(x.join("src/lib.rs"), "pub fn g() {}\n").expect("write");
+    fs::write(x.join("tests/t.rs"), "#[test]\nfn t() {}\n").expect("write");
+    let config = |skip: &str| {
+        format!(
+            "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"x\", path = \"crates/a/src/uu/x\" }}]\n"
+        )
+    };
+    let package = "[package]\nname = \"x\"\nversion = \"0.0.0\"\n";
+    for (targets, code, root) in [
+        ("[lib]\npath = \"lib.rs\"\n", 1, "crates/a/src/uu/x/lib.rs"),
+        (
+            "[[bin]]\nname = \"tool\"\npath = \"tool.rs\"\n",
+            1,
+            "crates/a/src/uu/x/tool.rs",
+        ),
+        (
+            "[lib]\npath = \"src/../lib.rs\"\n",
+            1,
+            "crates/a/src/uu/x/src/../lib.rs",
+        ),
+        ("[lib]\npath = \"src/lib.rs\"\n", 0, ""),
+        ("[[test]]\nname = \"t\"\npath = \"tests/t.rs\"\n", 0, ""),
+    ] {
+        fs::write(x.join("Cargo.toml"), format!("{package}{targets}")).expect("write");
+        // x/lib.rs and x/tool.rs, which no row counts, fail by the
+        // coverage backstop alone, so they are there only for the roots
+        // that are to fail.
+        for f in ["lib.rs", "tool.rs"] {
+            if code == 1 {
+                fs::write(x.join(f), "fn main() {}\npub fn hidden() {}\n").expect("write");
+            } else {
+                let _ = fs::remove_file(x.join(f));
+            }
+        }
+        for (skip, code) in [(", skip_packages = true", code), ("", 0)] {
+            fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+            let (got, out, err) = count(&dir, &[]);
+            let want = format!(
+                "FAIL skip_packages: crate a leaves out crates/a/src/uu/x, and crate x, which counts it, does not read its target root {root}, which lies outside its src/"
+            );
+            assert!(
+                got == code && (code == 0) != err.contains(&want),
+                "{targets:?} {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+            );
+        }
+    }
+    // A root written outside src/ that links to a file in it, which x
+    // reads, passes. (Without the key, `a` refuses the link as one under
+    // its own src/.)
+    std::os::unix::fs::symlink("src/lib.rs", x.join("linked.rs")).expect("ln");
+    fs::write(
+        x.join("Cargo.toml"),
+        format!("{package}[lib]\npath = \"linked.rs\"\n"),
+    )
+    .expect("write");
+    fs::write(
+        dir.join("verus/count.toml"),
+        config(", skip_packages = true"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "linked root: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    // Nor does x's walk read a file x includes from outside its src/:
+    // with the key, x is held as a crate with skip_packages is, against
+    // all of its src/. Negative: an include within x/src, and the OUT_DIR
+    // form, pass; without the key every case passes.
+    fs::remove_file(x.join("linked.rs")).expect("rm");
+    fs::write(
+        x.join("Cargo.toml"),
+        format!("{package}[lib]\npath = \"src/lib.rs\"\n"),
+    )
+    .expect("write");
+    fs::write(x.join("src/gen.rs"), "pub fn shown() {}\n").expect("write");
+    let includes = "FAIL skip_packages: crate a leaves out crates/a/src/uu/x, and crate x, which counts it, does not read what crates/a/src/uu/x/src/lib.rs:";
+    for (lib, code, want) in [
+        (
+            "include!(\"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "include!(\"../gen.rs\") names crates/a/src/uu/x/src/../gen.rs, outside its src/",
+        ),
+        // The raw identifier is the same macro.
+        (
+            "r#include!(\"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "include!(\"../gen.rs\") names crates/a/src/uu/x/src/../gen.rs, outside its src/",
+        ),
+        (
+            "include!(concat!(\"../\", \"gen.rs\"));\npub fn g() {}\n",
+            1,
+            "names a file the counter cannot resolve",
+        ),
+        // x's own `concat` shadows the builtin: the OUT_DIR form is no
+        // longer trusted in the counting crate either.
+        (
+            "macro_rules! concat { ($($t:tt)*) => { \"../gen.rs\" }; }\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn g() {}\n",
+            1,
+            "names a file the counter cannot resolve",
+        ),
+        // Another crate's macro imported under a std name is held in the
+        // counting crate too.
+        (
+            "use dep::vec;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "dep::vec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:1 includes: a macro invocation's arguments name include",
+        ),
+        // So is one through a std name the crate rebinds, by path or
+        // import.
+        (
+            "use dep as core;\ncore::vec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep as core;\nuse core::vec;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:3 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "extern crate dep as std;\nstd::vec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "extern crate dep as std;\nuse std::vec;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:3 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::core;\nuse core::vec;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:3 includes: a macro invocation's arguments name include",
+        ),
+        // So is one a `#[macro_use]` or a foreign glob may bring in, and
+        // the OUT_DIR form beside such a glob.
+        (
+            "#[macro_use]\nextern crate dep;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:3 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::*;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::*;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: include!(concat",
+        ),
+        (
+            "#[cfg_attr(all(), macro_use)]\nextern crate dep;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:3 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "#[cfg_attr(all(), macro_use)]\nextern crate dep;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn g() {}\n",
+            1,
+            "src/lib.rs:3 includes: include!(concat",
+        ),
+        (
+            "use core::include as inc;\ninc!(\"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "`use core :: include as inc` imports `include`, and the counter cannot follow a renamed or imported include in the crate counting a left-out directory",
+        ),
+        (
+            "macro_rules! call { ($m:ident : $p:literal) => { $m!($p); }; }\ncall!(include: \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "macro_rules! m { ($g:tt) => { include!$g; }; }\nm!((\"../gen.rs\"));\npub fn g() {}\n",
+            1,
+            "src/lib.rs:1 includes: include !$ g is inside a macro_rules! definition",
+        ),
+        (
+            "macro_rules! m { ($b:tt $g:tt) => { include $b $g; }; }\nm!(! (\"../gen.rs\"));\npub fn g() {}\n",
+            1,
+            "src/lib.rs:1 includes: include $ b $ is inside a macro_rules! definition",
+        ),
+        (
+            "macro_rules! call { ($m:ident, $p:literal) => { $m!($p); }; }\ncall!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: a macro invocation's arguments name include outside an include! invocation, which the macro may forward to one, and the counter cannot follow that in the crate counting a left-out directory",
+        ),
+        (
+            "macro_rules! m { () => { include!(\"gen.rs\"); }; }\nm!();\npub fn g() {}\n",
+            1,
+            "is inside a macro_rules! definition",
+        ),
+        ("include!(\"gen.rs\");\npub fn g() {}\n", 0, ""),
+        // A field, method or variable named `include` is not handed to an
+        // invocation.
+        (
+            "pub struct S { pub include: bool }\nimpl S { pub fn include(&self) -> bool { self.include } }\npub fn g(s: &S) -> S {\n    let include = s.include();\n    println!(\"{}\", include);\n    S { include }\n}\n",
+            0,
+            "",
+        ),
+        // A file that is not there (rustc fails the build) is judged by
+        // its path as written: under src/.
+        ("include!(\"missing.rs\");\npub fn g() {}\n", 0, ""),
+        (
+            "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn g() {}\n",
+            0,
+            "",
+        ),
+    ] {
+        fs::write(x.join("src/lib.rs"), lib).expect("write");
+        // x/gen.rs fails by the coverage backstop alone: there only where
+        // the include check is to fail too.
+        if code == 1 {
+            fs::write(x.join("gen.rs"), "pub fn hidden() {}\n").expect("write");
+        } else {
+            let _ = fs::remove_file(x.join("gen.rs"));
+        }
+        for (skip, code) in [(", skip_packages = true", code), ("", 0)] {
+            fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+            let (got, out, err) = count(&dir, &[]);
+            let named = err.contains(includes) && err.contains(want);
+            assert!(
+                got == code && (code == 0) != named,
+                "{lib:?} {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+            );
+        }
+    }
+    // A Cargo dependency renamed to a std name rebinds it too: a path
+    // through it is held, though no file of the crate binds the name.
+    fs::write(
+        x.join("Cargo.toml"),
+        format!("{package}[lib]\npath = \"src/lib.rs\"\n[dependencies]\ncore = {{ package = \"dep\", path = \"../dep\" }}\n"),
+    )
+    .expect("write");
+    fs::write(
+        x.join("src/lib.rs"),
+        "core::vec!(include, \"../gen.rs\");\npub fn g() {}\n",
+    )
+    .expect("write");
+    fs::write(x.join("gen.rs"), "pub fn hidden() {}\n").expect("write");
+    for (skip, code) in [(", skip_packages = true", 1), ("", 0)] {
+        fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        let named = err.contains(includes)
+            && err.contains("src/lib.rs:1 includes: a macro invocation's arguments name include");
+        assert!(
+            got == code && (code == 0) != named,
+            "renamed dependency {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The coverage backstop (#198): with `skip_packages = true`, every `*.rs`
+/// file under a left-out directory is one the crate counting it reads
+/// (under its src/), or one cargo builds apart from its shipped targets
+/// (under tests/, benches/, examples/, or build.rs). Any other, with no
+/// include of it anywhere, fails the run: no row counts it, and an
+/// include! the scan does not see could compile it into a crate.
+/// Negative: tests/, benches/, examples/ and build.rs pass; without the
+/// key every case passes.
+#[test]
+fn skip_packages_fails_a_file_no_row_counts() {
+    let dir = crate_of("skip-coverage", &[("lib.rs", "pub fn f() {}\n")]);
+    let x = dir.join("crates/a/src/uu/x");
+    for d in ["src", "tests", "benches", "examples", "other"] {
+        fs::create_dir_all(x.join(d)).expect("mkdir");
+    }
+    fs::write(
+        x.join("Cargo.toml"),
+        "[package]\nname = \"x\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(x.join("src/lib.rs"), "pub fn g() {}\n").expect("write");
+    for f in ["tests/t.rs", "benches/b.rs", "examples/e.rs", "build.rs"] {
+        fs::write(x.join(f), "fn main() {}\n").expect("write");
+    }
+    let config = |skip: &str| {
+        format!(
+            "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"x\", path = \"crates/a/src/uu/x\" }}]\n"
+        )
+    };
+    for (stray, code) in [(None, 0), (Some("gen.rs"), 1), (Some("other/m.rs"), 1)] {
+        for f in ["gen.rs", "other/m.rs"] {
+            let _ = fs::remove_file(x.join(f));
+        }
+        if let Some(f) = stray {
+            fs::write(x.join(f), "pub fn hidden() {}\n").expect("write");
+        }
+        for (skip, code) in [(", skip_packages = true", code), ("", 0)] {
+            fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+            let (got, out, err) = count(&dir, &[]);
+            let want = format!(
+                "FAIL skip_packages: crate a leaves out crates/a/src/uu/x, where crates/a/src/uu/x/{} is a `*.rs` file that crate x, which counts it, does not read",
+                stray.unwrap_or("")
+            );
+            assert!(
+                got == code && (code == 0) != err.contains(&want),
+                "{stray:?} {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+            );
+        }
+    }
+    // Directory links that form cycles: two under tests/ (never entered)
+    // and one elsewhere (walked once). The run ends and passes.
+    for f in ["gen.rs", "other/m.rs"] {
+        let _ = fs::remove_file(x.join(f));
+    }
+    std::os::unix::fs::symlink(".", x.join("tests/left")).expect("ln");
+    std::os::unix::fs::symlink(".", x.join("tests/right")).expect("ln");
+    std::os::unix::fs::symlink("..", x.join("other/up")).expect("ln");
+    fs::write(
+        dir.join("verus/count.toml"),
+        config(", skip_packages = true"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "cycle links: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    // A package nested in x outside its src/ (`x/derive`): a configured
+    // crate counts it, so the backstop passes it; unconfigured, no row
+    // counts its files and the run fails.
+    fs::create_dir_all(x.join("derive/src")).expect("mkdir");
+    fs::write(
+        x.join("derive/Cargo.toml"),
+        "[package]\nname = \"derive\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(x.join("derive/src/lib.rs"), "pub fn d() {}\n").expect("write");
+    let nested = "[crates]\nmembers = [{ name = \"a\", path = \"crates/a\", skip_packages = true }, { name = \"x\", path = \"crates/a/src/uu/x\" }, { name = \"derive\", path = \"crates/a/src/uu/x/derive\" }]\n";
+    fs::write(dir.join("verus/count.toml"), nested).expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "configured nested package: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    fs::write(
+        dir.join("verus/count.toml"),
+        config(", skip_packages = true"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains("crates/a/src/uu/x/derive/src/lib.rs is a `*.rs` file that crate x"),
+        "unconfigured nested package: got = exit {got}, {out:?}, {err:?}; wanted = exit 1 naming x/derive/src/lib.rs"
+    );
+    // Configured, the nested package's own tests are built apart, but a
+    // file of it outside its src/ (a `[lib] path = "lib.rs"`, or a file
+    // its src includes from `..`) is counted by no row and fails.
+    fs::create_dir_all(x.join("derive/tests")).expect("mkdir");
+    fs::write(x.join("derive/tests/t.rs"), "fn main() {}\n").expect("write");
+    fs::write(dir.join("verus/count.toml"), nested).expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "configured nested package with tests: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    fs::write(x.join("derive/lib.rs"), "pub fn hidden() {}\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("crates/a/src/uu/x/derive/lib.rs is a `*.rs` file that crate x"),
+        "configured nested package, a file outside its src/: got = exit {got}, {out:?}, {err:?}; wanted = exit 1 naming x/derive/lib.rs"
+    );
+    // Its includes are held as the counting crate's are: a file in its
+    // own tests/ (built apart, so the backstop passes it) that its src
+    // includes is counted by no row and fails.
+    fs::remove_file(x.join("derive/lib.rs")).expect("rm");
+    fs::write(x.join("derive/tests/gen.rs"), "pub fn hidden() {}\n").expect("write");
+    fs::write(
+        x.join("derive/src/lib.rs"),
+        "include!(\"../tests/gen.rs\");\npub fn d() {}\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains("and crate derive, which counts it, does not read what crates/a/src/uu/x/derive/src/lib.rs:1 includes"),
+        "configured nested package including from its tests/: got = exit {got}, {out:?}, {err:?}; wanted = exit 1 naming derive's include"
+    );
+    // Its target roots are held as the counting crate's are: a library
+    // root in its own tests/ (`[lib] path = "tests/lib.rs"`) is read by
+    // no row and fails.
+    fs::write(x.join("derive/src/lib.rs"), "pub fn d() {}\n").expect("write");
+    fs::write(
+        x.join("derive/Cargo.toml"),
+        "[package]\nname = \"derive\"\nversion = \"0.0.0\"\n[lib]\npath = \"tests/lib.rs\"\n",
+    )
+    .expect("write");
+    fs::write(x.join("derive/tests/lib.rs"), "pub fn hidden() {}\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains("and crate derive, which counts it, does not read its target root crates/a/src/uu/x/derive/tests/lib.rs"),
+        "configured nested package, a root in its tests/: got = exit {got}, {out:?}, {err:?}; wanted = exit 1 naming derive's root"
+    );
+    fs::remove_dir_all(x.join("derive")).expect("rm");
+    // A package under x's tests/ (`x/tests/fixture`) may be a shipped
+    // crate's path dependency: unconfigured, it fails; configured, it
+    // passes, and its files outside its src/ are held all the same.
+    fs::create_dir_all(x.join("tests/fixture/src")).expect("mkdir");
+    fs::write(
+        x.join("tests/fixture/Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(x.join("tests/fixture/src/lib.rs"), "pub fn fx() {}\n").expect("write");
+    fs::write(
+        dir.join("verus/count.toml"),
+        config(", skip_packages = true"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains("where crates/a/src/uu/x/tests/fixture holds a Cargo.toml, but no configured crate reads it"),
+        "unconfigured package under tests/: got = exit {got}, {out:?}, {err:?}; wanted = exit 1 naming x/tests/fixture"
+    );
+    let fixture = "[crates]\nmembers = [{ name = \"a\", path = \"crates/a\", skip_packages = true }, { name = \"x\", path = \"crates/a/src/uu/x\" }, { name = \"fixture\", path = \"crates/a/src/uu/x/tests/fixture\" }]\n";
+    fs::write(dir.join("verus/count.toml"), fixture).expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "configured package under tests/: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    fs::write(x.join("tests/fixture/gen.rs"), "pub fn hidden() {}\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains("crates/a/src/uu/x/tests/fixture/gen.rs is a `*.rs` file that crate x"),
+        "configured package under tests/, a file outside its src/: got = exit {got}, {out:?}, {err:?}; wanted = exit 1 naming x/tests/fixture/gen.rs"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A target root reached through a link under `src/` into another
+/// package's directory (`src/bin` a link to `../../tool`, which holds a
+/// Cargo.toml, with autobins finding `src/bin/x.rs`) fails the run with
+/// `skip_packages = true`: the walk leaves the directory out, while cargo
+/// builds `x.rs` as the crate's binary. Without the key the link is
+/// refused, as one the walk reads through.
+#[test]
+fn skip_packages_fails_a_root_through_a_link() {
+    let dir = crate_of("skip-root-link", &[("lib.rs", "pub fn f() {}\n")]);
+    fs::create_dir_all(dir.join("crates/tool/src")).expect("mkdir");
+    fs::write(
+        dir.join("crates/tool/Cargo.toml"),
+        "[package]\nname = \"tool\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(dir.join("crates/tool/src/lib.rs"), "pub fn t() {}\n").expect("write");
+    fs::write(
+        dir.join("crates/tool/x.rs"),
+        "fn main() {}\npub fn hidden() {}\n",
+    )
+    .expect("write");
+    std::os::unix::fs::symlink("../../tool", dir.join("crates/a/src/bin")).expect("ln");
+    for (skip, code, want) in [
+        (", skip_packages = true", 1, "a target's root file is"),
+        ("", 2, "[crates] crate a reads crates/a/src/bin, a symlink"),
+    ] {
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!(
+                "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"tool\", path = \"crates/tool\" }}]\n"
+            ),
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == code && err.contains(want) && (code != 1 || err.contains("src/bin/x.rs")),
+            "{skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The base revision's walk leaves out the directories the head's does
+/// (#198), so the head and the base count alike: a file of another
+/// package under `src/` that invokes `dep::bin!()`, a macro crate `a`
+/// also defines, is an error only when read as part of `a` (its own
+/// crate `x` defines no `bin`), and with `skip_packages = true` neither
+/// the walk nor the base's (read for its rlimits with `--base-rev`)
+/// reads it as `a`'s. Negative: without the key the walk fails on it.
+#[test]
+fn skip_packages_holds_for_every_reader_of_the_sources() {
+    let config = |skip: &str| {
+        format!(
+            "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"x\", path = \"crates/a/src/uu/x\" }}]\n[rlimit]\npath = \"verus/RLIMIT\"\n"
+        )
+    };
+    let skipped = config(", skip_packages = true");
+    let (top, dir) = sub_repository(
+        "skip-packages",
+        &[
+            (
+                b"crates/a/Cargo.toml",
+                "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[package.metadata.verus]\nverify = true\n",
+            ),
+            (
+                b"crates/a/src/lib.rs",
+                "::vstd::prelude::verus! {\n#[verifier::rlimit(10)]\npub fn f() {}\n}\n#[macro_export]\nmacro_rules! bin { () => {} }\n",
+            ),
+            (
+                b"crates/a/src/uu/x/Cargo.toml",
+                "[package]\nname = \"x\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+            ),
+            (
+                b"crates/a/src/uu/x/src/lib.rs",
+                "dep::bin!();\npub fn g() {}\n",
+            ),
+            (b"verus/count.toml", &skipped),
+            (b"verus/RLIMIT", "max-share 65\n"),
+        ],
+    );
+    let stats = top.join("stats.json");
+    fs::write(&stats, ratchet_stats(3_000_000).replace("a::v", "a::f")).expect("write");
+    let s = stats.to_string_lossy().into_owned();
+    let (got, out, err) = count(&dir, &["--rlimit", &s, "--base-rev", "base"]);
+    assert!(
+        got == 0 && out.contains("ok rlimit headroom") && !err.contains("bin!"),
+        "skipped: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    fs::write(dir.join("verus/count.toml"), config("")).expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("crates/a/src/uu/x/src/lib.rs:1: bin! resolves to none"),
+        "read: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&top);
+}
+
+/// Turning `skip_packages` on for a crate the base read narrows what it
+/// counts (#198), so with `--base-rev` it fails without a new
+/// `[[narrowed]]` line naming it, and passes with one. Negative: turning
+/// it off is no narrowing.
+#[test]
+fn skip_packages_turned_on_is_a_narrowing() {
+    let dir = repository("skip-narrowed");
+    let member = |skip: &str| {
+        format!("[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}]\n")
+    };
+    let on = member(", skip_packages = true");
+    for (tag, text) in [("member", member("")), ("skipping", on.clone())] {
+        fs::write(dir.join("verus/count.toml"), text).expect("write");
+        git(&dir, &["add", "verus/count.toml"]);
+        git(&dir, &["commit", "-q", "-m", tag]);
+        git(&dir, &["tag", tag]);
+    }
+    let change = "[crates] member \"a\" changes skip_packages from false to true";
+    let line = format!(
+        "[[narrowed]]\nchange = {change:?}\nreason = \"src/uu holds the utilities' own packages\"\n"
+    );
+    for (text, base, code, want) in [
+        (
+            on.clone(),
+            "member",
+            1,
+            format!(
+                "FAIL configuration: verus/count.toml: {change}, so the directories under its src/ that hold a Cargo.toml are no longer read"
+            ),
+        ),
+        (
+            format!("{on}{line}"),
+            "member",
+            0,
+            format!(
+                "ok configuration: verus/count.toml: {change}, so the directories under its src/ that hold a Cargo.toml are no longer read, with a reason: src/uu holds the utilities' own packages"
+            ),
+        ),
+        (
+            member(""),
+            "skipping",
+            0,
+            "ok configuration: verus/count.toml keeps every gate skipping:verus/count.toml runs"
+                .to_owned(),
+        ),
+    ] {
+        fs::write(dir.join("verus/count.toml"), &text).expect("write");
+        let (got, out, err) = count(&dir, &["--base-rev", base]);
+        assert!(
+            got == code && (out.contains(&want) || err.contains(&want)),
+            "{text:?} against {base}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}

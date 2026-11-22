@@ -124,12 +124,19 @@ pub(crate) struct Crates {
 /// crate ships unless its Cargo.toml says `publish = false`, as every
 /// crate `dir` finds; with it, as it says (challoc's one crate is
 /// `publish = false`, since it is not a crates.io crate, and ships).
+/// With `skip_packages = true` (#198), the source walk of the crate
+/// leaves out each directory below its `src/` that holds a Cargo.toml:
+/// another package's sources, which cargo builds as its own crate (the
+/// root `coreutils` crate of uutils holds every utility's package under
+/// `src/uu/`). Off by default.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Member {
     pub(crate) name: String,
     pub(crate) path: String,
     pub(crate) ships: Option<bool>,
+    #[serde(default)]
+    pub(crate) skip_packages: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -614,7 +621,8 @@ impl Config {
     /// renamed (each adds entry points); an `[inputs]` crate or root
     /// removed, or `lazy` turned off (each narrows the walk); a `[crates]`
     /// `dir` removed or changed, a member removed or its `path` changed,
-    /// or a crate's `ships` changed to anything but `true`, compared by
+    /// or a crate's `ships` changed to anything but `true` or its
+    /// `skip_packages` turned on (it leaves files out of the walk), compared by
     /// member name and by path, with whatever reads a crate the base read
     /// (a member under any name, or a `dir`, which reads with `ships`
     /// unset), so a rename, a move onto a crate of the base's `dir` and a
@@ -652,6 +660,7 @@ impl Config {
         }
         let ships = |s: Option<bool>| s.map_or("unset".to_owned(), |s| s.to_string());
         let unshipped = |was: Option<bool>, now: Option<bool>| was != now && now != Some(true);
+        let skips = "so the directories under its src/ that hold a Cargo.toml are no longer read";
         for m in &b.members {
             let Some(n) = h.members.iter().find(|n| n.name == m.name) else {
                 push(
@@ -680,6 +689,15 @@ impl Config {
                     "so it may no longer count as shipped",
                 );
             }
+            if !m.skip_packages && n.skip_packages {
+                push(
+                    format!(
+                        "[crates] member {:?} changes skip_packages from false to true",
+                        m.name
+                    ),
+                    skips,
+                );
+            }
         }
         // A crate is also compared by its path, with whatever reads it now
         // under any name: a member there, or a `dir` it sits in, which
@@ -703,8 +721,12 @@ impl Config {
             {
                 continue;
             }
-            let (who, now) = match h.members.iter().find(|n| normal(&n.path) == at) {
-                Some(n) => (format!("member {:?} at {:?}", n.name, n.path), n.ships),
+            let (who, now, skip) = match h.members.iter().find(|n| normal(&n.path) == at) {
+                Some(n) => (
+                    format!("member {:?} at {:?}", n.name, n.path),
+                    n.ships,
+                    n.skip_packages,
+                ),
                 None if in_dir(&h.dir, &at) => (
                     format!(
                         "crate at {:?} through dir {:?}",
@@ -712,6 +734,7 @@ impl Config {
                         h.dir.as_deref().unwrap_or_default()
                     ),
                     None,
+                    false,
                 ),
                 None => continue,
             };
@@ -723,6 +746,12 @@ impl Config {
                         ships(now)
                     ),
                     effect,
+                );
+            }
+            if !m.skip_packages && skip {
+                push(
+                    format!("[crates] {who} changes skip_packages from false to true"),
+                    skips,
                 );
             }
         }
@@ -740,6 +769,15 @@ impl Config {
                         ships(n.ships)
                     ),
                     effect,
+                );
+            }
+            if n.skip_packages {
+                push(
+                    format!(
+                        "[crates] member {:?} at {:?} changes skip_packages from false to true",
+                        n.name, n.path
+                    ),
+                    skips,
                 );
             }
         }
@@ -1274,6 +1312,14 @@ mod tests {
                 "missing field",
             ),
             ("[crates", "TOML parse error"),
+            (
+                "[crates]\nmembers = [{ name = \"a\", path = \"a\", skip_packages = \"yes\" }]\n",
+                "invalid type: string \"yes\", expected a boolean",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"a\", path = \"a\", skip_packages = 1 }]\n",
+                "invalid type: integer `1`, expected a boolean",
+            ),
         ] {
             let got = Config::parse(text).map(|_| ()).unwrap_err();
             assert!(got.contains(want), "{text:?}: got = {got}, want = {want}");
@@ -1859,6 +1905,92 @@ home = "crates/pcre2-capi/src/object.rs"
                     "[crates] member \"extra\" changes ships from unset to false",
                     "[crates] member \"extra\" at \"a\" changes ships from true to false",
                 ][..],
+            ),
+        ] {
+            let got = shown(&crates(head).narrowed_from(&crates(base)));
+            let changes: Vec<&str> = got
+                .iter()
+                .map(|g| g.split(", so ").next().unwrap_or_default())
+                .collect();
+            assert_eq!(
+                changes, want,
+                "{base:?} to {head:?}: got = {got:?}, wanted = {want:?}"
+            );
+        }
+    }
+
+    /// `skip_packages` turned on for a crate the base read (#198) narrows
+    /// what it counts: compared by member name, and by path under any
+    /// name, with a member at a base member's path or at a crate of the
+    /// base's `dir`. Negative: turning it off, keeping it, a member new in
+    /// the head that sets it, and an unread key's default, are none.
+    #[test]
+    fn skip_packages_turned_on_is_a_narrowing() {
+        let shown = |n: &[Narrowing]| n.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let crates = |text: &str| Config::parse(&format!("[crates]\n{text}")).expect("parses");
+        let on = "[crates] member \"a\" changes skip_packages from false to true";
+        for (base, head, want) in [
+            (
+                "members = [{ name = \"a\", path = \"a\" }]\n",
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                &[on][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\", skip_packages = false }]\n",
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                &[on][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\" }]\n",
+                "members = [{ name = \"a\", path = \"moved\", skip_packages = true }]\n",
+                &["[crates] member \"a\" moves from \"a\" to \"moved\"", on][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\" }]\n",
+                "members = [{ name = \"b\", path = \"./a/\", skip_packages = true }]\n",
+                &[
+                    "[crates] members drops \"a\"",
+                    "[crates] member \"b\" at \"./a/\" changes skip_packages from false to true",
+                ][..],
+            ),
+            (
+                "dir = \"crates\"\n",
+                "members = [{ name = \"a\", path = \"crates/a\", skip_packages = true }]\n",
+                &[
+                    "[crates] dir is no longer \"crates\"",
+                    "[crates] member \"a\" at \"crates/a\" changes skip_packages from false to true",
+                ][..],
+            ),
+            // None.
+            (
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                "members = [{ name = \"a\", path = \"a\" }]\n",
+                &[][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                "members = [{ name = \"a\", path = \"a\", skip_packages = false }]\n",
+                &[][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                &[][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                "members = [{ name = \"b\", path = \"a\", skip_packages = true }]\n",
+                &["[crates] members drops \"a\""][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\" }]\n",
+                "members = [{ name = \"a\", path = \"a\" }, { name = \"b\", path = \"b\", skip_packages = true }]\n",
+                &[][..],
+            ),
+            (
+                "dir = \"crates\"\n",
+                "dir = \"crates\"\nmembers = [{ name = \"b\", path = \"vendor/b\", skip_packages = true }]\n",
+                &[][..],
             ),
         ] {
             let got = shown(&crates(head).narrowed_from(&crates(base)));

@@ -78,6 +78,43 @@
 //! only tests build it: rustc compiles its functions, so leaving them
 //! out would raise the verified share.
 //!
+//! The source walk reads every `*.rs` file under a crate's `src/`. A
+//! member with `skip_packages = true` (#198) leaves out each directory
+//! below its `src/` that holds a Cargo.toml: another package's sources,
+//! which cargo builds as its own crate. Every reader of the crate's
+//! sources leaves out the same directories (the walk of the working tree
+//! and of a base revision, the symlink check, the token-mint scan). A
+//! module declaration, a target root (by its declared path, so through a
+//! link too) or an `include!` of a string literal of the crate in such a
+//! directory fails the run, since rustc compiles that file as part of the
+//! crate. Any other `include!` in such a crate fails the run too, as the
+//! counter cannot resolve the file it names, except one of
+//! `concat!(env!("OUT_DIR"), ..)` whose other arguments are string
+//! literals with no `..` component, outside `src/` ([`included_files`]);
+//! one inside a `macro_rules!` definition fails whatever its argument but
+//! that form, as rustc resolves its path from the invoking file; and a
+//! `use` that imports `include` under any name fails, as an invocation
+//! through it does not name `include` ([`imports_include`]), as does a
+//! bare `include` anywhere among a macro invocation's argument tokens,
+//! which the macro may forward to one (but std's expression macros,
+//! [`EXPRESSION_MACROS`], where nothing may give the name another macro:
+//! no `macro_rules!` or import of it, no rebound `std`/`core`/`alloc`
+//! path, no foreign `#[macro_use] extern crate`, and no foreign glob in
+//! the file, [`foreign_glob`]; the `OUT_DIR` form is held the same way
+//! for `concat` and `env`). Each
+//! left-out directory must be read by a configured crate of its own (a
+//! member at that directory, or a crate of `[crates] dir` there), else
+//! the run fails ([`left_out_unread`]), so its code counts somewhere, as
+//! it does on a library or binary root that crate declares outside its
+//! own `src/`, which no walk reads, and on an `include!` of its files
+//! that a crate with `skip_packages` could not have, against all of its
+//! `src/`, and, as a backstop for every include form, on any `*.rs` file
+//! under the directory that crate does not read and cargo does not build
+//! apart (its `tests/`, `benches/`, `examples/`, `build.rs`:
+//! [`built_apart`]); in a `macro_rules!` body every `include` fails but
+//! the `OUT_DIR` form and a path ([`path_separator`]); the run prints a line for each (`crate a leaves out crates/a/src/uu/x
+//! (counted as crate x)`).
+//!
 //! A function an item macro writes counts too ([`Counter::item_macro`]):
 //! an invocation of a `macro_rules!` the crate defines is expanded
 //! ([`expand`]), and each function in the expansion counts as outside
@@ -1200,6 +1237,22 @@ fn walked_editions(root: &Path, dir: &Path) -> Vec<u32> {
 /// undeclared, never verified. A manifest it cannot read gives the default
 /// targets.
 fn crate_roots(dir: &Path) -> Vec<PathBuf> {
+    declared_roots(dir, ALL_TARGETS)
+        .into_iter()
+        .filter_map(|r| fs::canonicalize(r).ok())
+        .collect()
+}
+
+/// Every kind of target whose `path` [`declared_roots`] reads besides the
+/// library.
+const ALL_TARGETS: &[&str] = &["bin", "example", "test", "bench"];
+
+/// The root files [`crate_roots`] gives, as the manifest and the directory
+/// listing name them under `dir`, before links are resolved, so a root
+/// reached through a link under `src/` is seen at the path cargo names:
+/// the library's, and each `path` of the target tables `kinds` names
+/// (`bin`, `example`, `test`, `bench`), with the binaries autobins finds.
+fn declared_roots(dir: &Path, kinds: &[&str]) -> Vec<PathBuf> {
     let manifest: toml::Table = fs::read_to_string(dir.join("Cargo.toml"))
         .ok()
         .and_then(|t| toml::from_str(&t).ok())
@@ -1223,8 +1276,8 @@ fn crate_roots(dir: &Path) -> Vec<PathBuf> {
         None if auto("autolib") => roots.push(src.join("lib.rs")),
         None => {}
     }
-    for kind in ["bin", "example", "test", "bench"] {
-        if let Some(targets) = manifest.get(kind).and_then(toml::Value::as_array) {
+    for kind in kinds {
+        if let Some(targets) = manifest.get(*kind).and_then(toml::Value::as_array) {
             roots.extend(targets.iter().filter_map(path_of));
         }
     }
@@ -1238,9 +1291,6 @@ fn crate_roots(dir: &Path) -> Vec<PathBuf> {
         }
     }
     roots
-        .into_iter()
-        .filter_map(|r| fs::canonicalize(r).ok())
-        .collect()
 }
 
 /// [`ModFiles`] for the parsed module files `files`, each with its path,
@@ -3876,17 +3926,20 @@ impl Counter {
     /// ([`macro_defs`]), so that an invocation in one file expands a
     /// definition in another; then each file is walked under its modules'
     /// `cfg`s. `tests`, if given, gathers the `#[test]` functions a ledger
-    /// may name.
+    /// may name. With `skip_packages` (#198), the other packages'
+    /// directories under `src/` are left out ([`rust_files`]); a root of
+    /// the crate's targets there fails the run, as a module file the walk
+    /// does not read does ([`unread_module_files`]).
     fn walk_crate(
         &mut self,
         cfg: &Config,
-        (root, k): (&Path, &Path),
+        (root, k, skip_packages): (&Path, &Path, bool),
         mut tests: Option<&mut std::collections::BTreeSet<String>>,
     ) {
         let src = k.join("src");
         let src = src.as_path();
         let mut paths = Vec::new();
-        rust_files(src, &mut paths);
+        rust_files(src, skip_packages, &mut paths);
         // A same-length stand-in for an identifier Verus keeps as a keyword
         // (the PCRE2 port's `assert::`) keeps the line numbers.
         let read: Vec<(PathBuf, Option<verus_syn::Result<verus_syn::File>>)> = paths
@@ -3908,7 +3961,56 @@ impl Counter {
             }
         }
         let mut bad = Vec::new();
-        let mods = module_files(&ok, crate_roots(k), &self.atoms, &mut bad);
+        let roots = crate_roots(k);
+        if skip_packages {
+            // Each root by the path cargo names (a link under src/ into a
+            // package's directory) and by where it leads.
+            for r in declared_roots(k, ALL_TARGETS)
+                .iter()
+                .filter(|r| r.is_file() && in_left_out(src, r))
+            {
+                bad.push(format!(
+                    "{}: a target's root file is {}, in a directory under src/ with its own Cargo.toml, which the counter does not read for this crate (skip_packages); move the target's root out of that directory, or drop skip_packages",
+                    k.join("Cargo.toml").display(),
+                    r.display()
+                ));
+            }
+            let defined =
+                macro_rules_names(ok.iter().map(|(_, file)| file), &crate_manifest(root, k).1);
+            for (f, file) in &ok {
+                for (line, what, to) in
+                    unfollowed_includes((src, f), file, &defined, |to| in_left_out(src, to))
+                {
+                    match what {
+                        Include::Path(lit) => {
+                            bad.push(format!(
+                                "{}:{line}: include!({lit:?}) names {}, in a directory under src/ with its own Cargo.toml, which the counter does not read for this crate (skip_packages); move the file out of that directory, or drop skip_packages",
+                                f.display(),
+                                to.display()
+                            ));
+                        }
+                        Include::OutDir => {}
+                        Include::Unresolved(arg) => bad.push(format!(
+                            "{}:{line}: include!({arg}) names a file the counter cannot resolve in a crate with skip_packages, so it may be in a directory the counter does not read for this crate; give the path as one string literal (or as concat!(env!(\"OUT_DIR\"), ..)), or drop skip_packages",
+                            f.display()
+                        )),
+                        Include::InMacro(arg) => bad.push(format!(
+                            "{}:{line}: {arg} is inside a macro_rules! definition, so rustc resolves its path from wherever the macro is invoked, which the counter does not follow in a crate with skip_packages; move the include! out of the macro (as one string literal, or as concat!(env!(\"OUT_DIR\"), ..)), or drop skip_packages",
+                            f.display()
+                        )),
+                        Include::Imported(tree) => bad.push(format!(
+                            "{}:{line}: `use {tree}` imports `include`, and the counter cannot follow a renamed or imported include in a crate with skip_packages; invoke include! by its own name, or drop skip_packages",
+                            f.display()
+                        )),
+                        Include::Forwarded => bad.push(format!(
+                            "{}:{line}: a macro invocation's arguments name include outside an include! invocation, which the macro may forward to one, and the counter cannot follow that in a crate with skip_packages; invoke include! itself, or drop skip_packages",
+                            f.display()
+                        )),
+                    }
+                }
+            }
+        }
+        let mods = module_files(&ok, roots, &self.atoms, &mut bad);
         bad.extend(unread_module_files(
             &read.iter().map(|(f, _)| canonical(f)).collect::<Vec<_>>(),
             &mods,
@@ -6319,17 +6421,1086 @@ fn macro_defs(
     }
 }
 
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+/// The `*.rs` files under `dir` (a crate's `src/`), in path order,
+/// following directory links. With `skip_packages`, a directory below
+/// `dir` that is another package's ([`other_package`]) is left out.
+fn rust_files(dir: &Path, skip_packages: bool, out: &mut Vec<PathBuf>) {
+    src_walk(dir, skip_packages, out, &mut Vec::new());
+}
+
+/// The directories below `dir` (a crate's `src/`) that a walk with
+/// `skip_packages` leaves out ([`rust_files`]), in path order: the
+/// outermost of each, as the walk reaches them, through links too.
+fn left_out_dirs(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    src_walk(dir, true, &mut Vec::new(), &mut out);
+    out
+}
+
+/// [`rust_files`]'s walk: the `*.rs` files into `files`, and each
+/// directory it leaves out into `left_out`.
+fn src_walk(
+    dir: &Path,
+    skip_packages: bool,
+    files: &mut Vec<PathBuf>,
+    left_out: &mut Vec<PathBuf>,
+) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
     entries.sort();
     for p in entries {
         if p.is_dir() {
-            rust_files(&p, out);
+            if skip_packages && other_package(&p) {
+                left_out.push(p);
+            } else {
+                src_walk(&p, skip_packages, files, left_out);
+            }
         } else if p.extension().is_some_and(|e| e == "rs") {
-            out.push(p);
+            files.push(p);
         }
     }
+}
+
+/// Each directory a crate of `crates` with `skip_packages` leaves out of
+/// its walk ([`left_out_dirs`]), under `root`, with the configured crate
+/// that reads it (a member at that directory, or a crate of `[crates]
+/// dir` there, compared canonically), printed as a line of the run's
+/// output so the change to the denominator is visible. A directory no
+/// configured crate reads would leave its code counted nowhere (a
+/// package added under `src/` later that no row lists), so each is an
+/// error; and so is each library or binary root the counting crate
+/// declares outside its own `src/` ([`declared_roots`], as written and
+/// resolved), which its walk does not read either, and each `include!`
+/// of that crate's files whose file its walk may not read
+/// ([`unfollowed_includes`]: a literal path outside its `src/`, an
+/// argument the counter cannot resolve, one inside a `macro_rules!`
+/// body; the `OUT_DIR` form passes). This holds for the crates counting
+/// left-out directories alone: another crate's roots and includes
+/// outside `src/` are read by no crate before or after. And, as a
+/// backstop for every include form, each `*.rs` file under the left-out
+/// directory that crate does not read and cargo does not build apart
+/// ([`built_apart`]) is an error. The stand-ins of `cfg` apply as the
+/// walk applies them. The errors, which the run prints at once and fails
+/// on after the walk has named its own.
+fn left_out_unread(root: &Path, cfg: &Config, crates: &[Krate]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for k in crates.iter().filter(|k| k.skip_packages) {
+        for d in left_out_dirs(&k.dir.join("src")) {
+            let shown = d.strip_prefix(root).unwrap_or(&d).display().to_string();
+            let at = canonical(&d);
+            match crates.iter().find(|j| canonical(&j.dir) == at) {
+                Some(j) => {
+                    println!(
+                        "crate {} leaves out {shown} (counted as crate {})",
+                        k.name, j.name
+                    );
+                    // The counting crate's walk reads its src/ alone, so a
+                    // library or binary root outside it would count in no
+                    // row. (Tests, benches and examples ship nothing.)
+                    let jsrc = j.dir.join("src");
+                    // A configured crate nested under the directory
+                    // (`x/derive`) is held like the counting crate: its
+                    // roots and includes here, its other files by the
+                    // backstop below.
+                    let dcanon = canonical(&d);
+                    let nested: Vec<&Krate> = crates
+                        .iter()
+                        .filter(|c| {
+                            let cc = canonical(&c.dir);
+                            cc != dcanon && cc.starts_with(&dcanon)
+                        })
+                        .collect();
+                    let holders: Vec<&Krate> =
+                        std::iter::once(j).chain(nested.iter().copied()).collect();
+                    for h in &holders {
+                        let hsrc = h.dir.join("src");
+                        for r in declared_roots(&h.dir, &["bin"])
+                            .iter()
+                            .filter(|r| r.is_file() && !read_under(&hsrc, r))
+                        {
+                            errors.push(format!(
+                                "FAIL skip_packages: crate {} leaves out {shown}, and crate {}, which counts it, does not read its target root {}, which lies outside its src/, so that code would count nowhere: move the root under {}, or drop skip_packages",
+                                k.name,
+                                h.name,
+                                r.strip_prefix(root).unwrap_or(r).display(),
+                                hsrc.strip_prefix(root).unwrap_or(&hsrc).display()
+                            ));
+                        }
+                    }
+                    // Nor does it read a file one of its own files
+                    // includes from outside its src/: held as a crate with
+                    // skip_packages is, against all of its src/. A file
+                    // that does not parse is left to the walk to report.
+                    let mut paths = Vec::new();
+                    rust_files(&jsrc, j.skip_packages, &mut paths);
+                    // The backstop: every `*.rs` file under the left-out
+                    // directory is one the counting crate's walk reads,
+                    // or one cargo builds apart from any shipped target
+                    // (its tests, benches, examples and build script).
+                    // Any other could reach a crate through an include!
+                    // the scan below does not see, counted in no row.
+                    // A nested configured crate counts what its own walk
+                    // reads, and builds its own tests, benches, examples
+                    // and build script apart; anything else of it is held.
+                    let mut walked: Vec<PathBuf> = paths.iter().map(|p| canonical(p)).collect();
+                    for c in &nested {
+                        let mut more = Vec::new();
+                        rust_files(&c.dir.join("src"), c.skip_packages, &mut more);
+                        walked.extend(more.iter().map(|p| canonical(p)));
+                    }
+                    let mut under = Vec::new();
+                    let configured: Vec<PathBuf> =
+                        nested.iter().map(|c| canonical(&c.dir)).collect();
+                    let mut unconfigured = Vec::new();
+                    backstop_files(&d, &configured, &mut under, &mut unconfigured);
+                    // A package under the left-out directory's tests/,
+                    // benches/ or examples/ (`x/tests/fixture`) may be a
+                    // shipped crate's path dependency, so, as a package
+                    // under src/ is, it must be a configured crate.
+                    for q in &unconfigured {
+                        errors.push(format!(
+                            "FAIL skip_packages: crate {} leaves out {shown}, where {} holds a Cargo.toml, but no configured crate reads it, so its code would count nowhere if a shipped crate depends on it: add it as a [crates] member (with ships = false if it does not ship), or drop skip_packages",
+                            k.name,
+                            q.strip_prefix(root).unwrap_or(q).display()
+                        ));
+                    }
+                    // A file is built apart by the innermost package
+                    // holding it: a nested configured crate's tests,
+                    // benches, examples and build script, or the left-out
+                    // directory's (so a file of a configured crate inside
+                    // x/tests/ is held all the same).
+                    let apart = |f: &Path| {
+                        let fc = canonical(f);
+                        let owner = configured
+                            .iter()
+                            .filter(|c| fc.starts_with(c))
+                            .max_by_key(|c| c.components().count())
+                            .unwrap_or(&dcanon);
+                        built_apart(owner, &fc)
+                    };
+                    for f in under
+                        .iter()
+                        .filter(|f| !walked.contains(&canonical(f)) && !apart(f))
+                    {
+                        errors.push(format!(
+                            "FAIL skip_packages: crate {} leaves out {shown}, where {} is a `*.rs` file that crate {}, which counts it, does not read (it is outside its src/, tests/, benches/, examples/ and build.rs), so no row counts it, while rustc may compile it into a crate through an include!: move it under {} or one of those directories, or drop skip_packages",
+                            k.name,
+                            f.strip_prefix(root).unwrap_or(f).display(),
+                            j.name,
+                            jsrc.strip_prefix(root).unwrap_or(&jsrc).display()
+                        ));
+                    }
+                    for h in &holders {
+                    let hsrc = h.dir.join("src");
+                    let mut hpaths = Vec::new();
+                    rust_files(&hsrc, h.skip_packages, &mut hpaths);
+                    let parsed: Vec<(PathBuf, verus_syn::File)> = hpaths
+                        .into_iter()
+                        .filter_map(|f| {
+                            let t = fs::read_to_string(&f).ok()?;
+                            let file = parse_file(&cfg.stand_in(&t)).ok()?;
+                            Some((f, file))
+                        })
+                        .collect();
+                    let defined = macro_rules_names(
+                        parsed.iter().map(|(_, file)| file),
+                        &crate_manifest(root, &h.dir).1,
+                    );
+                    for (f, file) in &parsed {
+                        let f = f.clone();
+                        let unread = |to: &Path| !include_under(&hsrc, to);
+                        for (line, what, to) in
+                            unfollowed_includes((&hsrc, &f), file, &defined, unread)
+                        {
+                            let why = match what {
+                                Include::Path(lit) => format!(
+                                    "include!({lit:?}) names {}, outside its src/",
+                                    to.strip_prefix(root).unwrap_or(&to).display()
+                                ),
+                                Include::InMacro(arg) => format!(
+                                    "{arg} is inside a macro_rules! definition, whose path rustc resolves from wherever the macro is invoked"
+                                ),
+                                Include::Unresolved(arg) => format!(
+                                    "include!({arg}) names a file the counter cannot resolve"
+                                ),
+                                Include::Imported(tree) => format!(
+                                    "`use {tree}` imports `include`, and the counter cannot follow a renamed or imported include in the crate counting a left-out directory"
+                                ),
+                                Include::Forwarded => "a macro invocation's arguments name include outside an include! invocation, which the macro may forward to one, and the counter cannot follow that in the crate counting a left-out directory".to_owned(),
+                                // Never listed.
+                                Include::OutDir => continue,
+                            };
+                            errors.push(format!(
+                                "FAIL skip_packages: crate {} leaves out {shown}, and crate {}, which counts it, does not read what {}:{line} includes: {why}, so that code would count nowhere: give the path as one string literal under {} (or as concat!(env!(\"OUT_DIR\"), ..)), or drop skip_packages",
+                                k.name,
+                                h.name,
+                                f.strip_prefix(root).unwrap_or(&f).display(),
+                                hsrc.strip_prefix(root).unwrap_or(&hsrc).display()
+                            ));
+                        }
+                    }
+                    }
+                }
+                None => errors.push(format!(
+                    "FAIL skip_packages: crate {} leaves out {shown}, which holds a Cargo.toml, but no configured crate reads it, so its code would count nowhere: add it as a [crates] member (with ships = false if it does not ship), or drop skip_packages",
+                    k.name
+                )),
+            }
+        }
+    }
+    errors
+}
+
+/// The `*.rs` files under the left-out package directory `dir` that the
+/// coverage backstop holds: its `tests/`, `benches/` and `examples/`
+/// (built apart) are not walked for files, and a directory reached a
+/// second time through links (a cycle, `tests/left -> .`) is not walked
+/// again, so the walk ends on any tree. A nested package that is itself
+/// a configured crate (`configured`: the canonical directories of the
+/// configured crates under `dir`; `x/derive`, a cargo-fuzz `x/fuzz`
+/// listed as a member) is walked as a package of its own, its top-level
+/// `tests/`, `benches/` and `examples/` not walked for files; the caller
+/// passes what its own walk reads. A package's `tests/`, `benches/` and
+/// `examples/` are still searched for packages (a directory holding a
+/// Cargo.toml, `x/tests/fixture`), which a shipped crate may name as a
+/// path dependency: a configured one is walked as a package of its own,
+/// wherever it sits, and each other one goes into `unconfigured` (a link
+/// back to a package the walk is inside is a cycle, not a package).
+/// Directory links are followed otherwise, as the source walk follows
+/// them.
+fn backstop_files(
+    dir: &Path,
+    configured: &[PathBuf],
+    out: &mut Vec<PathBuf>,
+    unconfigured: &mut Vec<PathBuf>,
+) {
+    use std::collections::HashSet;
+    /// The outermost package directories at or below `at`, each once.
+    fn packages(at: &Path, seen: &mut HashSet<PathBuf>, found: &mut Vec<PathBuf>) {
+        let Ok(canon) = fs::canonicalize(at) else {
+            return;
+        };
+        if !seen.insert(canon) {
+            return;
+        }
+        if other_package(at) {
+            found.push(at.to_path_buf());
+            return;
+        }
+        let Ok(rd) = fs::read_dir(at) else { return };
+        let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+        entries.sort();
+        for p in entries.iter().filter(|p| p.is_dir()) {
+            packages(p, seen, found);
+        }
+    }
+    struct Walk<'a> {
+        configured: &'a [PathBuf],
+        seen: HashSet<PathBuf>,
+        searched: HashSet<PathBuf>,
+        out: &'a mut Vec<PathBuf>,
+        unconfigured: &'a mut Vec<PathBuf>,
+    }
+    impl Walk<'_> {
+        fn walk(&mut self, at: &Path, top: bool) {
+            let Ok(canon) = fs::canonicalize(at) else {
+                return;
+            };
+            if !self.seen.insert(canon) {
+                return;
+            }
+            let Ok(rd) = fs::read_dir(at) else { return };
+            let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+            entries.sort();
+            for p in entries {
+                if p.is_dir() {
+                    let apart = top
+                        && p.file_name()
+                            .is_some_and(|n| n == "tests" || n == "benches" || n == "examples");
+                    if apart {
+                        self.apart(&p);
+                    } else {
+                        // A configured nested package is walked as a
+                        // package of its own.
+                        let package = other_package(&p)
+                            && self.configured.iter().any(|c| *c == canonical(&p));
+                        self.walk(&p, package);
+                    }
+                } else if p.extension().is_some_and(|e| e == "rs") {
+                    self.out.push(p);
+                }
+            }
+        }
+        /// A package's `tests/`, `benches/` or `examples/` directory
+        /// `at`: its files are built apart, but a package in it may be
+        /// a shipped crate's path dependency.
+        fn apart(&mut self, at: &Path) {
+            let mut found = Vec::new();
+            packages(at, &mut self.searched, &mut found);
+            let inside = canonical(at);
+            for q in found {
+                let qc = canonical(&q);
+                if self.configured.contains(&qc) {
+                    self.walk(&q, true);
+                } else if !inside.starts_with(&qc) {
+                    self.unconfigured.push(q);
+                }
+            }
+        }
+    }
+    Walk {
+        configured,
+        seen: HashSet::new(),
+        searched: HashSet::new(),
+        out,
+        unconfigured,
+    }
+    .walk(dir, true);
+}
+
+/// Whether `file`, under the package directory `dir`, is one cargo builds
+/// apart from the package's library and binaries: under its `tests/`,
+/// `benches/` or `examples/`, or its `build.rs`.
+fn built_apart(dir: &Path, file: &Path) -> bool {
+    ["tests", "benches", "examples"]
+        .iter()
+        .any(|d| file.starts_with(dir.join(d)))
+        || file == dir.join("build.rs")
+}
+
+/// Whether `file` lies under `src`, where a crate's walk reads it, by
+/// where its links lead: a root written outside `src` that links to a
+/// file in it is read, and one written under `src` that links out is
+/// refused by the symlink check ([`crate_dirs`]).
+fn read_under(src: &Path, file: &Path) -> bool {
+    canonical(file).starts_with(canonical(src))
+}
+
+/// Whether `dir`, a directory below a crate's `src/`, holds another
+/// package's sources: it holds a Cargo.toml (followed through links), so
+/// cargo builds it as its own crate. A crate with `skip_packages`
+/// (#198) leaves such directories out of every reading of its sources.
+fn other_package(dir: &Path) -> bool {
+    dir.join("Cargo.toml").is_file()
+}
+
+/// Whether `file` lies in a directory below `src` that a walk with
+/// `skip_packages` leaves out, by its path as written, `.` and `..` taken
+/// as written (so through a link under `src/` into a package's directory),
+/// or by where its links lead.
+fn in_left_out(src: &Path, file: &Path) -> bool {
+    in_other_package(&lexical(src), &lexical(file))
+        || in_other_package(&canonical(src), &canonical(file))
+}
+
+/// `p` with its `.` components dropped and each `..` taking off the
+/// component before it, as written, links not followed.
+fn lexical(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push(c);
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Each `include!` invocation anywhere in `file` (an item, an expression,
+/// inside `verus!`, or in another macro's tokens, a `macro_rules!` body
+/// among them), with what its argument names ([`Include`]).
+/// `include_str!` and `include_bytes!` read no code and are not listed.
+/// `defined`: the names of the `macro_rules!` the crate defines
+/// ([`macro_rules_names`]), which take a std macro's name from it.
+fn included_files(
+    file: &verus_syn::File,
+    defined: &std::collections::BTreeSet<String>,
+) -> Vec<Included> {
+    use verus_syn::__private::ToTokens as _;
+    // `in_macro`: inside a `macro_rules!` definition, where rustc resolves
+    // a relative path from wherever the macro is invoked.
+    // `args`: the stream is inside the argument tokens, at any depth, of a
+    // macro invocation (`NAME!(..)`) whose macro may take an identifier
+    // and invoke it (a matcher reaches into groups), so a bare `include`
+    // here may be forwarded to an invocation.
+    fn scan(
+        ts: TokenStream,
+        (in_macro, args): (bool, bool),
+        defined: &std::collections::BTreeSet<String>,
+        out: &mut Vec<Included>,
+    ) {
+        let toks: Vec<TokenTree> = ts.into_iter().collect();
+        // The body of each `macro_rules!` here (`macro_rules! NAME { .. }`),
+        // scanned as a macro's.
+        let mut bodies = Vec::new();
+        for (i, t) in toks.iter().enumerate() {
+            if let TokenTree::Ident(id) = t
+                && id == "macro_rules"
+                && matches!(toks.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!')
+            {
+                let at = if matches!(toks.get(i + 2), Some(TokenTree::Ident(_))) {
+                    i + 3
+                } else {
+                    i + 2
+                };
+                if matches!(toks.get(at), Some(TokenTree::Group(_))) {
+                    bodies.push(at);
+                }
+            }
+        }
+        for (i, t) in toks.iter().enumerate() {
+            match t {
+                // A `use` that imports `include`, under any name: through
+                // it an invocation would not name `include`.
+                TokenTree::Ident(id) if id == "use" => {
+                    let tree: Vec<TokenTree> = toks[i + 1..]
+                        .iter()
+                        .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == ';'))
+                        .cloned()
+                        .collect();
+                    if imports_include(&tree) {
+                        let shown: TokenStream = tree.into_iter().collect();
+                        out.push((id.span().start().line, Include::Imported(shown.to_string())));
+                    }
+                }
+                TokenTree::Ident(id) if is_include(id) => {
+                    if let (Some(TokenTree::Punct(p)), Some(TokenTree::Group(g))) =
+                        (toks.get(i + 1), toks.get(i + 2))
+                        && p.as_char() == '!'
+                    {
+                        let line = id.span().start().line;
+                        let mut args: Vec<TokenTree> = g.stream().into_iter().collect();
+                        if matches!(args.last(), Some(TokenTree::Punct(c)) if c.as_char() == ',') {
+                            args.pop();
+                        }
+                        let what = match &args[..] {
+                            // Only while `concat!` and `env!` are the
+                            // builtins: a `macro_rules!` of either name
+                            // the crate defines could name any file.
+                            _ if out_dir_concat(&args)
+                                && !defined.contains("concat")
+                                && !defined.contains("env")
+                                && !defined.contains("*") =>
+                            {
+                                Include::OutDir
+                            }
+                            _ if in_macro => Include::InMacro(format!("include!({})", g.stream())),
+                            [TokenTree::Literal(l)] => {
+                                match verus_syn::parse2::<verus_syn::LitStr>(
+                                    TokenTree::Literal(l.clone()).into(),
+                                ) {
+                                    Ok(s) => Include::Path(s.value()),
+                                    Err(_) => Include::Unresolved(g.stream().to_string()),
+                                }
+                            }
+                            _ => Include::Unresolved(g.stream().to_string()),
+                        };
+                        out.push((line, what));
+                    } else if path_separator(&toks[i + 1..]) {
+                        // A path through a module named `include`.
+                    } else if in_macro {
+                        // In a `macro_rules!` body, an invocation may be
+                        // spliced from the macro's input (`include!$g`,
+                        // `include $b $g`), so any other `include` there
+                        // is one the counter cannot follow.
+                        let shown: TokenStream = toks[i..].iter().take(4).cloned().collect();
+                        out.push((id.span().start().line, Include::InMacro(shown.to_string())));
+                    } else if args {
+                        // Not an invocation, nor a path through a module
+                        // of that name: an identifier a macro may forward
+                        // to one (`call!(include, "p")`).
+                        out.push((id.span().start().line, Include::Forwarded));
+                    }
+                }
+                TokenTree::Group(g) => {
+                    let invoked = match (
+                        i.checked_sub(2).map(|j| &toks[j]),
+                        i.checked_sub(1).map(|j| &toks[j]),
+                    ) {
+                        (Some(TokenTree::Ident(name)), Some(TokenTree::Punct(p)))
+                            if p.as_char() == '!' =>
+                        {
+                            let name = name.to_string();
+                            Some(name.strip_prefix("r#").unwrap_or(&name).to_owned())
+                        }
+                        _ => None,
+                    };
+                    // A macro's arguments, and every group inside them,
+                    // are held, but a std expression macro's (one the
+                    // crate does not define for itself); a group that is
+                    // no invocation's keeps what holds around it.
+                    // An invocation through a path (`dep::vec!`) is the
+                    // path's macro, std's only through std, core or alloc
+                    // where the crate does not rebind that name
+                    // ([`macro_rules_names`] lists it then).
+                    let foreign_path = i >= 3
+                        && path_root(&toks[..i - 2]).is_some_and(|r| {
+                            !matches!(r.as_str(), "std" | "core" | "alloc") || defined.contains(&r)
+                        });
+                    let forwards = match invoked {
+                        Some(n) => {
+                            !EXPRESSION_MACROS.contains(&n.as_str())
+                                || defined.contains(&n)
+                                || defined.contains("*")
+                                || foreign_path
+                        }
+                        None => args,
+                    };
+                    scan(
+                        g.stream(),
+                        (in_macro || bodies.contains(&i), forwards),
+                        defined,
+                        out,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    // A glob of another crate's, or of a module of this crate, may bring
+    // in a macro of any name, which outranks the std prelude's in the
+    // glob's module; the file is read as that module (an inline module
+    // in it too), so every name is held there (`*`, which no `use` leaf
+    // can be).
+    let held;
+    let defined = if foreign_glob(file, defined) {
+        let mut d = defined.clone();
+        d.insert("*".to_owned());
+        held = d;
+        &held
+    } else {
+        defined
+    };
+    scan(file.to_token_stream(), (false, false), defined, &mut out);
+    out
+}
+
+/// The names of the `macro_rules!` the files `files` define, anywhere in
+/// them (`macro_rules! NAME`), as written (a raw `r#name` without its
+/// `r#`). With them, each of `std`, `core` and `alloc` the crate binds to
+/// something else (a `use .. as core`, an `extern crate .. as std`, a
+/// `mod core`, or a Cargo dependency of the crate renamed to it, in
+/// `deps`), so a path through it is not std's ([`unfollowed_includes`])
+/// and a `use` through it may import another crate's macro.
+fn macro_rules_names<'a>(
+    files: impl IntoIterator<Item = &'a verus_syn::File>,
+    deps: &[(String, String)],
+) -> std::collections::BTreeSet<String> {
+    use verus_syn::__private::ToTokens as _;
+    let std_name = |s: &str| matches!(s, "std" | "core" | "alloc");
+    /// The std names `as` or `mod` binds anywhere in `ts`, and each a
+    /// `use` imports by name, renamed or not (`use dep::core;`); and into
+    /// `loads`, each crate a `#[macro_use] extern crate` loads, with
+    /// whether it is renamed (`as`).
+    fn rebinds(
+        ts: TokenStream,
+        out: &mut std::collections::BTreeSet<String>,
+        loads: &mut Vec<(String, bool)>,
+    ) {
+        let toks: Vec<TokenTree> = ts.into_iter().collect();
+        for (i, t) in toks.iter().enumerate() {
+            match t {
+                TokenTree::Ident(id) if id == "extern" => {
+                    let (Some(TokenTree::Ident(c)), Some(TokenTree::Ident(name))) =
+                        (toks.get(i + 1), toks.get(i + 2))
+                    else {
+                        continue;
+                    };
+                    if c != "crate" {
+                        continue;
+                    }
+                    // The attributes before it, past a visibility.
+                    let mut j = i;
+                    if j >= 1
+                        && matches!(&toks[j - 1], TokenTree::Group(g) if g.delimiter() == proc_macro2::Delimiter::Parenthesis)
+                    {
+                        j -= 1;
+                    }
+                    if j >= 1 && matches!(&toks[j - 1], TokenTree::Ident(p) if p == "pub") {
+                        j -= 1;
+                    }
+                    // An attribute that names `macro_use` anywhere, so
+                    // under a `cfg_attr` too (`#[cfg_attr(all(),
+                    // macro_use)]`), whatever its condition: a build may
+                    // apply it.
+                    fn names_macro_use(ts: TokenStream) -> bool {
+                        ts.into_iter().any(|t| match t {
+                            TokenTree::Ident(a) => a == "macro_use",
+                            TokenTree::Group(g) => names_macro_use(g.stream()),
+                            _ => false,
+                        })
+                    }
+                    let mut macro_use = false;
+                    while j >= 2
+                        && matches!(&toks[j - 2], TokenTree::Punct(p) if p.as_char() == '#')
+                    {
+                        let TokenTree::Group(g) = &toks[j - 1] else {
+                            break;
+                        };
+                        if names_macro_use(g.stream()) {
+                            macro_use = true;
+                        }
+                        j -= 2;
+                    }
+                    if macro_use {
+                        let renamed =
+                            matches!(toks.get(i + 3), Some(TokenTree::Ident(a)) if a == "as");
+                        let name = name.to_string();
+                        loads.push((name.strip_prefix("r#").unwrap_or(&name).to_owned(), renamed));
+                    }
+                }
+                TokenTree::Ident(id) if id == "use" => {
+                    let tree: Vec<TokenTree> = toks[i + 1..]
+                        .iter()
+                        .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == ';'))
+                        .cloned()
+                        .collect();
+                    let mut leaves = std::collections::BTreeSet::new();
+                    use_names(&tree, false, &mut leaves);
+                    out.extend(
+                        leaves
+                            .into_iter()
+                            .filter(|n| matches!(n.as_str(), "std" | "core" | "alloc")),
+                    );
+                }
+                TokenTree::Ident(id) if id == "as" || id == "mod" => {
+                    if let Some(TokenTree::Ident(name)) = toks.get(i + 1) {
+                        let name = name.to_string();
+                        let name = name.strip_prefix("r#").unwrap_or(&name);
+                        if matches!(name, "std" | "core" | "alloc") {
+                            out.insert(name.to_owned());
+                        }
+                    }
+                }
+                TokenTree::Group(g) => rebinds(g.stream(), out, loads),
+                _ => {}
+            }
+        }
+    }
+    let files: Vec<&verus_syn::File> = files.into_iter().collect();
+    let mut rebound: std::collections::BTreeSet<String> = deps
+        .iter()
+        .map(|(n, _)| n.clone())
+        .filter(|n| std_name(n))
+        .collect();
+    let mut loads = Vec::new();
+    for f in &files {
+        rebinds(f.to_token_stream(), &mut rebound, &mut loads);
+    }
+    // A `#[macro_use] extern crate` of a crate but std's and Verus's, or
+    // of one of those renamed (in the `extern crate` or in Cargo), puts
+    // its macros in the macro_use prelude, which outranks the std
+    // prelude's in the whole crate: every name is held (`*`), as the
+    // thread_local rule holds it ([`Counter::other_thread_local`]).
+    if loads.iter().any(|(c, renamed)| {
+        *renamed || !STD_OR_VERUS_CRATES.contains(&c.as_str()) || deps.iter().any(|(n, _)| n == c)
+    }) {
+        rebound.insert("*".to_owned());
+    }
+    fn scan(
+        ts: TokenStream,
+        rebound: &std::collections::BTreeSet<String>,
+        out: &mut std::collections::BTreeSet<String>,
+    ) {
+        let toks: Vec<TokenTree> = ts.into_iter().collect();
+        for (i, t) in toks.iter().enumerate() {
+            match t {
+                TokenTree::Ident(id) if id == "macro_rules" => {
+                    if let (Some(TokenTree::Punct(p)), Some(TokenTree::Ident(name))) =
+                        (toks.get(i + 1), toks.get(i + 2))
+                        && p.as_char() == '!'
+                    {
+                        let name = name.to_string();
+                        out.insert(name.strip_prefix("r#").unwrap_or(&name).to_owned());
+                    }
+                }
+                // A name a `use` brings in from outside std, core and
+                // alloc, or renames anything to, may be another crate's
+                // macro, which outranks the std prelude's of that name
+                // (`use dep::vec;`, `use dep::call as println;`), and so
+                // may one through a std name the crate rebinds (`use dep
+                // as core; use core::vec;`).
+                TokenTree::Ident(id) if id == "use" => {
+                    let tree: Vec<TokenTree> = toks[i + 1..]
+                        .iter()
+                        .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == ';'))
+                        .cloned()
+                        .collect();
+                    let std_root = tree.iter().find_map(|t| match t {
+                        TokenTree::Ident(id) => {
+                            let s = id.to_string();
+                            let s = s.strip_prefix("r#").unwrap_or(&s);
+                            Some(matches!(s, "std" | "core" | "alloc") && !rebound.contains(s))
+                        }
+                        TokenTree::Punct(_) => None,
+                        _ => Some(false),
+                    }) == Some(true);
+                    use_names(&tree, std_root, out);
+                }
+                TokenTree::Group(g) => scan(g.stream(), rebound, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for f in &files {
+        scan(f.to_token_stream(), &rebound, &mut out);
+    }
+    out.extend(rebound);
+    out
+}
+
+/// Whether `file` holds a `use` with a `*` that may bring in a macro of
+/// any name ([`included_files`]): any glob but one whose use tree starts
+/// at `std`, `core` or `alloc` where the crate does not rebind that name
+/// (`defined` lists it then, [`macro_rules_names`]), or that is exactly
+/// one of Verus's preludes ([`VERUS_GLOBS`], `use vstd::prelude::*;`).
+/// So `use dep::*;`, `use super::*;` and `use crate::m::*;` count, and
+/// so does a glob inside a group not at a std root (`use {a::*, b};`).
+fn foreign_glob(file: &verus_syn::File, defined: &std::collections::BTreeSet<String>) -> bool {
+    use verus_syn::__private::ToTokens as _;
+    fn has_star(tree: &[TokenTree]) -> bool {
+        tree.iter().any(|t| match t {
+            TokenTree::Punct(p) => p.as_char() == '*',
+            TokenTree::Group(g) => has_star(&g.stream().into_iter().collect::<Vec<_>>()),
+            _ => false,
+        })
+    }
+    fn scan(ts: TokenStream, defined: &std::collections::BTreeSet<String>) -> bool {
+        let toks: Vec<TokenTree> = ts.into_iter().collect();
+        for (i, t) in toks.iter().enumerate() {
+            match t {
+                TokenTree::Ident(id) if id == "use" => {
+                    let tree: Vec<TokenTree> = toks[i + 1..]
+                        .iter()
+                        .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == ';'))
+                        .cloned()
+                        .collect();
+                    if !has_star(&tree) {
+                        continue;
+                    }
+                    // The path's identifiers, a leading `::` dropped.
+                    let words: Vec<String> = tree
+                        .iter()
+                        .filter_map(|t| match t {
+                            TokenTree::Ident(id) => Some(id.to_string()),
+                            _ => None,
+                        })
+                        .collect();
+                    let flat = tree
+                        .iter()
+                        .all(|t| matches!(t, TokenTree::Ident(_) | TokenTree::Punct(_)));
+                    let verus = flat
+                        && VERUS_GLOBS
+                            .iter()
+                            .any(|g| words.iter().map(String::as_str).eq(g.iter().copied()));
+                    let std_root = matches!(tree.iter().find(|t| !matches!(t, TokenTree::Punct(_))),
+                    Some(TokenTree::Ident(id)) if {
+                        let s = id.to_string();
+                        matches!(s.as_str(), "std" | "core" | "alloc") && !defined.contains(&s)
+                    });
+                    if !verus && !std_root {
+                        return true;
+                    }
+                }
+                TokenTree::Group(g) if scan(g.stream(), defined) => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+    scan(file.to_token_stream(), defined)
+}
+
+/// The first segment of the path that ends `before` (the tokens before a
+/// macro's name), if `before` ends in `::`: `dep` for `dep::vec`, `std`
+/// for `::std::vec`; `None` for a bare name.
+fn path_root(before: &[TokenTree]) -> Option<String> {
+    let colon = |t: &TokenTree| matches!(t, TokenTree::Punct(p) if p.as_char() == ':');
+    let mut j = before.len();
+    let mut root = None;
+    while j >= 2 && colon(&before[j - 1]) && colon(&before[j - 2]) {
+        j -= 2;
+        match j.checked_sub(1).map(|k| &before[k]) {
+            Some(TokenTree::Ident(id)) => {
+                let s = id.to_string();
+                root = Some(s.strip_prefix("r#").unwrap_or(&s).to_owned());
+                j -= 1;
+            }
+            // A leading `::` (`::dep::vec`): the root is the segment after it.
+            _ => break,
+        }
+    }
+    root
+}
+
+/// The names the use tree `tree` binds that may be another crate's
+/// macro ([`macro_rules_names`]): each `as` target, and, where the tree
+/// does not start at `std`, `core` or `alloc` (`std_root`), each leaf.
+fn use_names(tree: &[TokenTree], std_root: bool, out: &mut std::collections::BTreeSet<String>) {
+    for (i, t) in tree.iter().enumerate() {
+        match t {
+            TokenTree::Ident(id) => {
+                let leaf = !matches!(tree.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == ':')
+                    && !matches!(tree.get(i + 1), Some(TokenTree::Ident(a)) if a == "as");
+                let renamed = i > 0 && matches!(&tree[i - 1], TokenTree::Ident(a) if a == "as");
+                let s = id.to_string();
+                let s = s.strip_prefix("r#").unwrap_or(&s);
+                if leaf && (renamed || !std_root) && !matches!(s, "self" | "super" | "crate" | "_")
+                {
+                    out.insert(s.to_owned());
+                }
+            }
+            TokenTree::Group(g) => {
+                use_names(&g.stream().into_iter().collect::<Vec<_>>(), std_root, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether `rest` starts with the path separator `::`: two `:` puncts,
+/// the first joined to the second, not one `:` (a matcher's
+/// `$m:ident : $p:literal` takes `include: "p"`).
+fn path_separator(rest: &[TokenTree]) -> bool {
+    matches!(
+        rest,
+        [TokenTree::Punct(a), TokenTree::Punct(b), ..]
+            if a.as_char() == ':'
+                && a.spacing() == proc_macro2::Spacing::Joint
+                && b.as_char() == ':'
+    )
+}
+
+/// The macros whose arguments are expressions (or items, for `verus!`)
+/// and which invoke no identifier they are given: std's formatting,
+/// assertion and collection macros. A bare `include` among their
+/// arguments is a value (a variable named `include`), not one forwarded
+/// to an invocation. Any other macro, the crate's own among them, may
+/// take an identifier and invoke it (`($m:ident) => { $m!(..) }`), and
+/// so may one of these names that the crate defines for itself with
+/// `macro_rules!`, which is then held as any other.
+const EXPRESSION_MACROS: &[&str] = &[
+    "verus",
+    "print",
+    "println",
+    "eprint",
+    "eprintln",
+    "format",
+    "format_args",
+    "write",
+    "writeln",
+    "panic",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "vec",
+    "matches",
+    "dbg",
+    "todo",
+    "unimplemented",
+    "unreachable",
+];
+
+/// Whether `id` names `include`, as written or as the raw identifier
+/// `r#include`, which rustc reads as the same macro.
+fn is_include(id: &proc_macro2::Ident) -> bool {
+    let s = id.to_string();
+    s == "include" || s == "r#include"
+}
+
+/// Whether the use tree `tree` (the tokens after `use`) imports a leaf
+/// named `include`, renamed or not, at any depth of `{..}` groups: an
+/// `include` not followed by `::`. A glob (`std::prelude::v1::*`) names
+/// no leaf, and the bare `include!` the scan finds anyway.
+fn imports_include(tree: &[TokenTree]) -> bool {
+    // The tree's root: its first identifier (`std` in `use std::env;`).
+    let std_root = tree.iter().find_map(|t| match t {
+        TokenTree::Ident(id) => Some(matches!(id.to_string().as_str(), "std" | "core" | "alloc")),
+        TokenTree::Punct(_) => None,
+        _ => Some(false),
+    }) == Some(true);
+    imports_in(tree, std_root)
+}
+
+/// [`imports_include`] at one depth of the use tree `tree`, `std_root`
+/// whether the whole tree starts at `std`, `core` or `alloc`.
+fn imports_in(tree: &[TokenTree], std_root: bool) -> bool {
+    tree.iter().enumerate().any(|(i, t)| match t {
+        // `include` imported under any name; and a leaf `concat` or `env`
+        // that is renamed to (`use crate::p as env;`) or imported from
+        // outside std (`use dep::concat;`): an explicit import outranks
+        // the prelude, so it may shadow the builtin the OUT_DIR form
+        // relies on. `use std::env;` imports std's module and passes.
+        TokenTree::Ident(id) => {
+            let leaf = !matches!(tree.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == ':');
+            let s = id.to_string();
+            let s = s.strip_prefix("r#").unwrap_or(&s);
+            let renamed = i > 0 && matches!(&tree[i - 1], TokenTree::Ident(a) if a == "as");
+            leaf && (is_include(id) || ((renamed || !std_root) && (s == "concat" || s == "env")))
+        }
+        TokenTree::Group(g) => imports_in(&g.stream().into_iter().collect::<Vec<_>>(), std_root),
+        _ => false,
+    })
+}
+
+/// An `include!` [`included_files`] found: its line and its argument.
+type Included = (usize, Include);
+
+/// The `include!`s of `file` (at `f`, under a crate's `src`) whose file a
+/// walk does not follow, each with its line, what it names, and, for a
+/// literal path, the file it resolves to from `f`'s directory (else
+/// `f`): a literal path for which `unread` holds, any argument the
+/// counter cannot resolve, and any inside a `macro_rules!` body; the
+/// `OUT_DIR` form ([`out_dir_concat`]) is outside `src/` and never listed.
+/// `defined`: the crate's `macro_rules!` names ([`included_files`]).
+fn unfollowed_includes(
+    (src, f): (&Path, &Path),
+    file: &verus_syn::File,
+    defined: &std::collections::BTreeSet<String>,
+    unread: impl Fn(&Path) -> bool,
+) -> Vec<(usize, Include, PathBuf)> {
+    let mut out = Vec::new();
+    for (line, what) in included_files(file, defined) {
+        match what {
+            Include::Path(lit) => {
+                let to = f.parent().unwrap_or(src).join(&lit);
+                if unread(&to) {
+                    out.push((line, Include::Path(lit), to));
+                }
+            }
+            Include::OutDir => {}
+            other => out.push((line, other, f.to_path_buf())),
+        }
+    }
+    out
+}
+
+/// Whether the file an `include!` resolves to, `to`, lies under `src`:
+/// where its links lead, or, for a file that is not there (rustc then
+/// fails the build), by its path as written.
+fn include_under(src: &Path, to: &Path) -> bool {
+    match fs::canonicalize(to) {
+        Ok(c) => c.starts_with(canonical(src)),
+        Err(_) => lexical(to).starts_with(lexical(src)),
+    }
+}
+
+/// What an `include!` names: a path written as one string literal; a
+/// file of the build's `OUT_DIR` (`concat!(env!("OUT_DIR"), ..)`), which
+/// is outside `src/`; or anything else (another `concat!`, another
+/// macro, a macro's `$p`), which the counter cannot resolve, as written;
+/// or, whatever its argument but the `OUT_DIR` form, one inside a
+/// `macro_rules!` definition, whose relative path rustc resolves from
+/// the file that invokes the macro, not the one that defines it.
+#[derive(Debug, PartialEq, Eq)]
+enum Include {
+    Path(String),
+    OutDir,
+    Unresolved(String),
+    /// An `include` inside a `macro_rules!` body (the invocation, or the
+    /// tokens from `include` on, as written), but the `OUT_DIR` form and a
+    /// path through a module of that name.
+    InMacro(String),
+    /// A `use` that imports `include` (the use tree, as written), renamed
+    /// or not: an invocation through the new name is not one the scan
+    /// sees.
+    Imported(String),
+    /// A bare `include` among a macro invocation's arguments, outside an
+    /// `include!` invocation, which the macro may forward to one
+    /// ([`EXPRESSION_MACROS`] are not held).
+    Forwarded,
+}
+
+/// Whether `args` (an `include!`'s argument) is a `concat!` whose first
+/// argument is `env!("OUT_DIR")` and whose other arguments are string
+/// literals with no `..` component in their concatenation, so the file
+/// lies under the build's output directory, outside `src/`.
+fn out_dir_concat(args: &[TokenTree]) -> bool {
+    let [
+        TokenTree::Ident(c),
+        TokenTree::Punct(bang),
+        TokenTree::Group(inner),
+    ] = args
+    else {
+        return false;
+    };
+    if c != "concat" || bang.as_char() != '!' {
+        return false;
+    }
+    let inner: Vec<TokenTree> = inner.stream().into_iter().collect();
+    let mut parts: Vec<&[TokenTree]> = inner
+        .split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ','))
+        .collect();
+    // A trailing comma.
+    if parts.len() > 1 && parts.last().is_some_and(|p| p.is_empty()) {
+        parts.pop();
+    }
+    let Some((
+        [
+            TokenTree::Ident(e),
+            TokenTree::Punct(bang),
+            TokenTree::Group(var),
+        ],
+        rest,
+    )) = parts.split_first().map(|(f, r)| (*f, r))
+    else {
+        return false;
+    };
+    let var: Vec<TokenTree> = var.stream().into_iter().collect();
+    if !(e == "env"
+        && bang.as_char() == '!'
+        && matches!(&var[..], [TokenTree::Literal(l)] if l.to_string() == "\"OUT_DIR\""))
+    {
+        return false;
+    }
+    // The rest: string literals alone, whose path climbs out of OUT_DIR
+    // nowhere.
+    let mut tail = String::new();
+    for p in rest {
+        let [TokenTree::Literal(l)] = p else {
+            return false;
+        };
+        let Ok(s) = verus_syn::parse2::<verus_syn::LitStr>(TokenTree::Literal(l.clone()).into())
+        else {
+            return false;
+        };
+        tail.push_str(&s.value());
+    }
+    !tail.split(['/', '\\']).any(|c| c == "..")
+}
+
+/// Whether `file` lies in a directory below `src` that is another
+/// package's ([`other_package`]), so a walk with `skip_packages` leaves
+/// it out. Both paths canonical; a file outside `src` is in none.
+fn in_other_package(src: &Path, file: &Path) -> bool {
+    let Ok(rel) = file.strip_prefix(src) else {
+        return false;
+    };
+    let mut at = src.to_path_buf();
+    let mut dirs: Vec<_> = rel.components().collect();
+    // A `..` (a path that did not resolve) is read by [`in_left_out`]'s
+    // reading as written, not here, where it would climb out of `src`.
+    if dirs
+        .iter()
+        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return false;
+    }
+    dirs.pop();
+    dirs.into_iter().any(|c| {
+        at.push(c);
+        other_package(&at)
+    })
 }
 
 /// A share to a tenth of a percent, rounded down as the floor rounds it.
@@ -6365,12 +7536,15 @@ fn unpublished(text: &str) -> bool {
 /// A crate the counter reads: its name, its directory (holding `src/`),
 /// whether it ships ([`ships`], or the configuration's `ships`), and
 /// whether its Cargo.toml decides that (`by_rule`: a `dir` crate, or a
-/// member without `ships`).
+/// member without `ships`), and whether its source walk leaves out the
+/// other packages' directories under its `src/` (`skip_packages`, a
+/// member's key, #198).
 struct Krate {
     name: String,
     dir: PathBuf,
     ships: bool,
     by_rule: bool,
+    skip_packages: bool,
 }
 
 /// The crates `c` names under `root`, in reading order: each
@@ -6430,6 +7604,7 @@ fn crate_dirs(root: &Path, c: &Config) -> Result<Vec<Krate>, String> {
                     .unwrap_or_default(),
                 ships: ships(&p),
                 by_rule: true,
+                skip_packages: false,
                 dir: p,
             }
         }));
@@ -6443,15 +7618,18 @@ fn crate_dirs(root: &Path, c: &Config) -> Result<Vec<Krate>, String> {
             name: m.name.clone(),
             ships: m.ships.unwrap_or_else(|| ships(&p)),
             by_rule: m.ships.is_none(),
+            skip_packages: m.skip_packages,
             dir: p,
         });
     }
     // A crate of `dir` that is a link, or sources reached through one,
     // would read another crate's code under a new name, as a configured
-    // path through a symlink would.
+    // path through a symlink would. A link in a directory the walk leaves
+    // out (`skip_packages`) is not read through.
     for k in &out {
         let rel = k.dir.strip_prefix(root).unwrap_or(&k.dir);
-        if let Some(link) = symlink_in(root, rel).or_else(|| symlink_below(root, &rel.join("src")))
+        if let Some(link) =
+            symlink_in(root, rel).or_else(|| symlink_below(root, &rel.join("src"), k.skip_packages))
         {
             return Err(format!(
                 "[crates] crate {} reads {}, a symlink: give each crate's directory and sources as files under {}",
@@ -6658,6 +7836,10 @@ fn main() {
         rlimit_required(&root, b, &cfg);
     }
     let crates = crate_dirs(&root, &cfg).unwrap_or_else(|e| usage(e));
+    let unread = left_out_unread(&root, &cfg, &crates);
+    for e in &unread {
+        eprintln!("{e}");
+    }
     let mut unshipped = Vec::new();
     let mut c = Counter {
         verus_only_ghost: cfg.crates.verus_only_ghost,
@@ -6693,6 +7875,7 @@ fn main() {
         name,
         dir: k,
         ships,
+        skip_packages,
         ..
     } in &crates
     {
@@ -6701,7 +7884,16 @@ fn main() {
         if !ships {
             unshipped.push(c.krate.clone());
         }
-        c.walk_crate(&cfg, (&root, k), cfg.ledger.is_some().then_some(&mut tests));
+        c.walk_crate(
+            &cfg,
+            (&root, k, *skip_packages),
+            cfg.ledger.is_some().then_some(&mut tests),
+        );
+    }
+    // The left-out directories' failures, after the walk has named its
+    // own (an include! or a root into such a directory), so each shows.
+    if !unread.is_empty() {
+        std::process::exit(1);
     }
     c.finish();
     if !opted_in(&crates, &verus_crates(&c)) {
@@ -7334,18 +8526,26 @@ fn symlink_in(root: &Path, rel: &Path) -> Option<PathBuf> {
 /// (a crate's `src/`), or below it one named `*.rs`, or one to a directory
 /// that holds a `.rs` file or a cycle at any depth (the walk follows
 /// directory links). Any other link below `rel` (a `LICENSE`, a `locales`
-/// directory of `.ftl` files) is a file the walk never reads (#71).
-fn symlink_below(root: &Path, rel: &Path) -> Option<PathBuf> {
+/// directory of `.ftl` files) is a file the walk never reads (#71). With
+/// `skip_packages`, a directory below `rel` that is another package's
+/// ([`other_package`]), or a link to one, is left out as the walk leaves
+/// it out, with every link in it.
+fn symlink_below(root: &Path, rel: &Path, skip_packages: bool) -> Option<PathBuf> {
     let meta = fs::symlink_metadata(root.join(rel)).ok()?;
     if meta.file_type().is_symlink() {
         return Some(rel.to_path_buf());
     }
-    read_link_under(root, rel, &meta)
+    read_link_under(root, rel, &meta, skip_packages)
 }
 
 /// The first link under `rel` (a directory, `meta` its metadata) that the
 /// source walk reads through, as [`symlink_below`] defines it.
-fn read_link_under(root: &Path, rel: &Path, meta: &fs::Metadata) -> Option<PathBuf> {
+fn read_link_under(
+    root: &Path,
+    rel: &Path,
+    meta: &fs::Metadata,
+    skip_packages: bool,
+) -> Option<PathBuf> {
     if !meta.is_dir() {
         return None;
     }
@@ -7357,23 +8557,32 @@ fn read_link_under(root: &Path, rel: &Path, meta: &fs::Metadata) -> Option<PathB
     entries.sort();
     entries.iter().find_map(|e| {
         let meta = fs::symlink_metadata(root.join(e)).ok()?;
+        let at = root.join(e);
+        if skip_packages && at.is_dir() && other_package(&at) {
+            return None;
+        }
         if !meta.file_type().is_symlink() {
-            return read_link_under(root, e, &meta);
+            return read_link_under(root, e, &meta, skip_packages);
         }
         let read = e.extension().is_some_and(|x| x == "rs")
-            || (dir_or_unreadable(&root.join(e))
-                && reaches_rs(&root.join(e), &mut std::collections::HashSet::new()));
+            || (dir_or_unreadable(&at)
+                && reaches_rs(&at, skip_packages, &mut std::collections::HashSet::new()));
         read.then(|| e.clone())
     })
 }
 
 /// Whether [`rust_files`] would read a `.rs` file under `dir`, following
-/// links as it does, or come back to a directory it is already in (a
-/// cycle, which the walk would follow without end). `seen` holds the
-/// canonical directories on the way down. A directory it cannot resolve
-/// or list counts as one that does, so a read error refuses the link
-/// rather than pass it unread.
-fn reaches_rs(dir: &Path, seen: &mut std::collections::HashSet<PathBuf>) -> bool {
+/// links as it does and, with `skip_packages`, leaving out the other
+/// packages' directories as it does, or come back to a directory it is
+/// already in (a cycle, which the walk would follow without end). `seen`
+/// holds the canonical directories on the way down. A directory it cannot
+/// resolve or list counts as one that does, so a read error refuses the
+/// link rather than pass it unread.
+fn reaches_rs(
+    dir: &Path,
+    skip_packages: bool,
+    seen: &mut std::collections::HashSet<PathBuf>,
+) -> bool {
     let Ok(canon) = fs::canonicalize(dir) else {
         return true;
     };
@@ -7388,7 +8597,7 @@ fn reaches_rs(dir: &Path, seen: &mut std::collections::HashSet<PathBuf>) -> bool
             };
             let p = e.path();
             if dir_or_unreadable(&p) {
-                reaches_rs(&p, seen)
+                !(skip_packages && other_package(&p)) && reaches_rs(&p, skip_packages, seen)
             } else {
                 p.extension().is_some_and(|x| x == "rs")
             }
@@ -7739,8 +8948,11 @@ fn base_limits(
     dirs: &[Krate],
     rev: &str,
 ) -> Result<Vec<rlimit::Limit>, String> {
-    // Each crate's `src/`, relative to the root, as git names paths.
-    let srcs: Vec<(String, PathBuf)> = dirs
+    // Each crate's `src/`, relative to the root, as git names paths, and
+    // whether its walk leaves out the other packages' directories under it
+    // (the head's `skip_packages`, so that the head and the base count
+    // alike; the base copies each Cargo.toml under `src/` that marks one).
+    let srcs: Vec<(String, PathBuf, bool)> = dirs
         .iter()
         .map(|k| {
             let rel: PathBuf = k
@@ -7751,7 +8963,7 @@ fn base_limits(
                 .components()
                 .filter(|c| !matches!(c, std::path::Component::CurDir))
                 .collect();
-            (k.name.clone(), rel)
+            (k.name.clone(), rel, k.skip_packages)
         })
         .collect();
     let git = |args: &[&str]| git_in(root, args);
@@ -7779,7 +8991,7 @@ fn base_limits(
             fs::write(scratch.join("Cargo.toml"), &shown.stdout)
                 .map_err(|e| format!("{}: {e}", scratch.display()))?;
         }
-        for (krate, src) in &srcs {
+        for (krate, src, skip_packages) in &srcs {
             let kdir = src.parent().unwrap_or(Path::new("")).to_path_buf();
             // -z gives each path verbatim; ls-tree lists them relative to
             // ROOT, as [`in_rev`] reads them.
@@ -7824,7 +9036,7 @@ fn base_limits(
             }
             fs::create_dir_all(scratch.join(src)).map_err(|e| format!("{e}"))?;
             c.krate = krate.clone();
-            c.walk_crate(cfg, (&scratch, &scratch.join(&kdir)), None);
+            c.walk_crate(cfg, (&scratch, &scratch.join(&kdir), *skip_packages), None);
         }
         Ok(())
     })();
@@ -9839,7 +11051,7 @@ fn token_mints(
     let mut scan = mints::Scan::new(names);
     for k in crates {
         let mut files = Vec::new();
-        rust_files(&k.dir.join("src"), &mut files);
+        rust_files(&k.dir.join("src"), k.skip_packages, &mut files);
         for f in files {
             let rel = f.strip_prefix(root).unwrap_or(&f).display().to_string();
             match fs::read_to_string(&f) {
@@ -14894,11 +16106,11 @@ verus! {
         // a regular file stand in for the two read errors.
         let mut seen = std::collections::HashSet::new();
         assert!(
-            reaches_rs(&root.join("gone"), &mut seen),
+            reaches_rs(&root.join("gone"), false, &mut seen),
             "a directory that does not resolve: got = passed, wanted = refused"
         );
         assert!(
-            reaches_rs(&root.join("lic/LICENSE"), &mut seen),
+            reaches_rs(&root.join("lic/LICENSE"), false, &mut seen),
             "a directory that cannot be listed: got = passed, wanted = refused"
         );
         assert!(seen.is_empty(), "seen after the walk: {seen:?}");
@@ -14919,6 +16131,150 @@ verus! {
             "an absolute member path: got = {:?}, wanted = an error with {want:?}",
             got.map(|k| k.into_iter().map(|k| k.name).collect::<Vec<_>>())
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// With `skip_packages` (#198), a link the walk no longer reads through
+    /// is not refused: one inside another package's directory under
+    /// `src/`, one to such a directory, and one to a directory that holds
+    /// only such a directory. Negative: without the key each is refused,
+    /// as a link the walk reads through; a link to a `.rs`
+    /// file beside the left-out directory is refused either way; and a
+    /// Cargo.toml in `src/` itself leaves nothing out.
+    #[test]
+    fn a_link_in_a_left_out_directory_is_not_refused() {
+        let root =
+            std::env::temp_dir().join(format!("verus-count-skip-links-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for d in [
+            "inner/src/uu/x/src",
+            "outer/src",
+            "pkg/src",
+            "data",
+            "plain/src",
+        ] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        fs::write(root.join("data/gen.rs"), "").unwrap();
+        fs::write(root.join("pkg/Cargo.toml"), "[package]\nname = \"pkg\"\n").unwrap();
+        fs::write(root.join("pkg/src/lib.rs"), "").unwrap();
+        fs::write(root.join("inner/src/lib.rs"), "").unwrap();
+        fs::write(
+            root.join("inner/src/uu/x/Cargo.toml"),
+            "[package]\nname = \"x\"\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("../../../../../data", root.join("inner/src/uu/x/src/gen"))
+            .unwrap();
+        fs::write(root.join("outer/src/lib.rs"), "").unwrap();
+        std::os::unix::fs::symlink("../../pkg", root.join("outer/src/linked")).unwrap();
+        // A link to a directory that holds only a package's directory: the
+        // walk follows it, and leaves the package out.
+        fs::create_dir_all(root.join("via/src")).unwrap();
+        fs::create_dir_all(root.join("vendored/p")).unwrap();
+        fs::write(
+            root.join("vendored/p/Cargo.toml"),
+            "[package]\nname = \"p\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("vendored/p/lib.rs"), "").unwrap();
+        fs::write(root.join("via/src/lib.rs"), "").unwrap();
+        std::os::unix::fs::symlink("../../vendored", root.join("via/src/vendor")).unwrap();
+        fs::write(
+            root.join("plain/src/Cargo.toml"),
+            "[package]\nname = \"p\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("plain/src/lib.rs"), "").unwrap();
+        std::os::unix::fs::symlink("../../data/gen.rs", root.join("plain/src/gen.rs")).unwrap();
+        let read = |name: &str, skip: bool| {
+            let text = format!(
+                "[crates]\nmembers = [{{ name = \"{name}\", path = \"{name}\", skip_packages = {skip} }}]\n"
+            );
+            crate_dirs(&root, &Config::parse(&text).expect("parses")).map(|k| k.len())
+        };
+        for (name, link) in [
+            ("inner", "inner/src/uu/x/src/gen"),
+            ("outer", "outer/src/linked"),
+            ("via", "via/src/vendor"),
+        ] {
+            assert_eq!(read(name, true), Ok(1), "{name} with skip_packages");
+            let want = format!("[crates] crate {name} reads {link}, a symlink");
+            let got = read(name, false);
+            assert!(
+                got.as_ref().is_err_and(|e| e.contains(&want)),
+                "{name} without skip_packages: got = {got:?}, wanted = an error with {want:?}"
+            );
+        }
+        let got = read("plain", true);
+        assert!(
+            got.as_ref()
+                .is_err_and(|e| e.contains("[crates] crate plain reads plain/src/gen.rs")),
+            "plain: got = {got:?}, wanted = refused"
+        );
+        let mut files = Vec::new();
+        rust_files(&root.join("plain/src"), true, &mut files);
+        assert_eq!(
+            files,
+            [root.join("plain/src/gen.rs"), root.join("plain/src/lib.rs")]
+        );
+        // The guard leaves out what the walk does, under a linked
+        // directory too.
+        let mut seen = std::collections::HashSet::new();
+        assert!(
+            !reaches_rs(&root.join("inner/src/uu"), true, &mut seen),
+            "a left-out directory: got = reaches, wanted = none"
+        );
+        assert!(
+            reaches_rs(&root.join("inner/src/uu"), false, &mut seen),
+            "a left-out directory without the key: got = none, wanted = reaches"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The token-mint scan leaves out the directories the walk does
+    /// (#198): with `skip_packages`, a file that does not parse in another
+    /// package's directory under `src/` does not fail it, and the
+    /// outermost left-out directories are listed, through a link too.
+    /// Negative: without the key the scan fails on that file.
+    #[test]
+    fn the_mint_scan_leaves_out_what_the_walk_does() {
+        let root =
+            std::env::temp_dir().join(format!("verus-count-skip-mints-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for d in ["a/src/uu/x/src/inner", "verus", "tool"] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        fs::write(root.join("a/src/lib.rs"), "pub fn c_mint() {}\n").unwrap();
+        fs::write(root.join("a/src/uu/x/Cargo.toml"), "[package]\n").unwrap();
+        fs::write(root.join("a/src/uu/x/src/inner/Cargo.toml"), "[package]\n").unwrap();
+        fs::write(root.join("a/src/uu/x/src/bad.rs"), "fn (\n").unwrap();
+        fs::write(root.join("tool/Cargo.toml"), "[package]\n").unwrap();
+        std::os::unix::fs::symlink("../../tool", root.join("a/src/bin")).unwrap();
+        fs::write(root.join("verus/MINTS"), "").unwrap();
+        assert_eq!(
+            left_out_dirs(&root.join("a/src")),
+            [root.join("a/src/bin"), root.join("a/src/uu/x")]
+        );
+        for skip_packages in [true, false] {
+            let names = mints::Names {
+                mint: "c_mint".into(),
+                token: "CToken".into(),
+                home: "a/src/lib.rs".into(),
+                list: "verus/MINTS".into(),
+                tables: String::new(),
+                stand_ins: Vec::new(),
+            };
+            let crates = [Krate {
+                name: "a".into(),
+                dir: root.join("a"),
+                ships: true,
+                by_rule: true,
+                skip_packages,
+            }];
+            let got = token_mints(&root, names, &crates, &std::collections::BTreeSet::new());
+            assert_eq!(got, skip_packages, "skip_packages = {skip_packages}");
+        }
         let _ = fs::remove_dir_all(&root);
     }
 }

@@ -193,6 +193,82 @@ where it reports drift.
   beside a listed failure passed there and fails here; and a failures
   block naming fewer tests than its result line counts, which fails
   here. No existing target or check changes.
+- `kit/count`: a `[crates]` member takes a new optional key,
+  `skip_packages` (#198). With `skip_packages = true`, the source walk
+  of that crate leaves out each directory below its `src/` that holds a
+  Cargo.toml: another package's sources, which cargo builds as its own
+  crate. Before, such a crate counted those packages' files as its own,
+  so uutils' root `coreutils` crate, whose `src/uu/` holds every
+  utility's package, counted almost every utility a second time.
+  Every reader of the crate's sources leaves out the
+  same directories: the walk of the working tree and of a `--base-rev`
+  revision, the symlink check (a link in a left-out directory is no
+  longer refused, since nothing reads through it) and the token-mint
+  scan. A module declaration of the crate (a `#[path]`), a target's
+  root file (by the path cargo names, so through a link too) or an
+  `include!` of a string literal in a left-out directory fails the run,
+  since rustc compiles that file as part of the crate. Any other
+  `include!` in such a crate fails the run too, since the counter
+  cannot resolve the file it names (a `concat!` of literals, another
+  macro, a `macro_rules!` body's `include!($p)`), except
+  `concat!(env!("OUT_DIR"), ...)` with string literals alone after
+  `env!("OUT_DIR")` and no `..` component in them, a file of the
+  build's output directory, while the crate defines no `macro_rules!`
+  named `concat` or `env` and imports neither from outside `std`,
+  `core` or `alloc` (`use dep::concat;`, `use crate::p as env;`), which
+  would shadow the builtins, and no `#[macro_use] extern crate` (under
+  a `cfg_attr` too) loads
+  a crate but std's or Verus's (or one of those renamed) and no glob in
+  the including file is of anything but a path at std, core or alloc
+  or Verus's prelude (`use dep::*;`, `use super::*;`), either of which
+  may bring in another. One inside a `macro_rules!` definition fails whatever its
+  argument but that form, since rustc resolves its path from the file
+  that invokes the macro. A `use` that imports `include` under any
+  name (`use core::include as inc;`) fails too, since an invocation
+  through it does not name `include`, and so does a bare `include`
+  anywhere among a macro invocation's argument tokens, at any depth
+  (`call!(include, "p")`, `call!([include] "p")`, which the macro may
+  forward to an invocation), but for std's formatting, assertion and
+  collection macros and `verus!` where the crate defines no
+  `macro_rules!` of that name, no `use` brings one in from outside
+  std, core or alloc or renames anything to it, and it is not invoked
+  through another crate's path (`dep::vec!`), nor through std, core
+  or alloc where the crate rebinds that name (`use dep as core;`,
+  `use dep::core;`,
+  `extern crate dep as std;`, `mod core`, a Cargo dependency renamed
+  to it), by path or by import, nor where such a `#[macro_use] extern
+  crate` or such a glob in the file may bring one in. In a `macro_rules!` body every
+  `include` fails but the `OUT_DIR` form and a path through a module
+  of that name (two joined `:`), since the body can splice an
+  invocation from its input (`include!$g`); the raw `r#include`
+  counts as `include` everywhere. `include_str!` and `include_bytes!` read no
+  code and are not checked. One limit: a file reached only through a
+  macro of another crate, or a proc macro, that wraps `include!` is not
+  seen (no token of the invoking file names `include`). Each left-out directory must be read by a configured crate
+  of its own (a member at that directory, or a crate of `dir` there),
+  else the run fails, so its code counts somewhere, and so does a
+  library or binary root that crate declares outside its own `src/`,
+  which its walk does not read, or an `include!` of its files held as
+  a crate with the key holds them, against all of its `src/`. As a
+  backstop for every include form at once, each `*.rs` file under a
+  left-out directory must be one that crate reads (under its `src/`)
+  or one cargo builds apart (under `tests/`, `benches/`, `examples/`,
+  or `build.rs`), else the run fails, since no row counts it; in a
+  package nested under it that is itself a configured crate (`x/derive`,
+  `x/fuzz`), a file that crate's walk reads or builds apart passes the
+  same way, and any other of its files fails; its roots and includes
+  are held as the counting crate's are, wherever it sits (under
+  `tests/` too). A package under a left-out directory's (or a nested
+  configured crate's) `tests/`, `benches/` or `examples/`
+  (`x/tests/fixture`) may be a shipped crate's path dependency, so it
+  must be a configured crate too, else the run fails. The run
+  prints a line for each
+  left-out directory, `crate NAME leaves out DIR (counted as crate
+  OTHER)`.
+  With `--base-rev`, turning the key on
+  for a crate the base read is a narrowing and needs a `[[narrowed]]`
+  line; a new member that sets it, or turning it off, is not. The key
+  is off by default, so no port's count moves.
 
 ### Porting notes
 
@@ -262,6 +338,21 @@ where it reports drift.
    no-kit guard in `kit/count/README.md` adds `known-failures` to its
    `PROVED_PORT_TARGETS` when it starts to use it. A port that does
    neither changes nothing.
+8. `skip_packages` is optional. A port whose crate holds other packages
+   under its `src/` (uutils' root `coreutils` crate, with every
+   utility's package under `src/uu/`) can count that crate by adding it
+   as a member with `skip_packages = true`, and each directory it leaves
+   out as a member of its own if it is not one already (uutils' root
+   crate leaves out `src/uu/stdbuf`, so `stdbuf` becomes a member too);
+   the run fails on a left-out directory no member reads, or whose
+   member declares a library or binary root outside its `src/` or
+   includes a file from outside it, and
+   prints a
+   `crate NAME leaves out DIR (counted as crate OTHER)` line for each
+   one it does. A port that turns the key on
+   for a member it already counts needs a `[[narrowed]]` line naming the
+   change the run prints (`[crates] member "NAME" changes skip_packages
+   from false to true`). A port that does neither changes nothing.
 
 ## 0.4.11
 
