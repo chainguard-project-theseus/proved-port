@@ -401,8 +401,22 @@ is deleted in that PR.
    `kit/make/ledger-active.sh` (moved out of deviations.sh, so both
    read a ledger alike), and `make.yaml`'s `known-cites-test`; on
    pcre3's table and ledger it passes the same 29 rows. pcre3's switch
-   to it is to come; the rest of the driver shell (loading, preflight,
-   voices, reproducers) is still to split.
+   to it is to come. The rest of the driver shell is
+   `kit/make/fuzz-diff.h` and `fuzz-diff.c` (#215), which a port
+   compiles into its driver: loading by absolute path with
+   `RTLD_LOCAL`, the preflight (each symbol in its library's own
+   object, two distinct objects), the PREFLIGHT, CONTINUE and KNOWN_LOG
+   modes under the port's prefix, and the report's units, known-class
+   lines and base64 reproducer, with `make.yaml`'s `fuzz-diff-test`.
+   The version voices stay in the port (it checks what its libraries
+   report and refuses with `ppd_die`), as do decoding, comparisons and
+   `known.c`. A local, unchecked-in run (#216's description gives the
+   edits and commands) rebuilt pcre3's driver on it and gave the same
+   output on the same inputs, except that the stricter symbol check
+   refuses a library whose symbols come from a library it needs. No check
+   here repeats that run. As with every move, the step's exit is
+   pcre3's switch PR running both drivers once and pasting the
+   output. That switch is still to come.
    pcre3's consumer runner and its `fetch`/`loaded` helpers are
    `kit/make/consumers.sh` (`make consumers-run CONSUMERS_LIB=...
    [CONSUMERS_SONAME=...] [CONSUMERS_PREFIX=...] [CONSUMERS_NAMES=...]`,

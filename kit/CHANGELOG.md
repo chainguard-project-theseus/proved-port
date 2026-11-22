@@ -438,6 +438,36 @@ where it reports drift.
   quote in its path is refused. The target is `consumers-run`, so a
   port's own `consumers` target can call it. No existing target or
   check changes.
+- The differential fuzzer's generic driver shell (#215,
+  `fuzz-diff.h` and `fuzz-diff.c`, installed beside consumers.sh): the
+  PCRE2 port's `fuzz/diff/driver.c` without its decoding, comparisons,
+  version checks and known-divergence table, which stay in the port. A
+  port compiles `fuzz-diff.c` into its libFuzzer driver (`-I` the
+  installed `make/` directory). `ppd_open` loads a library by absolute
+  path with `RTLD_LOCAL`; `ppd_sym` resolves a symbol and refuses one
+  that is missing or lies outside that library's own object;
+  `ppd_distinct` refuses two libraries that are one object; `ppd_ready`
+  ends the preflight under the run modes `P_PREFLIGHT` (exit 0) and
+  `P_CONTINUE` (count findings, exit 1 at the end), with P the prefix
+  the port gives `ppd_init`; `ppd_known` names a known class or skipped
+  call once per process and appends it to `P_KNOWN_LOG`;
+  `ppd_divergence`, `ppd_put_units` (8, 16 or 32 bits) and
+  `ppd_finding_end` (the base64 reproducer, then `abort()`) write the
+  report in the port's format. Unlike the port's, a symbol must resolve
+  into its library's own object, not only into the same object as the
+  library's other symbols (a wrapper whose symbols all come from a
+  library it needs is refused, naming that library), known names are
+  compared as strings rather than as pointers and kept as copies (a
+  name may come from a reused buffer), a `P_KNOWN_LOG` that cannot be
+  opened prints `<name>: cannot open <path>` on stderr (the port's
+  skipped it silently), a known name of any length is logged (the
+  port's 128-byte line buffer dropped one of 127 bytes or more), past
+  64 distinct names each call prints and logs its name (the port's
+  printed and logged nothing more once its 64 slots were full), an
+  empty library path is refused as `<label>: no library path` (the
+  port's said `<label>:  is not an absolute path`), and under
+  `P_CONTINUE` the exit flushes stdout. No package recipe change (the package
+  installs all of `kit/make/`); no existing target or check changes.
 
 ### Porting notes
 
@@ -630,6 +660,20 @@ where it reports drift.
     `kit/count/README.md` adds `consumers-run` to its
     `PROVED_PORT_TARGETS` when it starts to use it. A port that does
     neither changes nothing.
+15. Optional: a port with a differential fuzzer (the PCRE2 port's
+    `fuzz/diff/`) can build its driver on the kit's shell: compile
+    `$(PROVED_PORT_MAKE)fuzz-diff.c` with `-I$(PROVED_PORT_MAKE)` beside
+    its own sources, call `ppd_init` with its message name and
+    environment prefix first, load each library with `ppd_open` and
+    `ppd_sym` in place of its own `dlopen`/`dladdr` code, check the two
+    with `ppd_distinct`, keep its version checks (with `ppd_die`) and
+    banner, and end its initializer with `ppd_ready`; its report calls
+    `ppd_divergence`, `ppd_put_units`, `ppd_known` and
+    `ppd_finding_end`. With the same message name and prefix, its
+    preflight messages, banner, reports and known log stay as they
+    were, but for the cases the 0.4.12 change lists. Before it switches
+    it checks that each library it loads exports its symbols itself.
+    A port without a differential fuzzer changes nothing.
 
 ## 0.4.11
 
