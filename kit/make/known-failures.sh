@@ -34,19 +34,29 @@
 # unset or empty only a GLOB that matches the empty name applies (`*`).
 # Names compare bytewise (LC_ALL=C).
 #
-# The caller runs it only after the test step failed; it does not check
-# that the tests ran or finished. A test group that never started, and
-# a test binary that died partway (a signal or an abort: libtest prints
+# A test binary that died partway (a signal or an abort: libtest prints
 # no FAILED line for the test that crashed, and cargo only `process
-# didn't exit successfully`), leave no failure it reads, so beside a
-# listed failure the run passes. A port checks that every group
-# finished itself, as challoc's ci/test-cell.sh does (or prints a key
-# for such a crash from EXTRA).
+# didn't exit successfully`) is a failure too, `crashed: TARGET` (#200):
+# its `running N tests` line has no `test result:` line after it, or
+# cargo reports it exited on a signal or with a status that no `test
+# result: FAILED.` line of that binary explains (libtest's 101): a crash
+# in exit-time teardown, a sanitizer's status, a `harness = false` test
+# that panicked and printed no libtest lines. The
+# caller runs the script only after the test step failed; it does not
+# check that a test group ran at all (one that never started prints no
+# `running` line), so a port that needs every group to run checks that
+# itself, as challoc's ci/test-cell.sh does. The log must hold cargo's
+# stderr as well as stdout (`2>&1`, as challoc's ci/make.sh tees it):
+# cargo writes its `Running`, `Doc-tests` and `process didn't exit
+# successfully` lines there, and a `harness = false` test its panic.
 #
 # Two more things a list cannot tell apart, as with challoc's script: a
 # key is the test's name alone, not its test binary (two integration
 # test files with `fn roundtrip()` both print `test roundtrip ...
-# FAILED`; listing one lists both), and a listed test that fails
+# FAILED`; listing one lists both; a crash key is the target text alone,
+# so in a workspace run every package's `crashed: unittests src/lib.rs`,
+# or two packages' `crashed: tests/b.rs`, share one key, and `crashed:
+# test binary N` names whichever binary is Nth), and a listed test that fails
 # for another reason than the one its entry records passes as known. An
 # entry in scope for the cell that did not fail is printed as a notice
 # (the exit status is the failures' alone), so a fixed test's entry can
@@ -142,6 +152,44 @@ awk '
 ' "$log" > "$blocks" 2> "$hits" || { echo "error: awk failed on the failures blocks of $log"; exit 1; }
 cat "$blocks" >> "$keys"
 read -r _ short bad < "$hits"
+# A test binary that died partway (a signal, an abort) prints libtest's
+# `running N tests` and no `test result:` line before the next binary's
+# `running` line or the end of the log: its failure is
+# `crashed: TARGET`, TARGET from cargo's `Running TARGET (...)` line
+# before it (`tests/b.rs`, `unittests src/lib.rs`, or `doc-tests CRATE`
+# from `Doc-tests CRATE`), or `crashed: test binary N` (the Nth
+# `running` line) where the log has none. A list may name it like any
+# failure.
+awk '
+  function flush() {
+    if (open) print "crashed: " (target != "" ? target : "test binary " nrun)
+    open = 0
+  }
+  /^ +Running .* \(/ {
+    flush(); t = $0; sub(/^ +Running /, "", t); sub(/ \(.*$/, "", t); target = t; last = t; failed = 0; next
+  }
+  /^ +Doc-tests [^ ]+$/ {
+    flush(); t = $0; sub(/^ +Doc-tests /, "", t); target = "doc-tests " t; last = target; failed = 0; next
+  }
+  # The next binary starts at its `running` line, which libtest writes
+  # as `\nrunning N tests\n`: its leading newline ends a line a crashed
+  # binary left unfinished (`test b ... `), so the line always starts
+  # with `running`, and test output that merely ends in `running N
+  # tests` (`--nocapture`) starts nothing.
+  /^running [0-9]+ tests?$/ { flush(); open = 1; nrun++; lastn = nrun; failed = 0; next }
+  /^test result: FAILED\. / { failed = 1 }
+  /^test result: / { open = 0; target = "" }
+  # cargo reports the status of the binary it ran last: a signal, or any
+  # exit status that a `test result: FAILED.` line of that binary does
+  # not explain (libtest'"'"'s 101 for failed tests), is a crash, before or
+  # after its result line (exit-time teardown, a sanitizer'"'"'s status, a
+  # `harness = false` test that panicked and printed no libtest lines).
+  /process didn.t exit successfully: .*\((signal: |exit status: )/ && !(failed && /\(exit status: 101\)/) {
+    flush(); print "crashed: " (last != "" ? last : "test binary " lastn)
+  }
+  END { flush() }
+' "$log" > "$blocks" || { echo "error: awk failed on the test binaries of $log"; exit 1; }
+cat "$blocks" >> "$keys"
 if [ -n "$extra" ]; then
   rc=0
   sh "$extra" "$log" >> "$keys" || rc=$?

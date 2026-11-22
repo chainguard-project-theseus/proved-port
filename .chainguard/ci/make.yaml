@@ -64,7 +64,8 @@ checks:
       spelled out: every failure known, an unlisted one, none at all,
       lines that are not failures, names with blanks (should_panic
       tests and doctests), the failures blocks (a FAILED on a line of
-      its own, fewer names than failures), the list's comments and blanks,
+      its own, fewer names than failures), a test binary that crashed,
+      the list's comments and blanks,
       cell-scoped entries, an EXTRA command, a missing log or list, a
       log or list it cannot read or a tool that fails on one (stub grep,
       sed and awk) and usage, with BusyBox's tools.

@@ -521,10 +521,11 @@ glibc-max: ## the library GLIBC_MAX_LIB needs no GLIBC_ symbol version above GLI
 # fails while either is empty. KNOWN_FAILURES_EXTRA, optional, is a
 # port's sh script that prints more failure keys from the log (challoc's
 # cgroup verdicts). CI_CELL in the environment names the cell for the
-# list's cell-scoped entries. It does not check that every test binary
-# finished: one that crashed prints no FAILED line, so the port checks
-# that itself (as challoc's ci/test-cell.sh does) or reports it from
-# EXTRA.
+# list's cell-scoped entries. A test binary that crashed, before or
+# after its result line, is a failure, `crashed: TARGET`; one that never
+# started is not seen, so a port that
+# needs every group to run checks that itself (as challoc's
+# ci/test-cell.sh does). The log holds cargo's stderr too (`2>&1`).
 KNOWN_FAILURES_LOG ?=
 KNOWN_FAILURES_LIST ?=
 KNOWN_FAILURES_EXTRA ?=

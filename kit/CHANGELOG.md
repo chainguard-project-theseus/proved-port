@@ -164,11 +164,17 @@ where it reports drift.
   passes, each as a warning line; an unlisted one fails (exit 1), as do
   no failure at all (a build or other step failed), a missing log or
   list, one it cannot read, a tool that fails on one, and an EXTRA that
-  fails. It does not check that the tests ran or finished: a test binary
-  that crashed (a signal or an abort) prints no FAILED line, so beside a
-  listed failure the run passes; a port checks that every test group
-  finished itself, as challoc's `ci/test-cell.sh` does, or prints a key
-  for such a crash from its EXTRA script. A key is the test's name
+  fails. A test binary that crashed (a signal or an abort: its `running
+  N tests` line has no `test result:` line after it, or cargo reports a
+  signal or an exit status that no `test result: FAILED.` line of that
+  binary explains, as from exit-time teardown, a sanitizer, or a
+  `harness = false` test that panicked) is a failure,
+  `crashed: TARGET`, TARGET from cargo's `Running TARGET (...)` line
+  (`crashed: tests/b.rs`; #200); the key is the target text alone, so
+  in a workspace run the same target in two packages shares one key,
+  as test names do. It does not check that every test
+  group ran (one that never started prints nothing); a port that needs
+  that checks it itself, as challoc's `ci/test-cell.sh` does. A key is the test's name
   alone, not its test binary (two files' `fn roundtrip()` share one
   key), and a listed test that fails for another reason passes as
   known; an entry in scope that did not fail is printed as a notice
@@ -245,9 +251,12 @@ where it reports drift.
    KNOWN_FAILURES_LOG=LOG KNOWN_FAILURES_LIST=LIST` in its place, moving
    any failure source of its own besides libtest's FAILED lines into a
    script it names in `KNOWN_FAILURES_EXTRA`, and delete the copy. It
-   keeps its own check that every test group finished (challoc's
-   `ci/test-cell.sh` counts `test result:` lines): the target does not
-   see a test binary that crashed. Its list's keys name tests, not
+   keeps its own check that every test group ran (challoc's
+   `ci/test-cell.sh` counts `test result:` lines): the target sees a
+   test binary that crashed (`crashed: TARGET`), not one that never
+   started, provided its log holds cargo's stderr as well as stdout
+   (`2>&1`, as challoc's ci/make.sh tees it): cargo writes its
+   `Running` and exit-status lines there. Its list's keys name tests, not
    test binaries, and a notice now names each entry in scope that did
    not fail, to drop once its test is fixed. A port that copied the
    no-kit guard in `kit/count/README.md` adds `known-failures` to its
