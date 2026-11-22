@@ -3,7 +3,7 @@
 # lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs,
 # skip-summary.sh, glibc-max.sh, known-failures.sh, header-check.sh,
 # abi-elf.sh, kani-quotes.sh, deviations.sh, ledger-active.sh,
-# known-cites.sh and VERUS-FILES, in
+# known-cites.sh, consumers.sh and VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
@@ -117,7 +117,11 @@
 #                     KNOWN_CITES_LEDGER or an open issue of
 #                     KNOWN_CITES_REPO (the PCRE2 port's fuzz-diff
 #                     known-citations check).
-#   verify           every target VERIFY_TARGETS lists (by default verus
+#   consumers-run     consumers.sh: each consumer's run.sh in
+#                     CONSUMERS_DIR, against the swap directory
+#                     CONSUMERS_LIB, with the fetch and loaded helpers
+#                     (the PCRE2 port's consumer harness).
+#   verify          every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
 
@@ -332,7 +336,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -696,6 +700,37 @@ known-cites: ## each row of the known-divergence table KNOWN_CITES_FILE cites an
 	$(if $(filter-out 1,$(strip $(KNOWN_CITES_OFFLINE))),$(error $(known_cites_offline_bad)))
 	KNOWN_CITES_OFFLINE='$(strip $(KNOWN_CITES_OFFLINE))' KNOWN_CITES_MACRO='$(strip $(KNOWN_CITES_MACRO))' sh $(PROVED_PORT_MAKE)known-cites.sh '$(strip $(KNOWN_CITES_FILE))' '$(strip $(KNOWN_CITES_LEDGER))' '$(strip $(KNOWN_CITES_REPO))'
 
+# --- consumers-run ---------------------------------------------------------
+# consumers.sh run LIB [NAME...]; its header says what it does. The
+# target is consumers-run, not consumers, so a port's own `consumers`
+# target (which builds the port's libraries and fills the swap
+# directory first) can call it. CONSUMERS_LIB is the swap directory
+# (the PCRE2 port's target/consumers/lib), CONSUMERS_DIR the consumer
+# directories (by default tests/consumers), CONSUMERS_WORK the work
+# directory (by default target/consumers); the target fails while any is
+# empty. CONSUMERS_NAMES names the consumers to run (empty: $CONSUMER
+# from the environment, or every one), CONSUMERS_SONAME the default
+# sonames of `loaded` and CONSUMERS_PREFIX the prefix of the names
+# run.sh gets (empty: CONSUMER). All are passed stripped, always: make
+# exports a command-line value to the recipe's environment as given,
+# and the script reads an empty one as unset.
+CONSUMERS_LIB ?=
+CONSUMERS_DIR ?= tests/consumers
+CONSUMERS_WORK ?= target/consumers
+CONSUMERS_NAMES ?=
+CONSUMERS_SONAME ?=
+CONSUMERS_PREFIX ?=
+consumers_lib_empty = CONSUMERS_LIB is empty: name the swap directory that holds only the port's libraries (make consumers-run CONSUMERS_LIB=target/consumers/lib)
+consumers_dir_empty = CONSUMERS_DIR is empty: name the directory of consumer directories (by default tests/consumers)
+consumers_work_empty = CONSUMERS_WORK is empty: name the work directory (by default target/consumers)
+
+consumers-run: ## each consumer in CONSUMERS_DIR, run against the swap directory CONSUMERS_LIB: PASS, FAIL or SKIP and a summary (consumers.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(CONSUMERS_LIB)),,$(error $(consumers_lib_empty)))
+	$(if $(strip $(CONSUMERS_DIR)),,$(error $(consumers_dir_empty)))
+	$(if $(strip $(CONSUMERS_WORK)),,$(error $(consumers_work_empty)))
+	CONSUMERS_DIR='$(strip $(CONSUMERS_DIR))' CONSUMERS_WORK='$(strip $(CONSUMERS_WORK))' CONSUMERS_SONAME='$(strip $(CONSUMERS_SONAME))' CONSUMERS_PREFIX='$(strip $(CONSUMERS_PREFIX))' sh $(PROVED_PORT_MAKE)consumers.sh run '$(strip $(CONSUMERS_LIB))'$(foreach n,$(CONSUMERS_NAMES), '$(n)')
+
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
 # order `make verify` runs them, each in its own make. A package build
@@ -719,7 +754,7 @@ known-cites: ## each row of the known-divergence table KNOWN_CITES_FILE cites an
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

@@ -367,10 +367,28 @@ if [ "$rc" -ne 0 ] || ! grep -qxF "PASS: 1 rows of $tmp/kc/known.c, each citing 
   fail "make known-cites with blank KNOWN_CITES_MACRO and KNOWN_CITES_OFFLINE: got = exit $rc, want = exit 0 with its PASS line"
 fi
 echo "ok make known-cites with blank KNOWN_CITES_MACRO and KNOWN_CITES_OFFLINE"
+expect "make -n consumers-run: the package's consumers.sh" \
+  "$(shows "$installed" consumers-run CONSUMERS_LIB=swap)" \
+  "CONSUMERS_DIR='tests/consumers' CONSUMERS_WORK='target/consumers' CONSUMERS_SONAME='' CONSUMERS_PREFIX='' sh $home/make/consumers.sh run 'swap'"
+# The installed script runs a consumer that skips (no library to load
+# here), through make with a blank CONSUMERS_PREFIX on the command line
+# (which make exports to the recipe as given; the script reads the
+# stripped one as unset).
+[ -f "$home/make/consumers.sh" ] || fail "the installed consumers.sh: got = missing, want = installed"
+mkdir -p "$tmp/cr/swap" "$tmp/cr/tests/consumers/one"
+: > "$tmp/cr/swap/libfoo.so.1"
+# shellcheck disable=SC2016 # run.sh expands it
+printf 'echo "SKIP $CONSUMER_HARNESS"\nexit 77\n' > "$tmp/cr/tests/consumers/one/run.sh"
+if (cd "$tmp/cr" && make -s -f "$installed/Makefile" consumers-run CONSUMERS_LIB=swap CONSUMERS_PREFIX=' ' PROVED_PORT_VERSION="$version") > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qxF "SKIP one: $home/make/consumers.sh" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "make consumers-run with the installed consumers.sh, a skipping consumer: got = exit $rc, want = exit 0 with its SKIP line"
+fi
+echo "ok make consumers-run with the installed consumers.sh skips a consumer that skips"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites verify; do
-  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so SKIP_LOG=test.log SKIP_MANIFEST=skips.txt GLIBC_MAX_LIB=libc.so GLIBC_MAX=2.44 KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=known.txt HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_ ABI_ELF_LIB=libc.so ABI_ELF_MAP=c.map ABI_ELF_SONAME=libc.so DEVIATIONS_RESULTS=res DEVIATIONS_LIST=dev.txt KNOWN_CITES_FILE=known.c KNOWN_CITES_REPO=o/port PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run verify; do
+  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so SKIP_LOG=test.log SKIP_MANIFEST=skips.txt GLIBC_MAX_LIB=libc.so GLIBC_MAX=2.44 KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=known.txt HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_ ABI_ELF_LIB=libc.so ABI_ELF_MAP=c.map ABI_ELF_SONAME=libc.so DEVIATIONS_RESULTS=res DEVIATIONS_LIST=dev.txt KNOWN_CITES_FILE=known.c KNOWN_CITES_REPO=o/port CONSUMERS_LIB=swap PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
     || { cat "$tmp/err" >&2; fail "make -n $t, PROVED_PORT_VERSION=$version (KIT's): got = failure, want = success"; }
   if make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$other" > "$tmp/out" 2> "$tmp/err"; then
     fail "make -n $t, PROVED_PORT_VERSION=$other: got = success, want = failure"

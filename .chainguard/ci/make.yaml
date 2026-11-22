@@ -9,7 +9,8 @@
 # kit/kani-quotes-test.sh and kit/deviations-test.sh run
 # skip-summary.sh, known-failures.sh, header-check.sh, kani-quotes.sh
 # and deviations.sh on their own, kit/known-cites-test.sh runs
-# known-cites.sh and ledger-active.sh (with git),
+# known-cites.sh and ledger-active.sh (with git), kit/consumers-test.sh
+# runs consumers.sh (with cc and curl),
 # and kit/glibc-max-test.sh and kit/abi-elf-test.sh run glibc-max.sh
 # and abi-elf.sh on their own, in their own environments. No Verus or Kani
 # runs. busybox for the tools a port's checks have, make (GNU) for the
@@ -171,3 +172,25 @@ checks:
       # part's clones.
       packages: [busybox, git]
     cmd: [sh, kit/known-cites-test.sh]
+
+  consumers-test:
+    description: >-
+      kit/consumers-test.sh: kit/make/consumers.sh (make consumers-run)
+      with a shared library built with cc, each output spelled out:
+      loaded on the swap directory's copy (directly, through a child
+      process, under a prefix), a copy from elsewhere or from a
+      subdirectory, no load, the default and bad sonames, an unset
+      environment; fetch over file:// (the cache, a wrong SHA-256 keeps
+      no file, a tampered cached file, bad names, a failed download);
+      run with expected and unexpected failures, a NOTICE, no proof,
+      SKIP, a non-zero exit, a missing run.sh, the environment run.sh
+      gets, packages through a stub apk, every consumer, CONSUMER, bad
+      names, prefixes and swap directories.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      # BusyBox's tools as a port's checks have, a C compiler with
+      # glibc (LD_DEBUG) for the library and programs, and curl for
+      # fetch.
+      packages: [busybox, build-base, curl]
+    cmd: [sh, kit/consumers-test.sh]

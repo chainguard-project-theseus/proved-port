@@ -536,6 +536,16 @@ expect "make -n known-cites, KNOWN_CITES_OFFLINE=1" \
 expect "make -n known-cites, a ledger file, an old name and a macro" \
   "$(shows known-cites KNOWN_CITES_FILE=src/known.rs KNOWN_CITES_LEDGER=' docs/abi-changes.md ' KNOWN_CITES_REPO='o/port  old/name' KNOWN_CITES_MACRO=' known! ')" \
   "KNOWN_CITES_OFFLINE='' KNOWN_CITES_MACRO='known!' sh $home/make/known-cites.sh 'src/known.rs' 'docs/abi-changes.md' 'o/port old/name'"
+# consumers-run passes the swap directory and each name as one argument,
+# and the directories (by default tests/consumers and target/consumers),
+# the sonames and the prefix stripped in the script's environment,
+# always (an empty one the script reads as unset).
+expect "make -n consumers-run, the defaults" \
+  "$(shows consumers-run CONSUMERS_LIB=' target/consumers/lib ' CONSUMERS_SONAME=' ')" \
+  "CONSUMERS_DIR='tests/consumers' CONSUMERS_WORK='target/consumers' CONSUMERS_SONAME='' CONSUMERS_PREFIX='' sh $home/make/consumers.sh run 'target/consumers/lib'"
+expect "make -n consumers-run, names, sonames, a prefix and directories" \
+  "$(shows consumers-run CONSUMERS_LIB=swap CONSUMERS_NAMES=' grep  git ' CONSUMERS_SONAME='libfoo.so.1  libfoo-posix.so.3' CONSUMERS_PREFIX=' CG_FOO ' CONSUMERS_DIR=' t/c ' CONSUMERS_WORK=' w ')" \
+  "CONSUMERS_DIR='t/c' CONSUMERS_WORK='w' CONSUMERS_SONAME='libfoo.so.1 libfoo-posix.so.3' CONSUMERS_PREFIX='CG_FOO' sh $home/make/consumers.sh run 'swap' 'grep' 'git'"
 
 # verify runs every target VERIFY_TARGETS lists, in order, each with the
 # command line's variables. Under -n make prints its loop (a line naming
@@ -642,6 +652,9 @@ refuses_make "make -n known-cites with no KNOWN_CITES_FILE" "KNOWN_CITES_FILE is
 refuses_make "make -n known-cites with a blank KNOWN_CITES_LEDGER" "KNOWN_CITES_LEDGER is empty" known-cites KNOWN_CITES_FILE=known.c KNOWN_CITES_LEDGER=' ' KNOWN_CITES_REPO=o/port
 refuses_make "make -n known-cites with no KNOWN_CITES_REPO" "KNOWN_CITES_REPO is empty" known-cites KNOWN_CITES_FILE=known.c
 refuses_make "make -n known-cites with KNOWN_CITES_OFFLINE=0" "KNOWN_CITES_OFFLINE is '0': set it to 1" known-cites KNOWN_CITES_FILE=known.c KNOWN_CITES_REPO=o/port KNOWN_CITES_OFFLINE=0
+refuses_make "make -n consumers-run with no CONSUMERS_LIB" "CONSUMERS_LIB is empty" consumers-run
+refuses_make "make -n consumers-run with a blank CONSUMERS_DIR" "CONSUMERS_DIR is empty" consumers-run CONSUMERS_LIB=swap CONSUMERS_DIR=' '
+refuses_make "make -n consumers-run with no CONSUMERS_WORK" "CONSUMERS_WORK is empty" consumers-run CONSUMERS_LIB=swap CONSUMERS_WORK=
 # The no-kit guard kit/count/README.md gives ports lists every kit
 # target, so each fails with the kit's message where the package is
 # missing: proved_port_phony and verify, in that order.
@@ -772,7 +785,7 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;
