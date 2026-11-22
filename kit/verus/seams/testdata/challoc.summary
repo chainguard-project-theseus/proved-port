@@ -1,0 +1,44 @@
+54 seams, in 9 source files.
+
+| category | seams |
+|---|---:|
+| inline asm | 17 |
+| raw pointer (internal) | 4 |
+| panic/abort | 1 |
+| platform/kernel fact | 2 |
+| core library | 24 |
+| allocator invariant | 3 |
+| C ABI export | 3 |
+
+| tool | seams |
+|---|---:|
+| Islaris/Isla | 18 |
+| Kani | 25 |
+| ABI tests | 3 |
+| none (assumption) | 8 |
+
+| kind | seams |
+|---|---:|
+| external_body | 20 |
+| external_body proof | 2 |
+| external_body type | 1 |
+| external_body const | 1 |
+| axiom | 4 |
+| assume_spec | 11 |
+| ext_type_spec | 4 |
+| ext_trait_spec | 1 |
+| spec_impl | 7 |
+| unsupported-attribute | 3 |
+
+| category | tool | seams |
+|---|---|---:|
+| inline asm | Islaris/Isla | 17 |
+| raw pointer (internal) | Kani | 4 |
+| panic/abort | none (assumption) | 1 |
+| platform/kernel fact | Islaris/Isla | 1 |
+| platform/kernel fact | none (assumption) | 1 |
+| core library | Kani | 20 |
+| core library | none (assumption) | 4 |
+| allocator invariant | Kani | 1 |
+| allocator invariant | none (assumption) | 2 |
+| C ABI export | ABI tests | 3 |

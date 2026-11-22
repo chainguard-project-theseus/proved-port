@@ -81,6 +81,26 @@ checks:
         f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
         go vet ./... && go test -count=1 ./...
 
+  seams-test:
+    description: >-
+      kit/verus/seams, the seam ledger generator (PLAN step 3, the Go
+      port of challoc's verus/seams.sh core): gofmt lists no file, go vet
+      passes, and go test passes (seams.sh's hash and claims nothing
+      self-tests, scanner cases, the ledger file written whole, -check's
+      stale, leftover and drift cases, -entries, the rules file's errors,
+      the template rules file, and the cksum CRC against the system's
+      cksum).
+    trigger: [presubmit, postsubmit]
+    timeout: 10m
+    cmd:
+      - sh
+      - -c
+      - >-
+        export GOTOOLCHAIN=local GOFLAGS=-mod=mod;
+        cd kit/verus/seams;
+        f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
+        go vet ./... && go test -count=1 ./...
+
   box-test:
     description: >-
       kit/box-test.sh: kit/perf/box (PLAN step 6, the bench box's run

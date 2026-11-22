@@ -1,0 +1,59 @@
+# challoc's seams.sh heuristics (deda0db), as a kit seams rules file.
+ledger	verus/ledger
+source	src
+command	sh verus/seams.sh --write
+seams-doc	verus/SEAMS.md
+test-file	tests.rs
+test-file	linux_tests.rs
+test-file	testutil.rs
+test-file	src/*/tests/*
+tool	Islaris/Isla
+tool	RefinedRust
+tool	Kani
+tool	loom/GenMC
+tool	Verus
+tool	ABI tests
+tool	none (assumption)
+assumption-tool	none (assumption)
+category	inline asm	Islaris/Isla
+category	FFI/syscall	none (assumption)
+category	function pointer	Kani
+category	UnsafeCell/volatile/transmute	RefinedRust
+category	raw pointer (internal)	RefinedRust
+category	raw pointer from C caller	none (assumption)
+category	panic/abort	Kani
+category	atomics primitive	loom/GenMC
+category	platform/kernel fact	none (assumption)
+category	C-program contract	none (assumption)
+category	termination	loom/GenMC
+category	core library	Kani
+category	allocator invariant	RefinedRust
+category	C ABI export	ABI tests
+cite-tag	Kani
+cite-tag	const assert
+cite-tag	Isla
+cite-tag	emptyasm
+cite-tag	loom
+cite-tag	GenMC
+cite-tag	callers
+guess	termination	kind=^no_decreases$
+guess	C ABI export	kind=^unsupported-attribute$
+guess	inline asm	body=asm!
+guess	atomics primitive	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$	name=Atomic
+guess	UnsafeCell/volatile/transmute	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$	name=UnsafeCell|volatile|transmute
+guess	raw pointer (internal)	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$	name=^(core::)?ptr::|^<\*|::add$|::offset$|from_raw_parts|null
+guess	-	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$	name=^crate::|^sys::|^super::
+guess	core library	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$
+guess	raw pointer from C caller	kind=^(ghost_)?assume_new$	file=^src/api/
+guess	raw pointer (internal)	kind=^(ghost_)?assume_new$
+guess	FFI/syscall	body=(raw::)?syscall[0-6]?\(|sys::(mmap|munmap|madvise|mprotect|read|write|open|close)
+guess	function pointer	body=\(\*?[a-z_.]*\.0\)\(|[^a-z]fn\(
+guess	panic/abort	body=panic!	body!write!|writeln!
+guess	function pointer	body=format_args!|write!|writeln!|panic!
+guess	UnsafeCell/volatile/transmute	body=volatile|UnsafeCell|transmute|\.get\(\)
+guess	atomics primitive	body=compare_exchange|fetch_[a-z]+\(|\.load\(|\.store\(
+guess	raw pointer from C caller	body=\*mut|\*const|ptr::|as_ptr|\.add\(|from_raw_parts	file=^src/api/
+guess	raw pointer (internal)	body=\*mut|\*const|ptr::|as_ptr|\.add\(|from_raw_parts
+guess	allocator invariant	kind=^(axiom|external_body proof)$	name=lock_inv|lock_frame|lock$
+pair	verified_export_pair	src/api/mod.rs	name	je
+unsupported-doc	Verus takes every attribute it refuses on this item on trust (`#[verifier::assume_unsupported_attributes]`), its symbol and section attributes among them; the C and C++ programs under tests/c, which `make test` links and preloads against the library, call the symbol.

@@ -337,6 +337,22 @@ is deleted in that PR.
    `verus/ledger/` must come out byte-identical; both scripts are
    deleted. pcre3 keeps its hand-written per-theorem tables until it
    chooses the generated form.
+   **Status:** the generic core is `kit/verus/seams` (Go, #217): the
+   scan, overrides, ledger files, totals, hashes and the claims nothing
+   rules, with `-write`, `-check` and `-entries` (one line per seam for
+   a port's own checks), and what is challoc's (paths, tools,
+   categories, the category heuristics, the export pair macro) in the
+   port's `verus/seams.rules` (template
+   `kit/templates/verus/seams.rules`). On challoc deda0db and 30 older
+   trees its ledgers equal seams.sh's byte for byte (a local run,
+   #218's body; CI does not repeat it). The go.yaml check `seams-test`
+   runs seams.sh's self-tests, scanner cases and a golden of nine
+   challoc source files with their ledger and seams.sh's totals. Still to
+   come: the checks a status cites (Kani harnesses, assertions, Isla,
+   emptyasm, loom, GenMC, guard tests), the not-Copy checks and the
+   Kani pins, which stay in challoc's script reading `-entries` until
+   they move; challoc's switch; and installing the tool in the
+   package, which does not install it yet.
 4. **ABI checks and the deviations ratchet.** pcre3: `ci/abi.sh` and
    `ci/header-check.sh` move (config: library names,
    `crates/pcre3-capi/maps/`, the `PCRE2_`/`REG_` prefixes);

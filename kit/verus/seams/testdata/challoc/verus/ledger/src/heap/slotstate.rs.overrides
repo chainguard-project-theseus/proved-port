@@ -1,0 +1,21 @@
+# double_free_scan's per-slot state bytes (heap/slotstate.rs): a byte
+# array outside every verified invariant. Verus checks the indexing and
+# the arithmetic (the addresses wrap); the verified wrappers (free, claim,
+# pop, release, the batch loops, check_not_cached) only turn what `step`
+# returns into aborts (`abort_pending`); none changes what the verified
+# paths do. `commit`'s range lying in `init`'s reservation is not
+# verified either (`mprotect` is specified only for its call).
+
+# The arrays' initialiser: an array repeat of an element that is not
+# `Copy`, which Verus does not take. It claims nothing, and it is
+# evaluated at compile time; the harness checks that every entry is zero.
+NO_ARRAYS	core library	Kani	discharged (Kani: heap::slotstate::kani_arrays::no_arrays_are_zero)	contract 2521126641, body none
+
+# The byte at an address `byte` computes: a slot index below the
+# watermark that `commit` precedes, in an array `init` reserved. That
+# protocol is not a verified fact; it claims only the byte's identity
+# (`slot_byte_id(at)`, under which `Slots` holds its permission), nothing
+# about its value. The reference is to vstd's `PAtomicU8`, a struct of
+# one `AtomicU8` whose size and alignment the file's const assertion
+# holds to one byte. The harness runs the body on a byte of its own array.
+byte_at	raw pointer (internal)	Kani	trusted (partly checked, Kani: heap::slotstate::kani_byte_at::byte_at_is_the_byte; not checked: the `# Safety` contract, that `at` is a byte of a slot-state array that `commit` made writable and that the arrays live for the process, which is the protocol of `init`, `commit` and the watermark: the harness passes a byte of its own array; and the ghost identity its `ensures` names, `slot_byte_id(at)`)	contract 1236057054, body 1964768841
