@@ -490,6 +490,22 @@ expect "make -n header-check, the PCRE2 port's headers, the default upstream" \
 expect "make -n header-check, another upstream" \
   "$(shows header-check HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_ HEADER_CHECK_UPSTREAM=/opt/foo/include)" \
   "sh $home/make/header-check.sh '/opt/foo/include' 'FOO_' 'include/foo.h'"
+# abi-elf passes the library, the map, the SONAME and the needs list as
+# one argument each, blanks around them dropped, TLS_MAX only when it
+# or DEFAULTS is set (empty for DEFAULTS alone) and DEFAULTS only when
+# it is set.
+expect "make -n abi-elf, the default needs, no TLS_MAX" \
+  "$(shows abi-elf ABI_ELF_LIB=' target/release/libfoo.so.1 ' ABI_ELF_MAP=maps/libfoo.map ABI_ELF_SONAME=libfoo.so.1 ABI_ELF_TLS_MAX=' ' ABI_ELF_DEFAULTS=' ')" \
+  "sh $home/make/abi-elf.sh 'target/release/libfoo.so.1' 'maps/libfoo.map' 'libfoo.so.1' 'libc.so.6 ld-linux-x86-64.so.2 ld-linux-aarch64.so.1'"
+expect "make -n abi-elf, the PCRE2 port's library, its needs and TLS_MAX" \
+  "$(shows abi-elf ABI_ELF_LIB=target/release/libpcre2-8.so.0 ABI_ELF_MAP=maps/libpcre2-8.map ABI_ELF_SONAME=libpcre2-8.so.0 ABI_ELF_NEEDED=' libc.so.6  libm.so.6 ' ABI_ELF_TLS_MAX=512)" \
+  "sh $home/make/abi-elf.sh 'target/release/libpcre2-8.so.0' 'maps/libpcre2-8.map' 'libpcre2-8.so.0' 'libc.so.6 libm.so.6' '512'"
+expect "make -n abi-elf, DEFAULTS alone" \
+  "$(shows abi-elf ABI_ELF_LIB=libfoo.so.1 ABI_ELF_MAP=foo.map ABI_ELF_SONAME=libfoo.so.1 ABI_ELF_DEFAULTS=' foo@V2  bar@V1 ')" \
+  "sh $home/make/abi-elf.sh 'libfoo.so.1' 'foo.map' 'libfoo.so.1' 'libc.so.6 ld-linux-x86-64.so.2 ld-linux-aarch64.so.1' '' 'foo@V2 bar@V1'"
+expect "make -n abi-elf, TLS_MAX and DEFAULTS" \
+  "$(shows abi-elf ABI_ELF_LIB=libfoo.so.1 ABI_ELF_MAP=foo.map ABI_ELF_SONAME=libfoo.so.1 ABI_ELF_TLS_MAX=512 ABI_ELF_DEFAULTS=foo@V2)" \
+  "sh $home/make/abi-elf.sh 'libfoo.so.1' 'foo.map' 'libfoo.so.1' 'libc.so.6 ld-linux-x86-64.so.2 ld-linux-aarch64.so.1' '512' 'foo@V2'"
 
 # verify runs every target VERIFY_TARGETS lists, in order, each with the
 # command line's variables. Under -n make prints its loop (a line naming
@@ -581,6 +597,10 @@ refuses_make "make -n known-failures with a blank KNOWN_FAILURES_LIST" "KNOWN_FA
 refuses_make "make -n header-check with no HEADER_CHECK_HEADERS" "HEADER_CHECK_HEADERS is empty" header-check HEADER_CHECK_PREFIXES=FOO_
 refuses_make "make -n header-check with a blank HEADER_CHECK_PREFIXES" "HEADER_CHECK_PREFIXES is empty" header-check HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=' '
 refuses_make "make -n header-check with a blank HEADER_CHECK_UPSTREAM" "HEADER_CHECK_UPSTREAM is empty" header-check HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_ HEADER_CHECK_UPSTREAM=' '
+refuses_make "make -n abi-elf with no ABI_ELF_LIB" "ABI_ELF_LIB is empty" abi-elf ABI_ELF_MAP=foo.map ABI_ELF_SONAME=libfoo.so.1
+refuses_make "make -n abi-elf with a blank ABI_ELF_MAP" "ABI_ELF_MAP is empty" abi-elf ABI_ELF_LIB=libfoo.so.1 ABI_ELF_MAP=' ' ABI_ELF_SONAME=libfoo.so.1
+refuses_make "make -n abi-elf with no ABI_ELF_SONAME" "ABI_ELF_SONAME is empty" abi-elf ABI_ELF_LIB=libfoo.so.1 ABI_ELF_MAP=foo.map
+refuses_make "make -n abi-elf with a blank ABI_ELF_NEEDED" "ABI_ELF_NEEDED is empty" abi-elf ABI_ELF_LIB=libfoo.so.1 ABI_ELF_MAP=foo.map ABI_ELF_SONAME=libfoo.so.1 ABI_ELF_NEEDED=' '
 # The no-kit guard kit/count/README.md gives ports lists every kit
 # target, so each fails with the kit's message where the package is
 # missing: proved_port_phony and verify, in that order.
@@ -711,7 +731,7 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;
