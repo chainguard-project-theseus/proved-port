@@ -559,6 +559,18 @@ where it reports drift.
   its exports out). challoc's ledgers at deda0db are unchanged, and
   the parity run on its 30 older trees gives #218's results line for
   line.
+- The seam ledger generator skips a `#[cfg(test)]` item whose body
+  opens on a later line (#227): after a first line that starts an
+  item with a body (fn, impl, mod, trait, struct, enum, union,
+  macro_rules!) and does not end in `;`, it waits for the body, as it
+  did only after a `fn` signature (`mod t` then `{`, or an impl with a
+  `where` line, were counted as the crate's; seams.sh had the same
+  limit). Any other first line (a field, variant, parameter or match
+  arm) is still the whole item, its continuation read as code, and a
+  line that
+  closes more braces than it opens ends the pending item and is read
+  as code (`#[cfg(test)]` / `b: u8 }` left the depth one too high and
+  failed the file). challoc's ledgers are unchanged.
 - The seam ledger generator's mutant runner (#225):
   `kit/verus/seams/mutants.sh` applies each hand mutant in
   `kit/verus/seams/testdata/mutants.txt` (a file, text that occurs once

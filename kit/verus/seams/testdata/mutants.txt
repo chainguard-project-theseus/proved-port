@@ -151,7 +151,6 @@ scan.go	trim(c) != ""	true
 scan.go	trim(strip(l, c))	trim(l)
 scan.go	x == ";" && d == 0	x == ";"
 scan.go	x.def || 	
-scan.go	|| closes > opens		equivalent: only invalid Rust has a multi-line signature followed by a line that closes more braces than it opens
 scan.go	|| trim(rest[1:]) != ""	
 scan.go	} else if !is("]") {	} else if false {
 #
@@ -161,3 +160,15 @@ main.go	if _, ok := res.ledger[md]; !ok {	if _, ok := res.ledger[md]; false && !
 main.go	if stale {	if false {
 main.go	err != nil || string(b) != text	err != nil || string(b) != text && false
 main.go	strings.Join(want, "\n") != strings.Join(have, "\n")	strings.Join(want, "\n") != strings.Join(have, "\n") && false
+#
+# #227: a #[cfg(test)] item whose body opens on a later line.
+scan.go	s.pendtest == 1 && !reSemiEnd.MatchString(t) && head {	s.pendtest == 1 && !reSemiEnd.MatchString(t) && (head || !strings.HasSuffix(t, ",")) {
+scan.go	s.pendtest == 1 && !reSemiEnd.MatchString(t) && head {	s.pendtest == 1 && head {
+scan.go	head := reFnLine.MatchString(t) || reImplLine.MatchString(t) || reItemHead.MatchString(t)	head := reImplLine.MatchString(t) || reItemHead.MatchString(t)
+scan.go	head := reFnLine.MatchString(t) || reImplLine.MatchString(t) || reItemHead.MatchString(t)	head := reFnLine.MatchString(t) || reItemHead.MatchString(t)
+scan.go	head := reFnLine.MatchString(t) || reImplLine.MatchString(t) || reItemHead.MatchString(t)	head := reFnLine.MatchString(t) || reImplLine.MatchString(t)
+scan.go	if closes > opens {	if false {
+scan.go	(mod|trait|struct|enum|union)	(mod|trait|struct|union)
+scan.go	(mod|trait|struct|enum|union)	(mod|trait|struct|enum)
+scan.go	((unsafe|auto)[ \t]+)*	((unsafe)[ \t]+)*
+scan.go	|^macro_rules![ \t]*[A-Za-z_]")	")

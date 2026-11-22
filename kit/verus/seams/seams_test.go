@@ -249,6 +249,22 @@ func TestScanner(t *testing.T) {
 		{"item on the attribute's line", lines("verus! {", "#[verifier::external_body] broadcast proof fn lemma_p(x: int) ensures f(x) > 0 {}", "}"), "external_body proof lemma_p"},
 		{"item after two attributes on one line", lines("verus! {", "#[allow(dead_code)] #[verifier::external_body] fn f() {}", "fn g() {", "}", "}"), "external_body f"},
 		{"cfg(test) mod declaration on one line", lines("verus! {", "#[cfg(test)] mod tests;", "pub axiom fn a();", "}"), "axiom a"},
+		{"cfg(test) mod with its brace on the next line", lines("#[cfg(test)]", "mod t", "{", "    #[verifier::external_body]", "    fn g() {}", "}", "#[verifier::external_body]", "fn f() {}"), "external_body f"},
+		{"cfg(test) impl with a where line", lines("#[cfg(test)]", "#[allow(dead_code)]", "impl<T> X for T", "where", "    T: Y,", "{", "    #[verifier::external_body]", "    fn g() {}", "}", "#[verifier::external_body]", "fn f() {}"), "external_body f"},
+		{"cfg(test) fn whose first line ends in a comma", lines("#[cfg(test)]", "fn t(x: u8,", "     y: u8) {", "    #[verifier::external_body]", "    fn g() {}", "}", "#[verifier::external_body]", "fn f() {}"), "external_body f"},
+		{"cfg(test) impl whose where clause ends in a comma", lines("#[cfg(test)]", "impl<T> X for T where T: Y,", "{", "    #[verifier::external_body]", "    fn g() {}", "}", "#[verifier::external_body]", "fn f() {}"), "external_body f"},
+		{"cfg(test) last variant and field without a comma", lines("enum E {", "    A,", "    #[cfg(test)]", "    B", "}", "struct S {", "    a: u8,", "    #[cfg(test)]", "    b: u8 }", "#[verifier::external_body]", "fn f() {}"), "external_body f"},
+		{"cfg(test) parameter with no comma", lines("verus! {", "fn p(a: u8,", "    #[cfg(test)]", "    b: u8", ") {", "    let t = Tracked::assume_new();", "}", "}"), "assume_new p"},
+		{"cfg(test) match arm over lines", lines("verus! {", "fn q(x: E) {", "    match x {", "        #[cfg(test)]", "        A => f(", "            1),", "        B => {", "            let t = Tracked::assume_new();", "        }", "    }", "}", "}"), "assume_new q"},
+		{"cfg(test) struct with its brace on the next line", lines("#[cfg(test)]", "pub(crate) struct S", "{", "    a: u8,", "}", "#[cfg(test)]", "unsafe trait T", "{", "    #[verifier::external_body]", "    fn g() {}", "}", "#[verifier::external_body]", "fn f() {}"), "external_body f"},
+		// Each item head waits for its body; the fn inside stands for
+		// anything the body holds that the scan would count.
+		{"cfg(test) enum, union, auto trait and macro_rules! heads", lines("#[cfg(test)]", "enum E", "{", "    #[verifier::external_body] fn g1() {}", "}",
+			"#[cfg(test)]", "union U", "{", "    #[verifier::external_body] fn g2() {}", "}",
+			"#[cfg(test)]", "auto trait A", "{", "    #[verifier::external_body] fn g3() {}", "}",
+			"#[cfg(test)]", "macro_rules! m", "{", "    () => {", "        #[verifier::external_body]", "        fn g4() {}", "    };", "}",
+			"#[verifier::external_body]", "fn f() {}"), "external_body f"},
+		{"cfg(test) field and variant", lines("struct S {", "    #[cfg(test)]", "    a: u8,", "    b: u8,", "}", "enum E {", "    #[cfg(test)]", "    A,", "    B,", "}", "#[verifier::external_body]", "fn f() {", "}"), "external_body f"},
 		{"cfg(test) split over lines", lines("#[cfg(", "  test)]", "fn t() {", "    #[verifier::external_body]", "    fn g() {}", "}", "#[verifier::external_body]", "fn f() {}"), "external_body f"},
 		{"non-ASCII char literal", lines("verus! {", "#[verifier::external_body]", "fn open(c: char) -> bool { matches!(c, '«'|'{') }", "pub axiom fn a();", `fn q(c: char) -> bool { matches!(c, 'é'|'"') }`, "pub axiom fn b();", "}"), "external_body open; axiom a; axiom b"},
 		// Two literals a misread would each leave a false string after:
