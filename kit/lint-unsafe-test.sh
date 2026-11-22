@@ -11,6 +11,10 @@
 #     an allow(unsafe_code) that lowers the workspace lint in a test,
 #     which only the command-line forbid catches;
 #   - a root without the forbid, half the Verus pair, a binary's root;
+#   - roots from cargo metadata: a member with no lib or bin (benches,
+#     tests, an example) read through those, a bin-only member, a lib
+#     or bin at a path of its own, and a src/lib.rs or src/main.rs
+#     cargo does not build (autolib, autobins = false), which is none;
 #   - a misspelt UNSAFE_CRATES name, an empty one, a bad
 #     UNSAFE_WORKSPACE_LINTS;
 #   - no [workspace.lints.rust], a member that does not inherit it, and
@@ -217,6 +221,128 @@ d=$(copy)
 printf 'fn main() {\n    println!("{}", vpair::two());\n}\n' > "$d/crates/vpair/src/bin/tool.rs"
 run "$d"
 verdict "a binary's root without the forbid fails" 1 "FAIL crates/vpair/src/bin/tool.rs lacks"
+
+# A member with no lib and no bin target (#186): its test, bench and
+# example targets are its roots, each read from cargo metadata.
+# bonly D: add crates/bonly to the copy D, with a bench and a test that
+# forbid unsafe code, a build script and no lib or bin, and relock D.
+bonly() {
+  mkdir -p "$1/crates/bonly/benches" "$1/crates/bonly/tests"
+  printf '[package]\nname = "bonly"\nversion = "0.1.0"\nedition = "2021"\n\n[lints]\nworkspace = true\n\n[[bench]]\nname = "b"\nharness = false\n' > "$1/crates/bonly/Cargo.toml"
+  printf '#![forbid(unsafe_code)]\nfn main() {}\n' > "$1/crates/bonly/benches/b.rs"
+  printf '#![forbid(unsafe_code)]\n#[test]\nfn t() {}\n' > "$1/crates/bonly/tests/t.rs"
+  # A build script is no lib or bin target.
+  printf 'fn main() {}\n' > "$1/crates/bonly/build.rs"
+  (cd "$1" && cargo generate-lockfile --offline -q) || fail "cargo generate-lockfile in $1"
+}
+d=$(copy)
+bonly "$d"
+run "$d"
+verdict "a member of a bench and a test alone passes" 0 "lint-unsafe: PASS"
+for r in crates/bonly/benches/b.rs crates/bonly/tests/t.rs; do
+  grep -qx "ok   $r" "$tmp/out" || { cat "$tmp/out" >&2; fail "a bench-and-test member: its root $r is not read"; }
+done
+echo "ok a bench-and-test member: both its roots are read"
+
+d=$(copy)
+bonly "$d"
+printf '#[test]\nfn t() {}\n' > "$d/crates/bonly/tests/t.rs"
+run "$d"
+verdict "a bench-and-test member's test root without the forbid fails" 1 "FAIL crates/bonly/tests/t.rs lacks #![forbid(unsafe_code)]"
+
+d=$(copy)
+bonly "$d"
+rm "$d/crates/bonly/tests/t.rs"
+printf '#![forbid(missing_docs)]\nfn main() {}\n' > "$d/crates/bonly/benches/b.rs"
+run "$d"
+verdict "a bench-only member's root without the forbid fails" 1 "FAIL crates/bonly/benches/b.rs lacks #![forbid(unsafe_code)]"
+
+# A bench at a path of its own is read where cargo metadata puts it.
+d=$(copy)
+bonly "$d"
+rm -r "$d/crates/bonly/benches" "$d/crates/bonly/tests"
+mkdir -p "$d/crates/bonly/perf"
+printf '#![forbid(unsafe_code)]\nfn main() {}\n' > "$d/crates/bonly/perf/run.rs"
+printf 'path = "perf/run.rs"\n' >> "$d/crates/bonly/Cargo.toml"
+run "$d"
+verdict "a bench-only member's bench at a path of its own passes" 0 "ok   crates/bonly/perf/run.rs"
+verdict "a bench-only member's bench at a path of its own: the run passes" 0 "lint-unsafe: PASS"
+printf '#![allow(dead_code)]\nfn main() {}\n' > "$d/crates/bonly/perf/run.rs"
+run "$d"
+verdict "a bench at a path of its own without the forbid fails" 1 "FAIL crates/bonly/perf/run.rs lacks"
+
+# An example alone is a root too.
+d=$(copy)
+bonly "$d"
+rm -r "$d/crates/bonly/benches" "$d/crates/bonly/tests"
+printf '[package]\nname = "bonly"\nversion = "0.1.0"\nedition = "2021"\n\n[lints]\nworkspace = true\n' > "$d/crates/bonly/Cargo.toml"
+mkdir -p "$d/crates/bonly/examples"
+printf 'fn main() {}\n' > "$d/crates/bonly/examples/e.rs"
+run "$d"
+verdict "an example-only member's root without the forbid fails" 1 "FAIL crates/bonly/examples/e.rs lacks"
+
+# A member whose one lib or bin target is a bin (src/main.rs) is read
+# through it, not through its bench and test.
+d=$(copy)
+bonly "$d"
+mkdir -p "$d/crates/bonly/src"
+printf 'fn main() {}\n' > "$d/crates/bonly/src/main.rs"
+run "$d"
+verdict "a bin-only member's src/main.rs without the forbid fails" 1 "FAIL crates/bonly/src/main.rs lacks #![forbid(unsafe_code)]"
+printf '#![forbid(unsafe_code)]\nfn main() {}\n' > "$d/crates/bonly/src/main.rs"
+run "$d"
+verdict "a bin-only member's src/main.rs with the forbid passes" 0 "ok   crates/bonly/src/main.rs"
+verdict "a bin-only member with the forbid: the run passes" 0 "lint-unsafe: PASS"
+if grep -q 'ok   crates/bonly/\(benches\|tests\)/' "$tmp/out"; then cat "$tmp/out" >&2; fail "a bin-only member: its bench or test was read as a root"; fi
+echo "ok a bin-only member: its bench and test are not read as roots"
+
+# A src/lib.rs cargo does not build (autolib = false) is no root: the
+# member has no lib target, so its test and bench are its roots.
+d=$(copy)
+bonly "$d"
+mkdir -p "$d/crates/bonly/src"
+printf '#![forbid(unsafe_code)]\n' > "$d/crates/bonly/src/lib.rs"
+printf '[package]\nname = "bonly"\nversion = "0.1.0"\nedition = "2021"\nautolib = false\n\n[lints]\nworkspace = true\n\n[[bench]]\nname = "b"\nharness = false\n' > "$d/crates/bonly/Cargo.toml"
+run "$d"
+verdict "an autolib = false member is read through its test and bench" 0 "ok   crates/bonly/tests/t.rs"
+if grep -q 'crates/bonly/src/lib.rs' "$tmp/out"; then cat "$tmp/out" >&2; fail "autolib = false: the unbuilt src/lib.rs was read as a root"; fi
+echo "ok autolib = false: the unbuilt src/lib.rs is not read"
+printf '#[test]\nfn t() {}\n' > "$d/crates/bonly/tests/t.rs"
+run "$d"
+verdict "an autolib = false member's test root without the forbid fails" 1 "FAIL crates/bonly/tests/t.rs lacks"
+
+# A member's lib and bin roots are where cargo metadata puts them: a
+# lib at a path of its own is read, and its bench and test are not.
+d=$(copy)
+bonly "$d"
+printf '#![forbid(unsafe_code)]\n' > "$d/crates/bonly/lib.rs"
+printf '\n[lib]\npath = "lib.rs"\n' >> "$d/crates/bonly/Cargo.toml"
+run "$d"
+verdict "a lib at a path of its own is read" 0 "ok   crates/bonly/lib.rs"
+verdict "a lib at a path of its own: the run passes" 0 "lint-unsafe: PASS"
+if grep -q 'ok   crates/bonly/\(benches\|tests\)/' "$tmp/out"; then cat "$tmp/out" >&2; fail "a member with a lib: its bench or test was read as a root"; fi
+echo "ok a member with a lib: its bench and test are not read as roots"
+printf 'pub fn f() {}\n' > "$d/crates/bonly/lib.rs"
+run "$d"
+verdict "a lib at a path of its own without the forbid fails" 1 "FAIL crates/bonly/lib.rs lacks"
+# A bin at a path of its own beside a lib at src/lib.rs: both are read.
+d=$(copy)
+mkdir -p "$d/crates/vpair/cli"
+printf 'fn main() {}\n' > "$d/crates/vpair/cli/main.rs"
+printf '\n[[bin]]\nname = "cli"\npath = "cli/main.rs"\n' >> "$d/crates/vpair/Cargo.toml"
+run "$d"
+verdict "a bin at a path of its own beside a default lib, without the forbid, fails" 1 "FAIL crates/vpair/cli/main.rs lacks"
+grep -qx 'ok   crates/vpair/src/lib.rs' "$tmp/out" || { cat "$tmp/out" >&2; fail "a bin at a path of its own: the lib beside it is not read"; }
+echo "ok a bin at a path of its own: the lib beside it is read too"
+# And a src/main.rs cargo does not build (autobins = false) beside a
+# lib is not read.
+d=$(copy)
+printf 'fn main() {}\n' > "$d/crates/vpair/src/main.rs"
+awk '{ print } /^edition = / { print "autobins = false" }' "$d/crates/vpair/Cargo.toml" > "$tmp/m" && cp "$tmp/m" "$d/crates/vpair/Cargo.toml"
+run "$d"
+verdict "an unbuilt src/main.rs (autobins = false) is no root" 0 "lint-unsafe: PASS"
+if grep -q 'crates/vpair/src/main.rs' "$tmp/out"; then cat "$tmp/out" >&2; fail "autobins = false: the unbuilt src/main.rs was read"; fi
+echo "ok autobins = false: the unbuilt src/main.rs is not read"
 
 # --- settings --------------------------------------------------------------------
 run "$fx" UNSAFE_CRATES="capi cmme"

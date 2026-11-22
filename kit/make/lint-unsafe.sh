@@ -8,10 +8,13 @@
 # crate) are the only ones allowed `unsafe`. For every other workspace
 # member, it checks that:
 #
-#   - each crate root cargo finds by itself (src/lib.rs, src/main.rs,
-#     src/bin/*.rs, src/bin/*/main.rs), of which there is at least one,
-#     forbids unsafe code: the inner attribute #![forbid(unsafe_code)]
-#     (alone or in a list), or both lines of the Verus pair
+#   - each crate root, of which there is at least one, forbids unsafe
+#     code. The roots are the files cargo metadata names for the
+#     member's lib and bin targets, wherever they are, or, for a member
+#     with no lib and no bin target (benches or tests alone), for its
+#     test, bench and example targets. Each forbids it with the inner
+#     attribute #![forbid(unsafe_code)] (alone or in a list), or both
+#     lines of the Verus pair
 #       #![cfg_attr(not(verus_keep_ghost), forbid(unsafe_code))]
 #       #![cfg_attr(verus_keep_ghost, deny(unsafe_code))]
 #     which forbids it in every ordinary build and only denies it while
@@ -420,28 +423,9 @@ $manifests
 MANIFESTS
 fi
 
-# --------------------------------------------------------------- crate roots
-echo "=== lint-unsafe: crate roots ==="
-while IFS= read -r m; do
-  ! is_fence "$m" || continue
-  dir=$(dirname "$m")
-  n=0
-  for r in "$dir/src/lib.rs" "$dir/src/main.rs" "$dir"/src/bin/*.rs "$dir"/src/bin/*/main.rs; do
-    [ -f "$r" ] || continue
-    n=$((n + 1))
-    if root_forbids "$r"; then
-      pass "$(rel "$r")"
-    else
-      fail "$(rel "$r") lacks #![forbid(unsafe_code)] (or the Verus pair, both lines)"
-    fi
-  done
-  [ "$n" -gt 0 ] || fail "$(rel "$dir") has no crate root (src/lib.rs, src/main.rs, src/bin/)"
-done <<MANIFESTS
-$manifests
-MANIFESTS
-
 # ---------------------------------------------------------- forbid check
-echo "=== lint-unsafe: every other target with -Funsafe_code ==="
+# Its header is printed below, after the crate roots, which read the
+# targets cargo metadata lists.
 # The targets of the members but the fence crates, one
 # `PACKAGE<tab>GATED<tab>CRATE<tab>SRC_PATH` a line (GATED is 1 for a
 # target with required-features). A target belongs to the package whose
@@ -525,6 +509,52 @@ if [ -n "$untargeted" ]; then
   echo "lint-unsafe: cargo metadata gave no target lint-unsafe.sh could read for $(printf '%s\n' "$untargeted" | tr '\n' ' ' | sed 's/ $//')" >&2
   exit 2
 fi
+
+# --------------------------------------------------------------- crate roots
+# A member's crate roots are the src_paths cargo metadata gives for its
+# lib and bin targets (every kind but test, bench, example and
+# custom-build), wherever they are: the files cargo compiles as crate
+# roots, so a lib or bin at a path of its own is read, and a file at a
+# default path that cargo does not build (autolib = false, autobins =
+# false) is not. A member with no lib and no bin target (benches or
+# tests alone) has its test, bench and example targets as its roots.
+# Every member has one.
+echo "=== lint-unsafe: crate roots ==="
+# The members' targets by kind, one `PACKAGE<tab>KIND<tab>SRC_PATH` a
+# line, KIND the first in the target's "kind" array.
+kinds=$(printf '%s\n' "$meta" | awk "$pkg_targets" |
+  awk -F "$tab" '
+    NR == FNR { pkg[$2] = $1; next }
+    ($1 in pkg) && match($2, /"kind":\["[^"]*"/) {
+      k = substr($2, RSTART + 9, RLENGTH - 10)
+      if (match($2, /"src_path":"[^"]*"/)) print pkg[$1] "\t" k "\t" substr($2, RSTART + 12, RLENGTH - 13) }' "$plant/members" -)
+while IFS="$tab" read -r p m; do
+  [ -n "$m" ] || continue
+  ! is_fence "$m" || continue
+  dir=$(dirname "$m")
+  roots=$(printf '%s\n' "$kinds" | awk -F "$tab" -v p="$p" '
+    $1 != p || $2 == "custom-build" { next }
+    $2 == "test" || $2 == "bench" || $2 == "example" { other[++no] = $3; next }
+    { print $3; libbin = 1 }
+    END { if (!libbin) for (i = 1; i <= no; i++) print other[i] }')
+  n=0
+  while IFS= read -r r; do
+    [ -n "$r" ] && [ -f "$r" ] || continue
+    n=$((n + 1))
+    if root_forbids "$r"; then
+      pass "$(rel "$r")"
+    else
+      fail "$(rel "$r") lacks #![forbid(unsafe_code)] (or the Verus pair, both lines)"
+    fi
+  done <<ROOTS
+$roots
+ROOTS
+  [ "$n" -gt 0 ] || fail "$(rel "$dir") has no crate root (no lib, bin, test, bench or example target in cargo metadata)"
+done <<MEMBERS
+$members
+MEMBERS
+
+echo "=== lint-unsafe: every other target with -Funsafe_code ==="
 shared=$(printf '%s\n' "$targets" | cut -f1,4 | sort | uniq -d)
 while IFS="$tab" read -r p src; do
   [ -n "$src" ] || continue
