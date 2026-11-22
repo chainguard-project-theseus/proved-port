@@ -173,12 +173,16 @@ func (s *scanner) unsupported(name string, at int, contract string) {
 }
 
 var (
-	reDocLine   = re("^///")
-	reDocHead   = re("^/// ?")
-	reAttrStart = re("^#!?\\[")
-	reCfgTest1  = re("^#[ \t]*\\[[ \t]*cfg[ \t]*\\([ \t]*(all[ \t]*\\([ \t]*)?test[ \t]*[,)]")
-	reCfgTest2  = re("^#\\[cfg\\(test\\)\\]")
-	reFnLine    = re("(^|[ \t])fn [A-Za-z_]")
+	reDocLine = re("^///")
+	reDocHead = re("^/// ?")
+	// `#`, `!` and `[` are separate tokens, so blanks may stand between
+	// them (`# [verifier::external_body]`).
+	// (reOuterAttr, an outer attribute only, is resolve.go's.)
+	reAttrStart = re("^#[ \t]*!?[ \t]*\\[")
+	// (reCfgTest1 already reads blanks after `#`.)
+	reCfgTest1 = re("^#[ \t]*\\[[ \t]*cfg[ \t]*\\([ \t]*(all[ \t]*\\([ \t]*)?test[ \t]*[,)]")
+	reCfgTest2 = re("^#\\[cfg\\(test\\)\\]")
+	reFnLine   = re("(^|[ \t])fn [A-Za-z_]")
 	// The first line of an item that has a body (besides fn and impl):
 	// after `#[cfg(test)]` the scan waits for that body on a later line.
 	reItemHead     = re("^(pub(\\([^)]*\\))?[ \t]+)?((unsafe|auto)[ \t]+)*(mod|trait|struct|enum|union)[ \t]+[A-Za-z_]|^macro_rules![ \t]*[A-Za-z_]")
@@ -279,6 +283,24 @@ func (s *scanner) endFile(source bool) {
 	if len(s.errs) == n && s.depth != 0 {
 		s.errs = append(s.errs, fmt.Sprintf("seams: %s: the file's braces do not balance (depth %d at its end), so the scan cannot read it whole", s.file, s.depth))
 	}
+}
+
+// hashEnd says whether the code line t, read outside any attribute, ends
+// in a `#` or `#!` (blanks allowed between and after): the start of an
+// attribute whose `[` is on a later line. Rust joins the tokens across
+// the line break; the scan does not, so a trusting attribute there would
+// leave a seam out. A raw string's closing `"#` is no such `#`.
+func hashEnd(t string) bool {
+	s := strings.TrimRight(t, " \t")
+	s = strings.TrimRight(strings.TrimSuffix(s, "!"), " \t")
+	if !strings.HasSuffix(s, "#") {
+		return false
+	}
+	return !strings.HasSuffix(strings.TrimRight(s, "#"), "\"")
+}
+
+func (s *scanner) hashEndErr() {
+	s.errs = append(s.errs, fmt.Sprintf("seams: %s:%d: a line that ends in an attribute's `#` (alone or after other code), its `[` on a later line: the scan does not read it, so a trusting attribute there would leave a seam out (write `#[` on one line)", s.file, s.ln))
 }
 
 // unread reports a trusting attribute on an item line t the scan cannot
@@ -410,6 +432,10 @@ func (s *scanner) line(raw, c string) {
 	if t == "" {
 		return
 	}
+	if s.aopen == 0 && hashEnd(t) {
+		s.hashEndErr()
+		return
+	}
 	// An attribute, read through its closing bracket when it spans lines.
 	if s.aopen > 0 || reAttrStart.MatchString(t) {
 		// An item after the last attribute on this line (`#[a] fn f()`,
@@ -438,9 +464,12 @@ func (s *scanner) line(raw, c string) {
 			return
 		}
 		s.aopen = 0
+		if hashEnd(t) {
+			s.hashEndErr()
+		}
 		s.attrs += " " + s.at
 		s.hattrs += " " + s.ah
-		if strings.HasPrefix(s.at, "#[") {
+		if reOuterAttr.MatchString(s.at) {
 			s.uattrs += s.au + "\n"
 		}
 		if reCfgTest1.MatchString(s.at) || reCfgTest2.MatchString(s.at) {
@@ -1171,7 +1200,7 @@ func readPairAttrs(text, macro, v string) pairTemplate {
 }
 
 var (
-	rePairAttr   = re("^[ \t]*(\\$\\()?#\\[")
+	rePairAttr   = re("^[ \t]*(\\$\\()?#[ \t]*\\[")
 	rePathPrefix = re("^(::)?([A-Za-z_][A-Za-z0-9_]*[ \t]*::[ \t]*)+$")
 	reListOpen   = re("^fn [A-Za-z_][A-Za-z0-9_]*[ \t]*\\[")
 	reListFn     = re("^fn [A-Za-z_][A-Za-z0-9_]*[ \t]*\\[[ \t]*[A-Za-z_][A-Za-z0-9_]*([ \t]*,[ \t]*[A-Za-z_][A-Za-z0-9_]*)*[ \t]*,?[ \t]*\\]")
