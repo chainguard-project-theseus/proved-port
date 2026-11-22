@@ -365,6 +365,12 @@ func TestEndOfFile(t *testing.T) {
 	if res.code == 2 {
 		t.Errorf("test file with open braces: %v", res.errs)
 	}
+	// A file that ends inside a string has its braces open too: the one
+	// error is the string's, not a second about the braces.
+	res = generate(testRules(t), input{sources: []namedText{{"src/a.rs", lines("fn f() {", `    let s = "x;`)}}}, true)
+	if strings.Join(res.errs, "\n") != "seams: src/a.rs:2: the file ends inside a string that starts here, so the scan cannot read it whole" {
+		t.Errorf("string and braces open: errs %q", res.errs)
+	}
 	// Each file starts with the lexer fresh: a file left inside a block
 	// comment is its own error, and the next file is read as code.
 	res = generate(testRules(t), input{
@@ -968,7 +974,9 @@ func TestExportFailClosed(t *testing.T) {
 		t.Errorf("second template split over lines: code %d, errs %v", res.code, res.errs)
 	}
 	j := strings.Index(arms, "fn $name()")
-	split = arms[:j] + "fn $name\n        () {}" + arms[j+len("fn $name() {}"):]
+	// (Split between `fn` and `$name`, so the line-by-line read finds
+	// only the second arm's; the first is still named as the first.)
+	split = arms[:j] + "fn\n        $name() {}" + arms[j+len("fn $name() {}"):]
 	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", split}}, pairText: split}, true)
 	if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/width.rs:10: a second `fn $name(` in macro_rules! exports (the first is line 5)") {
 		t.Errorf("first template split over lines: code %d, errs %v", res.code, res.errs)

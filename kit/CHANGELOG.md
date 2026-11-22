@@ -559,6 +559,15 @@ where it reports drift.
   its exports out). challoc's ledgers at deda0db are unchanged, and
   the parity run on its 30 older trees gives #218's results line for
   line.
+- The seam ledger generator's mutant runner (#225):
+  `kit/verus/seams/mutants.sh` applies each hand mutant in
+  `kit/verus/seams/testdata/mutants.txt` (a file, text that occurs once
+  in it, its replacement, and an optional `equivalent: REASON`) to a
+  copy of `kit/` and runs the generator's tests; a survivor not marked
+  equivalent, a marked one that is killed, or text that no longer
+  occurs once fails. The go.yaml check `seams-mutants` runs it after
+  `kit/seams-mutants-test.sh`. Nothing is installed; ports see no
+  change.
 
 ### Porting notes
 
