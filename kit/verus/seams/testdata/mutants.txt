@@ -268,3 +268,16 @@ rules.go	strings.ContainsAny(f[2], "[] ")	false
 rules.go	if _, ok := r.CiteRow[f[1]]; ok {	if false {
 rules.go	bad("cite-module %s: want an identifier", name)	_ = name
 rules.go	if _, ok := r.CiteModule[f[1]]; ok {	if false {
+#
+# #233: attributes written with blanks between `#`, `!` and `[`.
+scan.go	reAttrStart = re("^#[ \t]*!?[ \t]*\\[")	reAttrStart = re("^#!?\\[")
+scan.go	reAttrStart = re("^#[ \t]*!?[ \t]*\\[")	reAttrStart = re("^#[ \t]*!?\\[")
+scan.go	if s.aopen == 0 && hashEnd(t) {	if false && hashEnd(t) {
+scan.go	if s.aopen == 0 && hashEnd(t) {	if hashEnd(t) {
+scan.go	if hashEnd(t) {	if false {
+scan.go	s = strings.TrimRight(strings.TrimSuffix(s, "!"), " \t")	s = strings.TrimSuffix(s, "!")
+scan.go	s = strings.TrimRight(strings.TrimSuffix(s, "!"), " \t")	s = strings.TrimRight(s, " \t")
+scan.go	return !strings.HasSuffix(strings.TrimRight(s, "#"), "\"")	return true
+scan.go	return !strings.HasSuffix(strings.TrimRight(s, "#"), "\"")	return !strings.HasSuffix(s[:len(s)-1], "\"")
+scan.go	if reOuterAttr.MatchString(s.at) {	if strings.HasPrefix(s.at, "#[") {
+scan.go	rePairAttr   = re("^[ \t]*(\\$\\()?#[ \t]*\\[")	rePairAttr   = re("^[ \t]*(\\$\\()?#\\[")

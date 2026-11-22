@@ -24,7 +24,10 @@
 // no_decreases, assume_new and ghost_assume_new (inside `verus!`, outside
 // tests and external_body bodies, whose mints are noted on their entry),
 // and unsupported-attribute (`#[verifier::assume_unsupported_attributes]`
-// on a fn, const or static, and each export a pair macro writes). Each
+// on a fn, const or static, and each export a pair macro writes). An
+// attribute may hold blanks between `#`, `!` and `[` (`# [..]`); a line
+// whose code (outside an open attribute) ends in `#` or `#!`, its `[` on
+// a later line, is an input error. Each
 // entry gives its place, the contract Verus assumes (verbatim), a
 // category and a tool from the rules' heuristics or the overrides, a
 // status, and its hashes `contract C, body B`: the POSIX cksum CRCs of

@@ -121,8 +121,10 @@ var resolveFiles = map[string]string{
 		"",
 		"#[kani::unwind(2)] #\t[cfg(any())]",
 		"#[kani::proof]",
-		"fn spaced_shared() {}",
-		"",
+		"fn spaced_shared() {}"),
+	// A lone `#` line, which the seam scan refuses under SOURCE (#233),
+	// so outside it.
+	"proofs/hash.rs": lines(
 		"#",
 		"// a comment between the tokens",
 		"[cfg(any())]",
@@ -292,7 +294,7 @@ func TestResolveFn(t *testing.T) {
 		"kani_proofs::top", "heap::kani_x::inner", "heap::a::b::deep", "ext::shut::f", "kani_proofs::ptr::after_gated_fn",
 		"kani_proofs::ptr::wrapped_stub", "kani_proofs::ptr::doc_text",
 		"kani_proofs::ptr::gated_above", // #[cfg(kani)], which the rules allow
-		"kani_proofs::ptr::after_hash"}
+		"ext::hash::after_hash"}
 	// Found, but under a gate: maybe never built.
 	gated := []string{
 		"kani_proofs::ptr::gated", // a cfg between
@@ -305,7 +307,7 @@ func TestResolveFn(t *testing.T) {
 		"kani_proofs::ptr::other_indent_cfg",  // a cfg at another indentation
 		"kani_proofs::ptr::spaced_cfg",        // `# [cfg(..)]`
 		"kani_proofs::ptr::spaced_shared",     // the same after another attribute on its line
-		"kani_proofs::ptr::hash_alone",        // `#` / comment / `[cfg(..)]`
+		"ext::hash::hash_alone",               // `#` / comment / `[cfg(..)]`
 	}
 	bad := []string{
 		"kani::ptr::ptr_add",           // reaches src/kani not by its module name

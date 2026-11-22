@@ -638,8 +638,8 @@ where it reports drift.
     - the attribute anywhere on its line, or wrapped by rustfmt over
       lines up to its closing `]`, with or without blanks between `#`
       and `[` (two tokens in Rust's grammar), or a lone `#` line with
-      the `[..]` on the next line of code. The seam scanner itself
-      does not read `# [..]` yet (#233).
+      the `[..]` on the next line of code. The seam scanner reads
+      `# [..]` too since #233.
 
     The tag's cite-fn line may allow `#[cfg(CFG)]`, whole on its line and
     as written (`feature = "std"` matches only that literal), for each
@@ -665,6 +665,25 @@ where it reports drift.
   The kit's challoc golden tree holds only nine of challoc's sources, so
   `testdata/challoc.rules` gains no cite-fn lines. Nothing is installed;
   ports see no change.
+- The seam ledger generator reads an attribute written with blanks
+  between `#`, `!` and `[` (#233). These are separate tokens in Rust's
+  grammar, so `# [verifier::external_body]` compiles and Verus takes the
+  item on trust. The scan used to read that line as plain code, which
+  left its seam out of the ledger silently; seams.sh had the same limit.
+  Now it is an attribute line everywhere the scan reads attributes:
+  - a trusting attribute, which makes a seam;
+  - an unsupported-attribute item's contract lines;
+  - an export macro template's attribute lines.
+
+  `#[cfg(test)]` already read blanks there. A line whose code ends in
+  `#` or `#!` with its `[` on a later line is an input error naming the
+  line, because the scan does not join the two. That covers the `#`
+  alone on its line, after an attribute (`#[a] #`, also where a wrapped
+  one closes) or after other code. A raw string's closing `"#` is not
+  such a line. rustfmt writes neither form:
+  challoc's ledgers (7d10fca and 11 older trees) and a second port's 684
+  `-entries` lines are unchanged. Nothing is installed; ports see no
+  change.
 
 ### Porting notes
 
