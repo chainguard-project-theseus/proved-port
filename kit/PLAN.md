@@ -347,7 +347,11 @@ is deleted in that PR.
    trees its ledgers equal seams.sh's byte for byte (a local run,
    #218's body; CI does not repeat it). The go.yaml check `seams-test`
    runs seams.sh's self-tests, scanner cases and a golden of nine
-   challoc source files with their ledger and seams.sh's totals. Still to
+   challoc source files with their ledger and seams.sh's totals. The
+   export macro rule also reads a list form (`fn body [a, b, c] (..)`,
+   several exports from one template) and invocations by path
+   (`width::exports! {`), so a second port's sources scan to the end
+   (#219). Still to
    come: the checks a status cites (Kani harnesses, assertions, Isla,
    emptyasm, loom, GenMC, guard tests), the not-Copy checks and the
    Kani pins, which stay in challoc's script reading `-entries` until

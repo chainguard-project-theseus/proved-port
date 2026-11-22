@@ -518,6 +518,47 @@ where it reports drift.
   a rules file is refused when a single-valued rule repeats or a path
   leaves the tree. The package does not install it yet, so no port changes
   anything; the go.yaml check `seams-test` runs its tests.
+- The seam ledger generator's export macro rule, generalised (#219):
+  `export-macro MACRO FILE FORM VAR...` reads the `slash` form
+  (`fn a / b(..)`, challoc's; `pair MACRO FILE V1 V2` stays and means
+  `export-macro MACRO FILE slash V1 V2`) or the `list` form
+  (`fn body [a, b, c] (..)`, its names on one line or over several up
+  to the `]`, the declaration's own attribute lines in every name's
+  contract either way), each name taking the attributes above `fn $VAR(` for
+  one VAR, or for the VAR in its place when there is one per name. An
+  invocation may name the macro by path (`width::exports! {`), with
+  blanks or a comment before its `!`. An export's attributes are the
+  attribute lines directly above its template, the macro's file read
+  with the lexer (lines of comments only, block comments over several
+  lines included, skipped; a comment inside or after an attribute
+  dropped from its text; a bracket or `fn $VAR(` in a comment or
+  literal no code; any other line starts them again, where the pair
+  rule read raw lines and only restarted at a `pub extern "C" fn`
+  line), and its item line keeps the template's qualifiers
+  (`pub unsafe extern "C" fn NAME (MACRO!)`; the pair rule always
+  wrote `pub extern "C"`). Fail closed: a `fn` line directly inside an
+  invocation that the form does not read, names that fit neither one
+  VAR nor one per name, a list the invocation ends inside, a nested
+  invocation, any other use of the macro (another delimiter, an
+  expression, names on the invocation's own line, a name and its `!`
+  split over lines, found in each file's tokens), a renamed import
+  (`use w::MACRO as m;`, whose invocations go by `m!`, also split over
+  lines), a `macro_rules! MACRO` outside FILE or a second one in it
+  (its exports would take FILE's template), code after the
+  definition's closing brace on its line (`} MACRO! {`, which would
+  read as part of the definition), a second `fn $VAR(` template for
+  one VAR in the definition (another arm, `fn $VAR (` with blanks or
+  its head split over lines included; a lone template so split cannot
+  be read and is refused too; the template search also stops at the definition's
+  close, a definition on one line included), and an invocation
+  whose tokens do not read as the form's declarations (`#[..]`*, `fn`
+  and the names, then a rest to a `;` or through a `{..}` body) or
+  name other exports than its lines gave (a `fn` split from its names,
+  two declarations on a line, a grammar with no `fn`, forwarded
+  tokens) are input errors (the pair rule passed over each, leaving
+  its exports out). challoc's ledgers at deda0db are unchanged, and
+  the parity run on its 30 older trees gives #218's results line for
+  line.
 
 ### Porting notes
 

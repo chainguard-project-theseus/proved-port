@@ -79,14 +79,42 @@
 //	                           FIELD one of kind, name, file and body (the
 //	                           body with comments and literals blanked), RE
 //	                           an RE2 expression
+//	export-macro<TAB>MACRO<TAB>FILE<TAB>FORM<TAB>VAR...
+//	                           a macro_rules! MACRO in FILE whose invocations
+//	                           (`MACRO! {` or `path::MACRO! {`, blanks
+//	                           allowed before the `!`, its lines below)
+//	                           write C exports: each `fn` line directly
+//	                           inside names them in FORM, `slash` (`fn a /
+//	                           b(..)`) or `list` (`fn f [a, b, ..] (..)`,
+//	                           the names on that line or on the lines up
+//	                           to the `]`). Each export is an
+//	                           unsupported-attribute entry with the
+//	                           attribute lines directly above `fn $VAR(`
+//	                           in the definition (lines of comments only
+//	                           skipped; the file read with the lexer) and
+//	                           that line's qualifiers; one VAR serves
+//	                           every name, or there is one per name, in
+//	                           order. The invocation's tokens must read as
+//	                           declarations (`#[..]`* `fn` and the names,
+//	                           then a rest to a `;` or through a `{..}`
+//	                           body) naming exactly the exports its lines
+//	                           gave. A fn line the form does not read,
+//	                           names the VARs do not fit, tokens that are
+//	                           no such declarations or name other exports,
+//	                           a renamed import (`MACRO as NAME`), any
+//	                           other use of MACRO! (each file's tokens are
+//	                           read too, so a name and its `!` split over
+//	                           lines count), a macro_rules! MACRO outside
+//	                           FILE or a second one in it, and a second
+//	                           `fn $VAR(` for one VAR in the definition
+//	                           are input errors.
 //	pair<TAB>MACRO<TAB>FILE<TAB>VAR<TAB>VAR
-//	                           a macro_rules! MACRO in FILE whose invocation
-//	                           lines `fn a / b(..)` write two C exports with
-//	                           the attributes it puts above `fn $VAR(`
+//	                           export-macro MACRO FILE slash VAR VAR
 //	unsupported-doc<TAB>TEXT   the note on each unsupported-attribute entry
 //
 // Each rule that holds one value (ledger, source, command, seams-doc,
-// unsupported-doc, assumption-tool, pair) is given at most once, and
+// unsupported-doc, assumption-tool, and export-macro or pair, which
+// name the one export macro) is given at most once, and
 // each path is relative to the root and inside it, not the root itself.
 //
 // Exit status: 0 done, 1 a check failed, 2 usage, rules or input errors.

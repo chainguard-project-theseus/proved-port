@@ -333,7 +333,7 @@ func TestUnreadItem(t *testing.T) {
 	// Inside the pair macro's own definition the export attributes are
 	// read at each invocation, so they are no unread item there.
 	src := lines("macro_rules! verified_export_pair {", "    ($name:ident) => {", "        #[verifier::assume_unsupported_attributes]", "        pub extern \"C\" fn $name() {}", "    };", "}")
-	if res := generate(r, input{sources: []namedText{{"src/a/b.rs", src}}}, true); res.code != 0 {
+	if res := generate(r, input{sources: []namedText{{"src/api/mod.rs", src}}}, true); res.code != 0 {
 		t.Errorf("pair macro definition: code %d, errs %v", res.code, res.errs)
 	}
 }
@@ -434,12 +434,41 @@ func TestPairEnds(t *testing.T) {
 	}
 }
 
+// challoc's own verified_export_pair! definition (src/api/mod.rs at
+// deda0db, verbatim) and one invocation (src/api/print.rs:1789-1793)
+// give the contracts and hashes challoc's ledger records for them.
+func TestPairChalloc(t *testing.T) {
+	read := func(p string) string {
+		b, err := os.ReadFile(filepath.Join("testdata/challoc-pair", p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	mod, print := read("src/api/mod.rs"), read("src/api/print.rs")
+	res := generate(testRules(t), input{sources: []namedText{{"src/api/mod.rs", mod}, {"src/api/print.rs", print}}, pairText: mod}, true)
+	if res.code != 0 || names(res.entries) != "unsupported-attribute malloc_stats_print; unsupported-attribute je_malloc_stats_print" {
+		t.Fatalf("code %d %v: %s", res.code, res.errs, names(res.entries))
+	}
+	// From verus/ledger/src/api/print.rs.md at deda0db.
+	for i, w := range []struct {
+		name string
+		hash uint32
+	}{{"malloc_stats_print", 1768398676}, {"je_malloc_stats_print", 3439469082}} {
+		e := res.entries[i]
+		want := "$(#[$m])*\n#[unsafe(no_mangle)]\n#[verifier::assume_unsupported_attributes]\npub extern \"C\" fn " + w.name + " (verified_export_pair!)"
+		if e.contract != want || e.line != 1 || cksum(norm(e.hc)) != w.hash {
+			t.Errorf("%s: line %d, contract %q, hash %d; want line 1, %q, %d", w.name, e.line, e.contract, cksum(norm(e.hc)), want, w.hash)
+		}
+	}
+}
+
 func TestPair(t *testing.T) {
 	mod := lines("macro_rules! verified_export_pair {",
 		"    ($(#[$m:meta])* fn $name:ident / $je:ident ($($a:tt)*)) => {",
 		"        $(#[$m])*", "        #[unsafe(no_mangle)]", "        pub extern \"C\" fn $name() {}",
 		"        #[unsafe(export_name =", "            \"je\")]", "        pub extern \"C\" fn $je() {}", "    };", "}",
-		"verified_export_pair! {", "    fn malloc / je_malloc(size: usize)", "}")
+		"verified_export_pair! {", "    fn malloc / je_malloc(size: usize) {}", "}")
 	res := generate(testRules(t), input{sources: []namedText{{"src/api/mod.rs", mod}}, pairText: mod}, true)
 	if res.code != 0 || names(res.entries) != "unsupported-attribute malloc; unsupported-attribute je_malloc" {
 		t.Fatalf("code %d %v: %s", res.code, res.errs, names(res.entries))
@@ -589,6 +618,458 @@ func itoa(u uint32) string {
 	}
 }
 
+// listRules is challoc's rules with a list-form export macro in place
+// of its pair line: `fn body [a, b, c] (..)`, each name from `fn $VAR(`.
+func listRules(t *testing.T, vars ...string) *Rules {
+	t.Helper()
+	b, err := os.ReadFile("testdata/challoc.rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keep []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if !strings.HasPrefix(l, "pair\t") {
+			keep = append(keep, l)
+		}
+	}
+	text := strings.Join(keep, "\n") + "\nexport-macro\texports\tsrc/width.rs\tlist\t" + strings.Join(vars, "\t") + "\n"
+	r, err := parseRules("list.rules", text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+var listDef = lines("macro_rules! exports {",
+	"    ($($(#[$attr:meta])* fn $body:ident [$n8:ident, $n16:ident] ($($a:tt)*);)*) => {",
+	"        $crate::width::exports!(@w $($(#[$attr])* fn $body $n8;)*);",
+	"    };",
+	"    (@w $($(#[$attr:meta])* fn $body:ident $name:ident;)*) => {",
+	"        mod m {",
+	"            #[allow(unused_imports)]",
+	"            use super::*;",
+	"            $(",
+	"                $(#[$attr])*",
+	"                // Verus takes no_mangle on trust.",
+	"",
+	"                #[verifier::assume_unsupported_attributes]",
+	"                #[unsafe(no_mangle)]",
+	"                pub unsafe extern \"C\" fn $name() {}",
+	"                #[unsafe(export_name = \"x\")]",
+	"                pub extern \"C\" fn $other() {}",
+	"            )*",
+	"        }",
+	"    };",
+	"}")
+
+func TestExportList(t *testing.T) {
+	use := lines("width::exports! {",
+		"    /// Docs.",
+		"    fn create [p_create_8, p_create_16] (n: usize);",
+		"    fn free [",
+		"        p_free_8,",
+		"        p_free_16,",
+		"    ] (",
+		"        p: *mut u8,",
+		"    );",
+		"}")
+	in := input{sources: []namedText{{"src/a.rs", use}, {"src/width.rs", listDef}}, pairText: listDef}
+	res := generate(listRules(t, "name"), in, true)
+	if res.code != 0 || names(res.entries) != "unsupported-attribute p_create_8; unsupported-attribute p_create_16; unsupported-attribute p_free_8; unsupported-attribute p_free_16" {
+		t.Fatalf("code %d %v: %s", res.code, res.errs, names(res.entries))
+	}
+	// The attributes directly above `fn $name(` (the comment between
+	// them skipped, the `#[allow]` above the `$(` not), and the item's
+	// own qualifiers.
+	want := "$(#[$attr])*\n#[verifier::assume_unsupported_attributes]\n#[unsafe(no_mangle)]\npub unsafe extern \"C\" fn p_free_16 (exports!)"
+	if c := res.entries[3].contract; c != want {
+		t.Errorf("contract %q, want %q", c, want)
+	}
+	if l := res.entries[2].line; l != 1 {
+		t.Errorf("line %d, want the invocation's 1", l)
+	}
+	// One VAR per name: the second name takes the second template.
+	res = generate(listRules(t, "name", "other"), in, true)
+	if res.code != 0 || res.entries[1].contract != "#[unsafe(export_name = \"x\")]\npub extern \"C\" fn p_create_16 (exports!)" {
+		t.Errorf("two VARs: code %d %v %+v", res.code, res.errs, res.entries)
+	}
+	// Invocations by other paths are read; the definition's own
+	// `$crate::width::exports!(` is not an invocation.
+	for _, open := range []string{"exports! {", "crate::width::exports!{", "::w :: exports! {", "width::exports ! {", "exports/* c */! {"} {
+		u := lines(open, "    fn f [a_8, a_16] ();", "}")
+		res = generate(listRules(t, "name"), input{sources: []namedText{{"src/a.rs", u}, {"src/width.rs", listDef}}, pairText: listDef}, true)
+		if res.code != 0 || names(res.entries) != "unsupported-attribute a_8; unsupported-attribute a_16" {
+			t.Errorf("%q: code %d %v: %s", open, res.code, res.errs, names(res.entries))
+		}
+	}
+	// `exports != x` compares a value; it is no use of the macro.
+	// Nor is an import by its own name.
+	u := lines("fn g(exports: u8) -> bool { exports != 3 }", "pub(crate) use exports;", "use w::{exports, asm};", "m!(exports asx);", "m!(exportsas);")
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/a.rs", u}, {"src/width.rs", listDef}}, pairText: listDef}, true)
+	if res.code != 0 || len(res.entries) != 0 {
+		t.Errorf("exports !=: code %d %v: %s", res.code, res.errs, names(res.entries))
+	}
+	// Comments between template attributes, block ones over one line or
+	// several included, drop no attribute; a comment after an attribute
+	// is no part of it.
+	for _, cm := range [][]string{{"/* symbol docs */"}, {"/* symbol", "   docs */"}, {"// docs"}} {
+		def := []string{"macro_rules! exports {", "    ($($b:ident [$n:ident];)*) => {", "        $(", `            #[unsafe(export_name = "x")] // the symbol`}
+		def = append(def, cm...)
+		def = append(def, "            #[verifier::assume_unsupported_attributes]", "            pub extern \"C\" fn $name() {}", "        )*", "    };", "}")
+		d := lines(def...)
+		u := lines("exports! {", "    fn f [a] ();", "}")
+		res = generate(listRules(t, "name"), input{sources: []namedText{{"src/a.rs", u}, {"src/width.rs", d}}, pairText: d}, true)
+		want := "#[unsafe(export_name = \"x\")]\n#[verifier::assume_unsupported_attributes]\npub extern \"C\" fn a (exports!)"
+		if res.code != 0 || len(res.entries) != 1 || res.entries[0].contract != want {
+			t.Errorf("comment %q in the template: code %d %v %+v", cm, res.code, res.errs, res.entries)
+		}
+	}
+	// The template is read as code: an indented definition, `fn $name(`
+	// in a comment, a comment before an attribute, a bracket in a
+	// literal, a comment inside a multi-line attribute.
+	d := lines("mod m {",
+		"    macro_rules! exports {",
+		"        ($($b:ident [$n:ident];)*) => {",
+		"            // the export is fn $name( below",
+		"            /* sym */ #[unsafe(export_name = \"x[\")]",
+		"            #[cfg(",
+		"                unix // only ]",
+		"            )]",
+		"            pub extern \"C\" fn $name() {}",
+		"        };",
+		"    }",
+		"}")
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/a.rs", lines("exports! {", "    fn f [a] ();", "}")}, {"src/width.rs", d}}, pairText: d}, true)
+	if want := "#[unsafe(export_name = \"x[\")]\n#[cfg( unix )]\npub extern \"C\" fn a (exports!)"; res.code != 0 || len(res.entries) != 1 || res.entries[0].contract != want {
+		t.Errorf("lexed template: code %d %v %+v, want %q", res.code, res.errs, res.entries, want)
+	}
+	// Two invocations in a file, each read alone; a `;` inside brackets
+	// does not end a declaration; inner attributes are attributes.
+	u = lines("exports! {", "    #![allow(unused)]", "    fn f [a, b] (x: [u8; 4]);", "}", "exports! {", "    fn g [c, d] ();", "}")
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/a.rs", u}, {"src/width.rs", listDef}}, pairText: listDef}, true)
+	if res.code != 0 || names(res.entries) != "unsupported-attribute a; unsupported-attribute b; unsupported-attribute c; unsupported-attribute d" {
+		t.Errorf("two invocations: code %d %v: %s", res.code, res.errs, names(res.entries))
+	}
+	// A macro whose name ends in this one's is not an invocation.
+	u = lines("my_exports! {", "    fn f [a_8, a_16] ();", "}")
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/a.rs", u}, {"src/width.rs", listDef}}, pairText: listDef}, true)
+	if res.code != 0 || len(res.entries) != 0 {
+		t.Errorf("my_exports!: code %d %v: %s", res.code, res.errs, names(res.entries))
+	}
+}
+
+// The shape of the second port's export macro (written for this test,
+// same layout): one arm takes `fn body [name_8, name_16, name_32]`
+// declarations and calls the other once per width through
+// `$crate::width::exports!(@width ..)`; that arm writes a private module
+// per width with the exports inside `verus!`, each under the forwarded
+// attributes, a comment and the two attributes Verus takes on trust.
+// Invocations are rustfmt'd: docs, the names one a line, the arguments
+// one a line.
+func TestExportListPortShape(t *testing.T) {
+	def := lines("/// Writes the _8, _16 and _32 exports of generic entry points.",
+		"macro_rules! exports {",
+		"    ($(",
+		"        $(#[$attr:meta])*",
+		"        fn $body:ident [$n8:ident, $n16:ident, $n32:ident]",
+		"            ($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty)?;",
+		"    )*) => {",
+		"        $crate::width::exports!(@width w8, u8,",
+		"            $($(#[$attr])* fn $body $n8 ($($arg: $ty),*) $(-> $ret)?;)*);",
+		"        $crate::width::exports!(@width w16, u16,",
+		"            $($(#[$attr])* fn $body $n16 ($($arg: $ty),*) $(-> $ret)?;)*);",
+		"        $crate::width::exports!(@width w32, u32,",
+		"            $($(#[$attr])* fn $body $n32 ($($arg: $ty),*) $(-> $ret)?;)*);",
+		"        pub use w8::*;",
+		"        pub use w16::*;",
+		"        pub use w32::*;",
+		"    };",
+		"    (@width $m:ident, $unit:ty, $(",
+		"        $(#[$attr:meta])*",
+		"        fn $body:ident $name:ident ($($arg:ident: $ty:ty),*) $(-> $ret:ty)?;",
+		"    )*) => {",
+		"        mod $m {",
+		"            #[allow(unused_imports)]",
+		"            use super::*;",
+		"",
+		"            verus! {",
+		"",
+		"            /// The code unit of this width's exports.",
+		"            type U = $unit;",
+		"            $(",
+		"                $(#[$attr])*",
+		"                // Verus checks the body but takes `no_mangle` on trust.",
+		"                #[verifier::assume_unsupported_attributes]",
+		"                #[unsafe(no_mangle)]",
+		"                pub unsafe extern \"C\" fn $name($($arg: $ty),*) $(-> $ret)? {",
+		"                    // SAFETY: the caller's contract is the body's.",
+		"                    unsafe { super::$body::<U>($($arg),*) }",
+		"                }",
+		"            )*",
+		"",
+		"            } // verus!",
+		"        }",
+		"    };",
+		"}",
+		"pub(crate) use exports;")
+	use := lines("use crate::width;",
+		"",
+		"width::exports! {",
+		"    /// `int thing_size(const thing *t)`",
+		"    ///",
+		"    /// # Safety",
+		"    ///",
+		"    /// `t` is NULL or a live thing of this width.",
+		"    fn thing_size [p_thing_size_8, p_thing_size_16, p_thing_size_32] (t: *const Thing<U>) -> c_int;",
+		"",
+		"    /// `int thing_walk(const thing *t, walk_fn cb, void *data)`",
+		"    fn thing_walk [",
+		"        p_thing_walk_8,",
+		"        p_thing_walk_16,",
+		"        p_thing_walk_32",
+		"    ] (",
+		"        t: *const Thing<U>,",
+		"        cb: Option<WalkPtr<U>>,",
+		"        data: *mut c_void,",
+		"    ) -> c_int;",
+		"}")
+	res := generate(listRules(t, "name"), input{sources: []namedText{{"src/a.rs", use}, {"src/width.rs", def}}, pairText: def}, true)
+	want := "unsupported-attribute p_thing_size_8; unsupported-attribute p_thing_size_16; unsupported-attribute p_thing_size_32; unsupported-attribute p_thing_walk_8; unsupported-attribute p_thing_walk_16; unsupported-attribute p_thing_walk_32"
+	if res.code != 0 || names(res.entries) != want {
+		t.Fatalf("code %d %v: %s", res.code, res.errs, names(res.entries))
+	}
+	for _, e := range res.entries {
+		c := "$(#[$attr])*\n#[verifier::assume_unsupported_attributes]\n#[unsafe(no_mangle)]\npub unsafe extern \"C\" fn " + e.name + " (exports!)"
+		if e.contract != c || e.line != 3 {
+			t.Errorf("%s: line %d, contract %q", e.name, e.line, e.contract)
+		}
+	}
+}
+
+func TestExportFailClosed(t *testing.T) {
+	for _, c := range []struct {
+		name, src, want string
+		vars            []string
+	}{
+		{"fn line not in the form", lines("exports! {", "    fn f(a: u8);", "}"),
+			"src/a.rs:2: a fn line in a exports! invocation that the list form (fn f [a, b, ...] (..), its names on that line) does not read: fn f(a: u8);", nil},
+		{"unsafe fn line", lines("exports! {", "    unsafe fn f [a, b] ();", "}"),
+			"src/a.rs:2: a fn line in a exports! invocation that the list form", nil},
+		{"names do not fit the VARs", lines("exports! {", "    fn f [a, b, c] ();", "}"),
+			"src/a.rs:2: exports! names 3 exports here, but the rules give 2 template VARs", []string{"name", "other"}},
+		{"missing template", lines("exports! {", "    fn f [a, b] ();", "}"),
+			"src/a.rs:2: no exports! attributes in src/width.rs", []string{"nope"}},
+		{"list left open", lines("exports! {", "    fn f [", "        a,", "}"),
+			"src/a.rs:2: the exports! invocation ends inside the list of names that starts here", nil},
+		{"names on the invocation line", lines("exports! { fn f [a, b] (); }"),
+			"src/a.rs:1: a use of exports! the scan does not read as an invocation", nil},
+		{"other delimiter", lines("exports!(", "    fn f [a, b] ();", ");"),
+			"src/a.rs:1: a use of exports! the scan does not read as an invocation", nil},
+		{"in an expression", lines("fn g() {", "    let x = exports! {", "    };", "}"),
+			"src/a.rs:2: a use of exports! the scan does not read as an invocation", nil},
+		{"renamed import", lines("use crate::width::exports as ex;", "ex! {", "    fn f [a, b] ();", "}"),
+			"src/a.rs:1: exports renamed with `as`, so the scan cannot find its invocations", nil},
+		{"renamed in a group", lines("use crate::width::{", "    exports  as ex,", "};"),
+			"src/a.rs:2: exports renamed with `as`", nil},
+		// A name, its `!` or `as` split over lines is still a use.
+		{"block comment over lines before the !", lines("exports/* comment", " */! {", "    fn f [a, b] ();", "}"),
+			"src/a.rs:1: a use of exports! the scan does not read as an invocation (write `exports! {` with the name, its `!` and the `{` on one line", nil},
+		{"! on the next line", lines("width::exports", "! {", "    fn f [a, b] ();", "}"),
+			"src/a.rs:1: a use of exports! the scan does not read as an invocation", nil},
+		{"rename split over lines", lines("use w::{", "    exports", "    as ex,", "};", "ex! {", "    fn f [a, b] ();", "}"),
+			"src/a.rs:2: exports renamed with `as`", nil},
+		// A definition the rules do not name would take FILE's template.
+		{"definition in another file", lines("macro_rules! exports {", "    ($($b:ident [$n:ident];)*) => {", "        #[unsafe(link_section = \".init\")]", "        #[verifier::assume_unsupported_attributes]", "        pub unsafe extern \"C\" fn $name() {}", "    };", "}", "exports! {", "    fn g [n] ();", "}"),
+			"src/a.rs:1: a macro_rules! exports outside src/width.rs, the file the rules read its exports' attributes from", nil},
+		{"nested invocation", lines("exports! {", "    exports! {", "    }", "}"),
+			"src/a.rs:2: a exports! invocation inside another", nil},
+		// What the line reader does not see, the invocation's tokens do.
+		{"grammar with no fn", lines("width::exports! {", "    create [p_8, p_16] (n: usize);", "}"),
+			"src/a.rs:2: the exports! invocation at line 1 does not read as list declarations: want `fn` (or `#[` or the invocation's `}`), got `create`", nil},
+		{"forwarded tokens", lines("exports! {", "    $($t)*", "}"),
+			"src/a.rs:2: the exports! invocation at line 1 does not read as list declarations: want `fn` (or `#[` or the invocation's `}`), got `$`", nil},
+		{"fn split from its names", lines("exports! {", "    fn", "    f [a, b] ();", "}"),
+			"src/a.rs:1: the exports! invocation declares a, b, but its lines read as no exports", nil},
+		{"two declarations on a line", lines("exports! {", "    fn f [a, b] (); fn g [c, d] ();", "}"),
+			"src/a.rs:1: the exports! invocation declares a, b, c, d, but its lines read as a, b", nil},
+		{"names without a comma", lines("exports! {", "    fn f [a b] ();", "}"),
+			"src/a.rs:2: the exports! invocation at line 1 does not read as list declarations: want `,` or `]` after a name, got `b`", nil},
+		{"declaration with no end", lines("exports! {", "    fn f [a, b] ()", "}"),
+			"src/a.rs:3: the exports! invocation at line 1 does not read as list declarations: want the declaration's end (`;` or a `{...}` body), got `}`", nil},
+		{"attribute with no bracket", lines("exports! {", "    # fn f [a, b] ();", "}"),
+			"src/a.rs:2: the exports! invocation at line 1 does not read as list declarations: want `[` after `#`, got `fn`", nil},
+	} {
+		vars := c.vars
+		if vars == nil {
+			vars = []string{"name"}
+		}
+		res := generate(listRules(t, vars...), input{sources: []namedText{{"src/a.rs", c.src}, {"src/width.rs", listDef}}, pairText: listDef}, true)
+		if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: "+c.want) {
+			t.Errorf("%s: code %d, errs %v", c.name, res.code, res.errs)
+		}
+	}
+	// The definition's own first and last lines may call it.
+	rec := lines("macro_rules! exports { (@x) => { exports!(@y) };",
+		"    ($($b:ident [$n:ident];)*) => {",
+		"        #[verifier::assume_unsupported_attributes]",
+		"        pub extern \"C\" fn $name() {}",
+		"    };",
+		"    (@y) => { exports!(@x) }; }")
+	res := generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", rec}, {"src/a.rs", lines("exports! {", "    fn f [a] ();", "}")}}, pairText: rec}, true)
+	if res.code != 0 || len(res.entries) != 1 {
+		t.Errorf("calls on the definition's first and last lines: code %d, errs %v", res.code, res.errs)
+	}
+	// Code after the definition's closing brace on its line is refused,
+	// not read as part of the definition; a `;` there is fine.
+	after := strings.TrimSuffix(listDef, "}\n") + lines("} exports! {", "    fn f [a, b] ();", "}")
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", after}}, pairText: after}, true)
+	if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/width.rs:21: code after the closing brace of macro_rules! exports on its line") {
+		t.Errorf("invocation after the definition's brace: code %d, errs %v", res.code, res.errs)
+	}
+	semi := strings.TrimSuffix(listDef, "}\n") + lines("};")
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", semi}}, pairText: semi}, true)
+	if res.code != 0 {
+		t.Errorf("`};` closing the definition: code %d, errs %v", res.code, res.errs)
+	}
+	// A second template for one VAR (another arm) is refused: only the
+	// first one's attributes would be read.
+	arms := lines("macro_rules! exports {",
+		"    (@w8 $name:ident) => {",
+		"        #[unsafe(link_section = \".a\")]",
+		"        #[verifier::assume_unsupported_attributes]",
+		"        pub extern \"C\" fn $name() {}",
+		"    };",
+		"    (@w16 $name:ident) => {",
+		"        #[verifier::assume_unsupported_attributes]",
+		"        pub extern \"C\" fn $name() {}",
+		"    };",
+		"}")
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", arms}}, pairText: arms}, true)
+	if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/width.rs:9: a second `fn $name(` in macro_rules! exports (the first is line 5)") {
+		t.Errorf("two templates: code %d, errs %v", res.code, res.errs)
+	}
+	// Templates are matched as tokens: a blank before the `(` (either
+	// arm) is the same template, and still a second one.
+	for _, pair := range [][2]string{{"fn $name()", "fn $name ()"}, {"fn $name ()", "fn $ name()"}} {
+		a := strings.Replace(arms, "fn $name()", pair[0], 1)
+		i := strings.LastIndex(a, "fn $name()")
+		a = a[:i] + pair[1] + a[i+len("fn $name()"):]
+		res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", a}}, pairText: a}, true)
+		if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/width.rs:9: a second `fn $name(` in macro_rules! exports (the first is line 5)") {
+			t.Errorf("two templates %q: code %d, errs %v", pair, res.code, res.errs)
+		}
+	}
+	// A template head split over lines is still a template: a second one
+	// so written is refused, and a lone one cannot be read.
+	i := strings.LastIndex(arms, "fn $name()")
+	split := arms[:i] + "fn $name\n        () {}\n    };\n}\n"
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", split}}, pairText: split}, true)
+	if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/width.rs:9: a second `fn $name(` in macro_rules! exports (the first is line 5)") {
+		t.Errorf("second template split over lines: code %d, errs %v", res.code, res.errs)
+	}
+	j := strings.Index(arms, "fn $name()")
+	split = arms[:j] + "fn $name\n        () {}" + arms[j+len("fn $name() {}"):]
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", split}}, pairText: split}, true)
+	if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/width.rs:10: a second `fn $name(` in macro_rules! exports (the first is line 5)") {
+		t.Errorf("first template split over lines: code %d, errs %v", res.code, res.errs)
+	}
+	// Generics after the name: a template all the same, in either arm.
+	for k, which := range []func(string) int{func(s string) int { return strings.Index(s, "fn $name()") }, func(s string) int { return strings.LastIndex(s, "fn $name()") }} {
+		at := which(arms)
+		g := arms[:at] + "fn $name<'a>(_p: &'a u8)" + arms[at+len("fn $name()"):]
+		res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", g}}, pairText: g}, true)
+		if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/width.rs:9: a second `fn $name(` in macro_rules! exports (the first is line 5)") {
+			t.Errorf("generic template in arm %d: code %d, errs %v", k+1, res.code, res.errs)
+		}
+	}
+	gen := lines("macro_rules! exports {", "    ($($b:ident [$name:ident];)*) => {", "        $(", "        #[unsafe(no_mangle)]", "        pub extern \"C\" fn $name<'a>(_p: &'a u8) {}", "        )*", "    };", "}")
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", gen}, {"src/a.rs", lines("exports! {", "    fn f [a] ();", "}")}}, pairText: gen}, true)
+	if res.code != 0 || len(res.entries) != 1 || res.entries[0].contract != "#[unsafe(no_mangle)]\npub extern \"C\" fn a (exports!)" {
+		t.Errorf("generic template read: code %d, errs %v, %+v", res.code, res.errs, res.entries)
+	}
+	// (`fn $name` then `()` on the next line is read on the head's line.)
+	lone := lines("macro_rules! exports {", "    ($name:ident) => {", "        #[verifier::assume_unsupported_attributes]", "        pub extern \"C\" fn", "            $name() {}", "    };", "}")
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", lone}}, pairText: lone}, true)
+	if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/width.rs:4: the `fn $name(` of macro_rules! exports runs over lines") {
+		t.Errorf("lone template split over lines: code %d, errs %v", res.code, res.errs)
+	}
+	// A definition on one line holds no template the search reads, and
+	// the search does not run on into the next macro.
+	oneLine := lines("macro_rules! exports { ($(fn $b:ident [$name:ident];)*) => { $(#[unsafe(no_mangle)] pub extern \"C\" fn $name() {})* }; }",
+		"macro_rules! other {", "    ($name:ident) => {", "        #[unsafe(link_section = \".x\")]", "        pub extern \"C\" fn $name() {}", "    };", "}")
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", oneLine}, {"src/a.rs", lines("exports! {", "    fn f [a] ();", "}")}}, pairText: oneLine}, true)
+	if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/a.rs:2: no exports! attributes in src/width.rs") {
+		t.Errorf("one-line definition: code %d, errs %v", res.code, res.errs)
+	}
+	// The search ends at the definition's close: a `fn $name(` in a
+	// later macro is no template.
+	later := lines("macro_rules! exports {", "}",
+		"macro_rules! other {", "    ($name:ident) => {", "        #[verifier::assume_unsupported_attributes]", "        pub extern \"C\" fn $name() {}", "    };", "}")
+	u := lines("exports! {", "    fn f [a] ();", "}")
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", later}, {"src/a.rs", u}}, pairText: later}, true)
+	if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/a.rs:2: no exports! attributes in src/width.rs") {
+		t.Errorf("template after the definition: code %d, errs %v", res.code, res.errs)
+	}
+	// A second definition in the rules' FILE is refused too.
+	two := listDef + lines("macro_rules! exports {", "    () => {};", "}")
+	res = generate(listRules(t, "name"), input{sources: []namedText{{"src/width.rs", two}}, pairText: two}, true)
+	if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/width.rs:22: a second macro_rules! exports in src/width.rs") {
+		t.Errorf("second definition: code %d, errs %v", res.code, res.errs)
+	}
+	// A list form's names over lines keep the declaration's own
+	// attributes, as on one line.
+	one := lines("exports! {", "    #[unsafe(link_section = \".text.hot\")]", "    fn free [p_free_8, p_free_16] (p: *mut u8);", "}")
+	multi := lines("exports! {", "    #[unsafe(link_section = \".text.hot\")]", "    fn free [", "        p_free_8,", "        p_free_16,", "    ] (p: *mut u8);", "}")
+	var got [2][]string
+	for i, u := range []string{one, multi} {
+		res := generate(listRules(t, "name"), input{sources: []namedText{{"src/a.rs", u}, {"src/width.rs", listDef}}, pairText: listDef}, true)
+		if res.code != 0 || len(res.entries) != 2 {
+			t.Fatalf("layout %d: code %d %v", i, res.code, res.errs)
+		}
+		for _, e := range res.entries {
+			got[i] = append(got[i], e.contract)
+		}
+	}
+	if got[0][1] != got[1][1] || got[0][0] != got[1][0] || !strings.HasPrefix(got[1][1], "#[unsafe(link_section = \".text.hot\")]\n") {
+		t.Errorf("one line %q, over lines %q", got[0], got[1])
+	}
+	// A list left open is one error: the next invocation, or the next
+	// file, starts afresh.
+	for _, srcs := range [][]namedText{
+		{{"src/a.rs", lines("exports! {", "    fn f [", "        a,", "}", "exports! {", "    fn g [b] ();", "}")}},
+		{{"src/a.rs", lines("exports! {", "    fn f [")}, {"src/b.rs", lines("exports! {", "    fn g [b] ();", "}")}},
+	} {
+		res := generate(listRules(t, "name"), input{sources: append(srcs, namedText{"src/width.rs", listDef}), pairText: listDef}, true)
+		want := "seams: src/a.rs:2: the exports! invocation ends inside the list of names that starts here\nseams: src/a.rs:4: the exports! invocation at line 1 does not read as list declarations: want a name in the list, got `}`"
+		if len(srcs) == 2 {
+			want = "seams: src/a.rs: the file's braces do not balance (depth 1 at its end), so the scan cannot read it whole"
+		}
+		if res.code != 2 || strings.Join(res.errs, "\n") != want {
+			t.Errorf("list left open, then more: code %d, errs %q", res.code, res.errs)
+		}
+	}
+	// The slash form fails a fn line it does not read too.
+	mod := lines("macro_rules! verified_export_pair {", "    ($name:ident / $je:ident) => {",
+		"        #[unsafe(no_mangle)]", "        pub extern \"C\" fn $name() {}",
+		"        #[unsafe(no_mangle)]", "        pub extern \"C\" fn $je() {}", "    };", "}",
+		"verified_export_pair! {", "    fn malloc(size: usize) {}", "}")
+	res = generate(testRules(t), input{sources: []namedText{{"src/api/mod.rs", mod}}, pairText: mod}, true)
+	if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/api/mod.rs:10: a fn line in a verified_export_pair! invocation that the slash form (fn a / b(..), its names on that line) does not read: fn malloc(size: usize) {}") {
+		t.Errorf("slash form, fn line not read: code %d, errs %v", res.code, res.errs)
+	}
+	// A fn deeper in an invocation (inside an export's body) is not a
+	// line of names.
+	mod = lines("macro_rules! verified_export_pair {", "    ($name:ident / $je:ident) => {",
+		"        #[unsafe(no_mangle)]", "        pub extern \"C\" fn $name() {}",
+		"        #[unsafe(no_mangle)]", "        pub extern \"C\" fn $je() {}", "    };", "}",
+		"verified_export_pair! {", "    fn malloc / je_malloc(size: usize) {", "        fn helper() {}", "    };", "    fn free / je_free() {}", "}")
+	res = generate(testRules(t), input{sources: []namedText{{"src/api/mod.rs", mod}}, pairText: mod}, true)
+	// A body may be followed by a `;`.
+	if res.code != 0 || len(res.entries) != 4 {
+		t.Errorf("slash form, nested fn: code %d, errs %v, %s", res.code, res.errs, names(res.entries))
+	}
+}
+
 func TestRulesErrors(t *testing.T) {
 	base := "command\tc\ntool\tT\nassumption-tool\tT\ncategory\tC\tT\n"
 	for _, c := range []struct{ text, want string }{
@@ -611,6 +1092,16 @@ func TestRulesErrors(t *testing.T) {
 		{base + "source\t../src\n", "r:5: source ../src: want a path inside the tree"},
 		{base + "seams-doc\t../S.md\n", "r:5: seams-doc ../S.md: want a path inside the tree"},
 		{base + "pair\tm\t/f\ta\tb\n", "r:5: pair /f: want a path inside the tree"},
+		{base + "export-macro\tm\tf\tlist\n", "r:5: want export-macro<TAB>MACRO<TAB>FILE<TAB>slash|list<TAB>VAR..."},
+		{base + "export-macro\tm\tf\tlist\t\n", "r:5: want export-macro<TAB>MACRO<TAB>FILE<TAB>slash|list<TAB>VAR..., with no empty field"},
+		{base + "export-macro\tw::m\tf\tlist\tv\n", "r:5: export-macro w::m: want a macro name"},
+		{base + "export-macro\tm!\tf\tlist\tv\n", "r:5: export-macro m!: want a macro name"},
+		{base + "export-macro\tm\tf\tcomma\tv\n", "r:5: export-macro m: form comma: want slash or list"},
+		{base + "export-macro\tm\tf\tslash\ta\tb\tc\n", "r:5: export-macro m: the slash form names two exports"},
+		{base + "export-macro\tm\tf\tlist\t$v\n", "r:5: export-macro m: VAR $v: want an identifier"},
+		{base + "export-macro\tm\t../f\tlist\tv\n", "r:5: export-macro ../f: want a path inside the tree"},
+		{base + "export-macro\tm\tf\tlist\tv\nexport-macro\tn\tf\tlist\tv\n", "r:6: export-macro given twice"},
+		{base + "pair\tm\tf\ta\tb\nexport-macro\tn\tf\tlist\tv\n", "r:6: export-macro given twice"},
 		{"tool\tT\ncategory\tC\tT\nassumption-tool\tT\n", "r: no command line"},
 		{"command\tc\ntool\tT\nassumption-tool\tT\n", "r: no category lines"},
 		{"command\tc\ntool\tT\ncategory\tC\tT\n", "r: no assumption-tool line"},
@@ -618,6 +1109,16 @@ func TestRulesErrors(t *testing.T) {
 		_, err := parseRules("r", c.text)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("rules %q: want error %q, got %v", c.text, c.want, err)
+		}
+	}
+	for _, c := range []struct{ line, form, vars string }{
+		{"pair\tm\tsrc/f.rs\ta\tb", "slash", "a b"},
+		{"export-macro\tm\tsrc/f.rs\tslash\ta", "slash", "a"},
+		{"export-macro\tm\tsrc/f.rs\tlist\ta\tb\tc", "list", "a b c"},
+	} {
+		r, err := parseRules("r", base+c.line+"\n")
+		if err != nil || r.PairMacro != "m" || r.PairFile != "src/f.rs" || r.PairForm != c.form || strings.Join(r.PairVars, " ") != c.vars {
+			t.Errorf("%q: %v %+v", c.line, err, r)
 		}
 	}
 	r, err := parseRules("r", base+"guess\t-\tkind=x\tname!y\n# comment\n\n")
