@@ -406,6 +406,38 @@ where it reports drift.
   out of deviations.sh into `ledger-active.sh`, installed beside both,
   so the two read a ledger the same way; `make deviations`' behaviour
   and output do not change. No existing target or check changes.
+- `make consumers-run` (#213, `consumers.sh`, installed beside
+  known-cites.sh): the consumer harness of the PCRE2 port, its runner
+  and its `fetch` and `loaded` helpers, with the build, the swap
+  directory and the version check left to the port. `consumers.sh run
+  LIB [NAME...]` runs each `CONSUMERS_DIR/<name>/run.sh` (by default
+  `tests/consumers`; every one, or `$CONSUMER`, when no name is given)
+  against the swap directory `CONSUMERS_LIB` in an empty
+  `CONSUMERS_WORK/<name>/` (by default `target/consumers`), after
+  installing the Wolfi packages its `packages` file lists, and prints
+  `PASS|FAIL|SKIP <name>` and a summary: a consumer passes when run.sh
+  exits 0 (77 is SKIP), proved with `loaded` that the port's library
+  was loaded, and reported only failure ids its
+  `expected-failures.txt` lists (a listed id that passed is a NOTICE).
+  run.sh gets `P_LIB`, `P_ROOT`, `P_WORK`, `P_FAILURES`, `P_CACHE`
+  and `P_HARNESS`, with P `CONSUMERS_PREFIX` (default `CONSUMER`), so
+  a port keeps its run.sh files' names. `fetch URL SHA256 [FILE]` is
+  the cached, SHA-256-checked download (without curl a download fails
+  saying so; the runner installs curl when missing where apk runs as
+  root, and goes on without it otherwise); `loaded [--lib SONAME]...
+  PROGRAM [ARG...]` passes only if the loader initialized each soname
+  (default `CONSUMERS_SONAME`) from a file directly in the swap
+  directory and from nowhere else. Unlike the port's, a consumer with no
+  run.sh always fails (the port's list of planned consumers stays in
+  the port), a library in a subdirectory of the swap directory does not
+  count, a swap directory with an entry that resolves outside it (a
+  link to the system's copy, which the loader would name by the link)
+  or a dangling link is refused, a consumer whose failures file is gone
+  or whose `expected-failures.txt` is no readable file fails, and a
+  swap directory or work directory with a blank, `:` or
+  quote in its path is refused. The target is `consumers-run`, so a
+  port's own `consumers` target can call it. No existing target or
+  check changes.
 
 ### Porting notes
 
@@ -574,6 +606,30 @@ where it reports drift.
     port that copied the no-kit guard in `kit/count/README.md` adds
     `known-cites` to its `PROVED_PORT_TARGETS` when it starts to use it.
     A port that does neither changes nothing.
+14. Optional: a port with a consumer harness (the PCRE2 port's
+    `ci/consumers.sh`) can keep its build, swap directory and version
+    check and then call `make consumers-run CONSUMERS_LIB=<swap dir>
+    CONSUMERS_SONAME=<default sonames> CONSUMERS_PREFIX=<its prefix>
+    CONSUMERS_NAMES=$(NAME)` (or `sh consumers.sh run` with the same
+    variables in the environment) in place of its runner and helpers;
+    its run.sh files keep their variable names through the prefix. The
+    check's environment needs busybox, glibc's loader for `loaded`, and
+    curl for a consumer that calls `fetch` (the runner installs it when
+    missing where apk runs as root, like the port's; where it cannot,
+    the run goes on and only `fetch` fails, where the port's runner
+    stopped). Before it switches it
+    checks what may now fail: a planned consumer with no run.sh (it
+    fails rather than skips; drop it from the check's instances until
+    its run.sh lands), a run.sh that relies on a library loaded
+    from a subdirectory of the swap directory, a swap directory filled
+    with links to files outside it (copy with `cp -P`, which keeps the
+    links between the port's own files), and a run.sh that removes its
+    work directory's files. The proof file a passed
+    `loaded` writes in the work directory is `.consumers-loaded`, and
+    its line starts `loaded:`. A port that copied the no-kit guard in
+    `kit/count/README.md` adds `consumers-run` to its
+    `PROVED_PORT_TARGETS` when it starts to use it. A port that does
+    neither changes nothing.
 
 ## 0.4.11
 

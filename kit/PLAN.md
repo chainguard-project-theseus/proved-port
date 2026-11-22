@@ -403,6 +403,12 @@ is deleted in that PR.
    pcre3's table and ledger it passes the same 29 rows. pcre3's switch
    to it is to come; the rest of the driver shell (loading, preflight,
    voices, reproducers) is still to split.
+   pcre3's consumer runner and its `fetch`/`loaded` helpers are
+   `kit/make/consumers.sh` (`make consumers-run CONSUMERS_LIB=...
+   [CONSUMERS_SONAME=...] [CONSUMERS_PREFIX=...] [CONSUMERS_NAMES=...]`,
+   #213), with the build, the swap directory and the version check left
+   in the port, and `make.yaml`'s `consumers-test`. pcre3's switch to it
+   is to come.
 6. **Box skeleton, pull and stats.** Out of `kit/reference/` into
    `kit/perf/` (stats rewritten in Go). pcre3: the generic parts of
    `ci/bench.sh` (the four-way runner, the result-agreement check, the
