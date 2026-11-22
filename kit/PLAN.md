@@ -351,10 +351,13 @@ is deleted in that PR.
    export macro rule also reads a list form (`fn body [a, b, c] (..)`,
    several exports from one template) and invocations by path
    (`width::exports! {`), so a second port's sources scan to the end
-   (#219). Still to
-   come: the checks a status cites (Kani harnesses, assertions, Isla,
-   emptyasm, loom, GenMC, guard tests), the not-Copy checks and the
-   Kani pins, which stay in challoc's script reading `-entries` until
+   (#219). `-cites` parses each status into its citations, one line
+   each (seams.sh's `cites()`), and `-check` fails a `TAG: ` that names
+   nothing and a discharged status citing a tag the rules mark
+   `partial` (challoc's loom and GenMC) (#229). Still to come:
+   resolving each citation (Kani harnesses, assertions, Isla, emptyasm,
+   loom, GenMC, guard tests), the not-Copy checks and the Kani pins,
+   which stay in challoc's script reading `-cites` and `-entries` until
    they move; challoc's switch; and installing the tool in the
    package, which does not install it yet.
 4. **ABI checks and the deviations ratchet.** pcre3: `ci/abi.sh` and

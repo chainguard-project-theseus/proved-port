@@ -54,13 +54,17 @@ category	C ABI export	ABI tests
 #
 # A status holding `TAG: ` cites a check (a claims nothing status may
 # not); -check fails on a discharged or partly checked status that holds
-# none. The port's own checks resolve each citation (seams -entries):
-# until those checks move into the kit, -check alone does not show that
-# a cited harness, assertion or test exists.
+# none, and on a `TAG: ` that names nothing. A third field `partial`
+# marks a check that covers only part of a contract (challoc's loom
+# models run a copy of the code, and its GenMC cases erase the
+# permissions): -check fails a discharged status that cites one. The
+# port's own checks resolve each citation (seams -cites, one line per
+# citation): until those checks move into the kit, -check alone does
+# not show that a cited harness, assertion or test exists.
 cite-tag	Kani
 cite-tag	const assert
-cite-tag	loom
-cite-tag	GenMC
+cite-tag	loom	partial
+cite-tag	GenMC	partial
 #
 # The heuristics: the first guess whose conditions all hold proposes its
 # category (- for none, which -check reports until an overrides line

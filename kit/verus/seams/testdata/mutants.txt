@@ -4,7 +4,8 @@
 # optionally `equivalent: REASON`. When the code moves and a FROM no
 # longer occurs once, update the line (the runner names it).
 #
-# Drawn from #218's hand mutants (remapped to text), #220's and #224's.
+# Drawn from #218's hand mutants (remapped to text), #220's, #224's and
+# later PRs' (each section names its issue).
 awk.go	 && !strings.Contains(s, "/*")	
 awk.go	 && b.Len() > 0	
 awk.go	 || digits > 6	
@@ -30,7 +31,7 @@ awk.go	|| !isHex(s[j+2]) || !isHex(s[j+3])		equivalent: a \x escape without two 
 main.go	in.unreadable = append(in.unreadable, f)	_ = f
 main.go	len(src) == 0	false
 main.go	os.Remove(filepath.Join(root, f))	func() error { _ = f; return nil }()
-main.go	x(e.file)	e.file
+main.go	"%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", x(e.file)	"%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", e.file
 main.go	x(norm(e.hc))	norm(e.hc)
 main.go	|| n > 1	
 render.go	!catok[e.cat]	false
@@ -172,3 +173,24 @@ scan.go	(mod|trait|struct|enum|union)	(mod|trait|struct|union)
 scan.go	(mod|trait|struct|enum|union)	(mod|trait|struct|enum)
 scan.go	((unsafe|auto)[ \t]+)*	((unsafe)[ \t]+)*
 scan.go	|^macro_rules![ \t]*[A-Za-z_]")	")
+#
+# #229: the citations (-cites, empty lists, partial tags, cite-tag rules).
+cites.go	strings.IndexAny(l, ";)")	strings.IndexAny(l, ";")
+cites.go	if strings.Contains(h, ": ") {	if false {
+cites.go	if h != "" {	if true {
+cites.go	return occs[a].at < occs[b].at	return false
+cites.go	from = at + len(key)	from = at + 1
+cites.go	if len(o.parts) == 0 {	if false {
+cites.go	cites = append(cites, cite{o.tag, p})	cites = append(cites, cite{o.tag, p}, cite{o.tag, p})
+render.go	if o != nil {	if false {
+render.go	reDischarged.MatchString(e.stat) && r.Partial	r.Partial
+render.go	r.Partial[c.tag] && !done[c.tag] {	r.Partial[c.tag] {
+render.go	r.Partial[c.tag] && !done[c.tag] {	!done[c.tag] {
+rules.go	f[2] != "partial"	false
+rules.go	min(max(len(f), 2), 3)	min(len(f), 3)
+rules.go	strings.ContainsAny(f[1], ";):")	strings.ContainsAny(f[1], ";)")
+rules.go	slices.Contains(r.CiteTags, f[1])	slices.Contains(r.CiteTags[:0], f[1])
+rules.go	r.Partial[f[1]] = true	r.Partial[f[1]] = false
+main.go	strings.TrimPrefix(e.okey, e.file+":")	e.okey
+main.go	*write, *check, *entries, *cites}	*write, *check, *entries}
+main.go	x(c.tag), x(c.target)	c.tag, c.target

@@ -388,6 +388,23 @@ func hashDrift(r *Rules, es []*entry, ov map[string]*override, unsafeImpl map[st
 		if chk && !cn && !r.citesCheck(e.stat) {
 			drift = append(drift, fmt.Sprintf("seams: %s: %s: the status cites no check", o.file, o.name))
 		}
+		// Each `TAG: ` names a check (seams.sh's `none`), and a
+		// discharged status cites no check the rules mark partial (one
+		// that checks only part of the contract: challoc's loom models
+		// and GenMC cases).
+		if o != nil {
+			cs, empty := r.citations(e.stat)
+			for _, t := range empty {
+				drift = append(drift, fmt.Sprintf("seams: %s: %s: `%s: ` names no check", o.file, o.name, t))
+			}
+			done := map[string]bool{}
+			for _, c := range cs {
+				if reDischarged.MatchString(e.stat) && r.Partial[c.tag] && !done[c.tag] {
+					done[c.tag] = true
+					drift = append(drift, fmt.Sprintf("seams: %s: %s: discharged by a %s check, which checks only part of the contract (at most partly checked)", o.file, o.name, c.tag))
+				}
+			}
+		}
 		switch {
 		case chk && rec == "":
 			what := "cites a check"

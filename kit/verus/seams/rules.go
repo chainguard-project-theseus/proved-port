@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -24,8 +25,9 @@ type Rules struct {
 	PairForm   string   // "slash" (`fn a / b(`) or "list" (`fn f [a, b](`)
 	PairVars   []string // one template VAR for every name, or one per name
 	UnsupDoc   string
-	CiteTags   []string // tags a status cites a check with (`Kani: ...`)
-	Assumption string   // the tool of a seam no check applies to
+	CiteTags   []string        // tags a status cites a check with (`Kani: ...`)
+	Partial    map[string]bool // cite tags a discharged status may not cite
+	Assumption string          // the tool of a seam no check applies to
 	testRes    []*regexp.Regexp
 	testOnPath []bool
 }
@@ -151,7 +153,7 @@ func readRules(file string) (*Rules, error) {
 }
 
 func parseRules(file, data string) (*Rules, error) {
-	r := &Rules{Ledger: "verus/ledger", Source: "src", SeamsDoc: "verus/SEAMS.md", ToolOf: map[string]string{}}
+	r := &Rules{Ledger: "verus/ledger", Source: "src", SeamsDoc: "verus/SEAMS.md", ToolOf: map[string]string{}, Partial: map[string]bool{}}
 	tools := map[string]bool{}
 	seen := map[string]bool{}
 	var errs []string
@@ -234,8 +236,28 @@ func parseRules(file, data string) (*Rules, error) {
 				r.UnsupDoc = f[1]
 			}
 		case "cite-tag":
-			if want(2, "cite-tag<TAB>TAG") {
-				r.CiteTags = append(r.CiteTags, f[1])
+			form := "cite-tag<TAB>TAG[<TAB>partial]"
+			if len(f) == 3 && f[2] != "partial" {
+				bad("want %s, not %q in the third field", form, f[2])
+				continue
+			}
+			if !want(min(max(len(f), 2), 3), form) {
+				continue
+			}
+			// A citation runs from `TAG: ` to the first `;` or `)`, and a
+			// part holding `: ` starts the next tag: a tag holding any of
+			// them could not be read back.
+			if strings.ContainsAny(f[1], ";):") {
+				bad("cite-tag %s holds `;`, `)` or `:`, which end a citation", f[1])
+				continue
+			}
+			if slices.Contains(r.CiteTags, f[1]) {
+				bad("cite-tag %s is given twice", f[1])
+				continue
+			}
+			r.CiteTags = append(r.CiteTags, f[1])
+			if len(f) == 3 {
+				r.Partial[f[1]] = true
 			}
 		case "assumption-tool":
 			if want(2, "assumption-tool<TAB>TOOL") {
