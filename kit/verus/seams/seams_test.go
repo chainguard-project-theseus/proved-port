@@ -104,6 +104,8 @@ func TestHashes(t *testing.T) {
 	want(t, "trusted with hashes", hs(t, "trusted", h, "", "", hsrc("x < 3", "x + 1")), "hashes on a status that cites no check")
 	want(t, "discharged citing nothing", hs(t, "discharged (reviewed by hand)", h, "", "", hsrc("x < 3", "x + 1")), "seams: verus/ledger/src/t.rs.overrides: f: the status cites no check")
 	want(t, "partly checked citing nothing", hs(t, "trusted (partly checked by reading; not checked: x)", h, "", "", hsrc("x < 3", "x + 1")), "the status cites no check")
+	// A tag cites only as `TAG: `: naming the tool is no citation.
+	want(t, "discharged naming a tag", hs(t, "discharged (Kani)", h, "", "", hsrc("x < 3", "x + 1")), "seams: verus/ledger/src/t.rs.overrides: f: the status cites no check")
 	wantNone(t, "discharged citing a tag", hs(t, dis, h, "", "", hsrc("x < 3", "x + 1")))
 
 	// Whitespace inside a literal is kept: "a  b".len() is 4 and
@@ -164,6 +166,9 @@ func TestNorm(t *testing.T) {
 		{`/* a "   b */   "c  d"`, `/* a " b */ "c  d"`},
 		{`/* x /* "  */  " */   "e  f"`, `/* x /* " */ " */ "e  f"`},
 		{`r"open  `, `r"open  `},
+		// The byte right after a raw string or block comment is kept.
+		{`r"a  b"x`, `r"a  b"x`},
+		{`/* c */x`, `/* c */x`},
 	} {
 		if got := norm(c[0]); got != c[1] {
 			t.Errorf("norm(%q) = %q, want %q", c[0], got, c[1])
@@ -360,6 +365,14 @@ func TestEndOfFile(t *testing.T) {
 	if res.code == 2 {
 		t.Errorf("test file with open braces: %v", res.errs)
 	}
+	// Each file starts with the lexer fresh: a file left inside a block
+	// comment is its own error, and the next file is read as code.
+	res = generate(testRules(t), input{
+		sources: []namedText{{"src/a.rs", lines("/* open")}, {"src/b.rs", lines("fn g() {}")}},
+		tests:   []namedText{{"src/tests.rs", lines("/* open")}, {"src/x/tests.rs", lines("fn t() {}")}}}, true)
+	if strings.Join(res.errs, "\n") != "seams: src/a.rs:1: the file ends inside a block comment that starts here, so the scan cannot read it whole\nseams: src/tests.rs:1: the file ends inside a block comment that starts here, so the scan cannot read it whole" {
+		t.Errorf("lexer per file: code %d, errs %q", res.code, res.errs)
+	}
 }
 
 func TestMintsNote(t *testing.T) {
@@ -381,6 +394,43 @@ func TestFmtSpecImpl(t *testing.T) {
 		"}")
 	if got := names(scan(t, src)); got != "spec_impl DebugSpecImpl for U; spec_impl PartialEqSpecImpl for T" {
 		t.Fatalf("got %q", got)
+	}
+	// Only a trait impl inside verus! (Verus checks it) drops the spec
+	// impl: one outside verus! leaves it a seam.
+	src = lines("verus! {",
+		"impl vstd::std_specs::fmt::DisplaySpecImpl for T {", "    fn fmt_req() {}", "}",
+		"}",
+		"impl fmt::Display for T {", "    fn fmt(&self) {}", "}")
+	if got := names(scan(t, src)); got != "spec_impl DisplaySpecImpl for T" {
+		t.Fatalf("trait impl outside verus!: got %q", got)
+	}
+}
+
+// A clause line's braces are the clause's (a struct literal), not the
+// body's: the contract runs on to the body's own brace.
+func TestClauseBraces(t *testing.T) {
+	es := scan(t, lines("verus! {", "#[verifier::external_body]", "fn f() -> (r: S)", "    ensures r == S { a: 1 },", "{", "    S { a: 1 }", "}", "}"))
+	if len(es) != 1 || es[0].contract != "fn f() -> (r: S)\n    ensures r == S { a: 1 }," {
+		t.Fatalf("got %+v", es)
+	}
+}
+
+// After the pair macro's invocation closes, a fn one level in (in a
+// module) is no line of names; after its definition closes, an
+// assume_unsupported_attributes item the scan cannot read fails again.
+func TestPairEnds(t *testing.T) {
+	def := lines("macro_rules! verified_export_pair {", "    ($name:ident / $je:ident) => {",
+		"        #[verifier::assume_unsupported_attributes]", "        pub extern \"C\" fn $name() {}",
+		"        #[verifier::assume_unsupported_attributes]", "        pub extern \"C\" fn $je() {}", "    };", "}")
+	src := def + lines("verified_export_pair! {", "    fn a / b() {}", "}", "mod m {", "    fn c / d() {}", "}")
+	res := generate(testRules(t), input{sources: []namedText{{"src/api/mod.rs", src}}, pairText: def}, true)
+	if res.code != 0 || names(res.entries) != "unsupported-attribute a; unsupported-attribute b" {
+		t.Errorf("after the invocation: code %d %v: %s", res.code, res.errs, names(res.entries))
+	}
+	src = def + lines("#[verifier::assume_unsupported_attributes]", "pub struct S;")
+	res = generate(testRules(t), input{sources: []namedText{{"src/api/mod.rs", src}}, pairText: def}, true)
+	if res.code != 2 || !strings.Contains(strings.Join(res.errs, "\n"), "seams: src/api/mod.rs:10: verifier::assume_unsupported_attributes on an item the scan does not read as a seam") {
+		t.Errorf("after the definition: code %d %v", res.code, res.errs)
 	}
 }
 
@@ -463,7 +513,15 @@ func TestCode(t *testing.T) {
 		{`'\u{10FFFF}'|'"' {`, `'xxxxxxxxxx'|'x' {`},
 		{`'\x7f' b'a' '\u{}' {`, `'xxxx' b'x' '\u{}' {`},
 		{`'\u{1_F600}' '\u{_7b_}' '\u{1234567}' {`, `'xxxxxxxxxx' 'xxxxxxxx' '\u{1234567}' {`},
+		// Underscores do not count toward the six digits: seven digits
+		// with them are no char literal, six with them are.
+		{`'\u{1_0_F_F_F_F}' '\u{1_0_F_F_F_F_F}' {`, `'xxxxxxxxxxxxxxx' '\u{1_0_F_F_F_F_F}' {`},
+		// An `r` inside an identifier opens no raw string: `xr"\" }` is
+		// `xr` and a plain string whose `\"` is escaped, still open.
+		{`xr"\" }`, `xr"xxxx`},
 		{`fn f<'a>(x: &'a u8) {`, `fn f<'a>(x: &'a u8) {`},
+		// A plain string after a raw one closes at its own quote.
+		{`r#"x"# "y" {`, `r#"x"# "x" {`},
 	} {
 		if got := code(c.s); got != c.want {
 			t.Errorf("code(%q) = %q, want %q", c.s, got, c.want)
@@ -848,5 +906,37 @@ func TestUsage(t *testing.T) {
 	}
 	if code := run([]string{"-C", d, "-rules", "missing"}, &o, &e); code != 2 {
 		t.Errorf("missing rules: %d", code)
+	}
+	// In a tree that would scan, two modes at once are still a usage
+	// error, and write nothing.
+	d = tree(t, map[string]string{"verus/seams.rules": "command\tc\ntool\tT\nassumption-tool\tT\ncategory\tC\tT\nguess\tC\tkind=.\n",
+		"src/a.rs": lines("#[verifier::external_body]", "fn f() {}")})
+	if code, o, e := runIn(t, d, "-write", "-check"); code != 2 || o != "" || !strings.HasPrefix(e, "usage: seams") {
+		t.Errorf("-write -check: %d %q %q", code, o, e)
+	}
+	if _, err := os.Stat(filepath.Join(d, "verus/ledger")); !os.IsNotExist(err) {
+		t.Errorf("-write -check wrote the ledger")
+	}
+	// A source the walk lists but cannot read (a dangling link) is an
+	// input error, never a file with no seams.
+	if err := os.Symlink("nowhere.rs", filepath.Join(d, "src/u.rs")); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, e := runIn(t, d); code != 2 || !strings.Contains(e, "seams: cannot read src/u.rs") {
+		t.Errorf("unreadable source: %d %q", code, e)
+	}
+}
+
+// Attributes before an item on their line are read whole: the hash
+// text holds each as written.
+func TestAttrsOnItemLine(t *testing.T) {
+	es := scan(t, lines("verus! {", "#[allow(dead_code)] #[verifier::external_body] fn f() {}", "}"))
+	if len(es) != 1 || norm(es[0].hc) != "#[allow(dead_code)] #[verifier::external_body] fn f()" {
+		t.Fatalf("got %q", norm(es[0].hc))
+	}
+	// Brackets nested in an attribute stay inside it.
+	es = scan(t, lines("verus! {", "#[x([a])] #[verifier::external_body] fn f() {}", "}"))
+	if len(es) != 1 || norm(es[0].hc) != "#[x([a])] #[verifier::external_body] fn f()" {
+		t.Fatalf("nested brackets: got %+v", es)
 	}
 }
