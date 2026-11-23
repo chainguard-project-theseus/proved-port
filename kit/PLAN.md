@@ -551,6 +551,14 @@ is deleted in that PR.
    default branch requires `Chainguard Checks (presubmit)` pinned to the
    `chainguard` check app, through the organization's repository
    rulesets (`kit/templates/README.md`, "The required check"). pcre3 and challoc include the
-   package's `proved-port.mk` (step 2). Still to come: the `bench` and
-   `remote` targets above, and the lint that a port's checks call the
-   kit's targets.
+   package's `proved-port.mk` (step 2). The lint's checker is
+   `kit/checks/calls` (Go, #256), installed as `proved-port-calls`: it
+   reads the resolved configuration `chainctl checks explain
+   --output=json` prints, not the check files, and holds `call CHECK
+   TARGET... [with NAME...]` rules (the check gates a merge, installs
+   the package, sets only the variables the rule allows, and runs `make
+   TARGET` in a step it reads with certainty) and `forbid
+   PATH` rules (no check runs an in-tree copy the kit replaced), with
+   go.yaml's `calls-test`. Still to come: the `bench` and `remote`
+   targets above, and the make target, rules template and template
+   check that run the checker in a port.

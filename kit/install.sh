@@ -4,8 +4,10 @@
 # from kit/count as PREFIX/bin/verus-count, the kit's Go tools built
 # with go as PREFIX/bin/proved-port-fncmp (kit/perf/codegen/fncmp, the
 # codegen comparer), PREFIX/bin/proved-port-stats (kit/perf/stats, the
-# bench summaries) and PREFIX/bin/proved-port-seams (kit/verus/seams,
-# the seam ledger generator), kit/make/* (mode 0644) in
+# bench summaries), PREFIX/bin/proved-port-seams (kit/verus/seams,
+# the seam ledger generator) and PREFIX/bin/proved-port-calls
+# (kit/checks/calls, the check that a port's checks call the kit's
+# targets), kit/make/* (mode 0644) in
 # PREFIX/share/proved-port/make/, all of kit/templates in
 # PREFIX/share/proved-port/templates/, kit/CHANGELOG.md (the releases'
 # porting notes) as PREFIX/share/proved-port/CHANGELOG.md, and
@@ -53,9 +55,9 @@ esac
 
 cargo build --locked --release --manifest-path "$kit/count/Cargo.toml" --target-dir "$target"
 # The Go tools: the package's names, a module directory each. The names
-# carry the kit's prefix because fncmp, stats and seams are too generic
-# for /usr/bin.
-gotools='fncmp:perf/codegen/fncmp stats:perf/stats seams:verus/seams'
+# carry the kit's prefix because fncmp, stats, seams and calls are too
+# generic for /usr/bin.
+gotools='fncmp:perf/codegen/fncmp stats:perf/stats seams:verus/seams calls:checks/calls'
 mkdir -p "$target/go"
 for t in $gotools; do
   (cd "$kit/${t#*:}" && GOTOOLCHAIN=local GOFLAGS=-mod=mod CGO_ENABLED=0 go build -trimpath -o "$target/go/proved-port-${t%%:*}" .)
@@ -101,4 +103,4 @@ install -m644 "$kit/CHANGELOG.md" "$home/CHANGELOG.md"
   echo "commit $commit"
   echo "tag v$version"
 } > "$home/KIT"
-echo "kit/install.sh: kit v$version ($commit) in $home, verus-count and proved-port-{fncmp,stats,seams} in $prefix/bin"
+echo "kit/install.sh: kit v$version ($commit) in $home, verus-count and proved-port-{fncmp,stats,seams,calls} in $prefix/bin"

@@ -59,7 +59,7 @@ checks:
     description: >-
       kit/installed-test.sh: the kit installed into a scratch root as the
       theseus-proved-port package installs it (the proved-port-fncmp,
-      -stats and -seams Go tools too), then a fixture port
+      -stats, -seams and -calls Go tools too), then a fixture port
       (verus-count from PATH, no build, the PROVED_PORT_VERSION and
       counter-version guards, make verus-headers against the installed
       templates).
