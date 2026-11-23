@@ -1,6 +1,6 @@
 ---
 name: proved-c-port
-description: Port a C library to memory-safe Rust behind a drop-in C ABI, then prove it with Verus and Kani and benchmark it against the C original. Use when asked to "rewrite a C library in Rust", "replace libfoo with a Rust drop-in", keep ABI or soname compatibility, build a differential or fuzz-diff harness against the C oracle, write Verus proofs or Kani harnesses for a port, manage a verified-coverage FLOOR or rlimit headroom, add a JIT or fast path that must be proved equal to the slow path, or measure a port against the C library on bare-metal boxes. Distilled from pcre3 (PCRE2) and challoc (malloc).
+description: Port a C library to memory-safe Rust behind a drop-in C ABI, then prove it with Verus and Kani and benchmark it against the C original. Use when asked to "rewrite a C library in Rust", "replace libfoo with a Rust drop-in", keep ABI or soname compatibility, build a differential or fuzz-diff harness against the C oracle, write Verus proofs or Kani harnesses for a port, manage a verified-coverage FLOOR or rlimit headroom, add a JIT or fast path that must be proved equal to the slow path, or measure a port against the C library on bare-metal boxes. Distilled from the PCRE2 port and challoc (malloc).
 ---
 
 # Proved C ports
@@ -8,8 +8,8 @@ description: Port a C library to memory-safe Rust behind a drop-in C ABI, then p
 Use this skill when porting a C library to Rust where the Rust library
 must load in place of the C one (same header, sonames, symbols, error
 codes) and must be proved safe, shown correct against the C original,
-and measured at least as fast. The worked examples are pcre3 (a PCRE2
-10.49 replacement, developed in a private repository) and
+and measured at least as fast. The worked examples are the PCRE2 port
+(a PCRE2 10.49 replacement, developed in a private repository) and
 chainguard-project-theseus/challoc (a jemalloc-compatible `malloc`).
 
 The C library is the specification you did not have to write. Every rule
@@ -77,14 +77,14 @@ Correct: every crate but the C API crate is `#![forbid(unsafe_code)]`;
 every `extern "C"` body runs under a `catch_unwind` guard that returns
 an error code. (challoc is `no_std` with `panic = "abort"` instead: an
 allocator aborts on inconsistency, it never continues.) Use one guard
-shape for every export and lint for it (expat-rs's `ffi_guard` and
+shape for every export and lint for it (the Expat port's `ffi_guard` and
 `ci/lint-ffi-guard.sh`), with panic-injection tests that the guard
 leaks nothing. Where a library hands out long-lived handles, a caught
 panic also poisons the handle: later calls on it fail, and the end call
-still frees it (chainz's `poison_on_panic`, ABI-013).
+still frees it (the zlib port's `poison_on_panic`).
 
 Wrong: a safe `fn` pointer type that lets a forbid-unsafe crate jump to
-an arbitrary address (pcre3's `RawFind`, flagged in its trust audit).
+an arbitrary address (the PCRE2 port's `RawFind`, flagged in its trust audit).
 
 ### New executable code comes with its proofs
 
@@ -114,15 +114,15 @@ identical. A checker over the output exists only as a test oracle.
 Proving something adds no runtime cost wherever a ghost or spec route
 exists: take the harder proof. Until the producer is proved, a shipped
 checker is a temporary seam: a seams table row and a `TODO(#n)` naming
-the issue that proves the producer (pcre3 kept its checker on the find
-tier this way). The rule covers passes in the shipped
+the issue that proves the producer (the PCRE2 port kept its checker on
+the find tier this way). The rule covers passes in the shipped
 library over output it produced. An offline generator checked in CI
 costs no run, and checks of state a C caller can corrupt (challoc's
 metadata checks) are input validation; both are outside it.
 
 Wrong: a verified runtime checker over the output as the shipped
 argument, a shipped checker with no tracking issue, or offering one as
-the recommended option. It costs every run (pcre3's JIT checker was 47%
+the recommended option. It costs every run (the PCRE2 port's JIT checker was 47%
 of a one-pass native build) and only catches a bad output; a proved
 producer never makes one. Equally wrong: an allocation, copy or pass
 added only to make a property provable where a ghost or spec route
@@ -223,4 +223,4 @@ Before calling a phase done, check:
   headings) against the deviations and `known.c` citations: no citation
   names a missing entry, and no `TODO(#n)` names a closed issue.
 - Every `unsafe {` block has a `SAFETY:` comment naming the invariant it
-  relies on (chainz's and expat-rs's `ci/lint-unsafe.sh`).
+  relies on (the zlib and Expat ports' `ci/lint-unsafe.sh`).

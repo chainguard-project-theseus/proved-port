@@ -6,13 +6,15 @@
 # kit/make, kit/templates and kit/CHANGELOG.md, and a new port copies
 # kit/templates. So
 # none of those files may name an internal repository or organization
-# (the theseus ports' private repositories among them: cg-NAME, chainz,
-# and the names two of them had before, pcre3 and expat-rs),
-# an internal tool or URL, or a person. kit/templates/README.md, the
+# (the theseus ports' private repositories among them),
+# an internal tool or URL, or a person. The markers below may not spell
+# a private repository's name either (CONTRIBUTING.md): they catch the
+# cg-NAME prefix most of the private ports share, and review catches the
+# rest. kit/templates/README.md, the
 # kit's own notes on the templates, is not copied and is not held; nor
 # is kit/count/target, the build output. The markers are matched without
-# regard to case; a word marker (mono, matt) matches only as a word, so
-# monotonic and monomorphized pass. The kit's own public repository,
+# regard to case; a word marker (matt) matches only as a word, so
+# matte passes. The kit's own public repository,
 # chainguard-project-theseus/proved-port, is the one exemption, by
 # exactly that name: any other chainguard-project- name is flagged,
 # chainguard-project-theseus/challoc on the same line included.
@@ -36,8 +38,8 @@ fail() {
 
 # The markers, compared in lower case: each plain marker matches
 # anywhere, each word marker only as a word.
-plain='chainguard-dev/|chainguard-project-|cg-[a-z0-9]|pcre3|expat-rs|wolfi-dev/|chainguard-internal|codeowners-gate|ai-cicd/|chainbox|guardener|slack|mattmoor|mattomata|dlorenc|tcnghia|vreeland|imjasonh|decided \('
-words='mono|matt|justin|nghia|chainz'
+plain='chainguard-dev/|chainguard-project-|cg-[a-z0-9]|wolfi-dev/|chainguard-internal|codeowners-gate|ai-cicd/|chainbox|guardener|slack|mattmoor|mattomata|dlorenc|tcnghia|vreeland|imjasonh|decided \('
+words='matt|justin|nghia'
 
 # markers_of PLAIN WORDS: the extended regular expression that matches
 # the plain markers PLAIN and the word markers WORDS.
@@ -82,7 +84,7 @@ exempt='{
 
 # A sample for each marker, one a line, in mixed case. Each names one
 # marker only, so leaving any marker out leaves its sample unnamed.
-samples='See Chainguard-Dev/infra for the grant.
+samples='See Chainguard-Dev/example for the grant.
 moved to chainguard-project-theseus/challoc
 chainguard-project-theseus/proved-port and chainguard-project-theseus/challoc
 the chainguard-project-theseus/proved-port-internal fork
@@ -92,14 +94,10 @@ the corp-chainguard-project-theseus/proved-port mirror
 see chainguard-project-theseus/proved-port./internal
 chainguard-project-theseus:proved-port
 wolfi-dev/proved-port#21
-the CG-Libxml2 port
-the PCRE3 engine
-an Expat-RS fix
+the CG-Example port
 the apply step (a Chainguard-internal tool)
 render it with codeowners-gate
 ai-cicd/sandbox/docs/identities.md
-Mono'"'"'s code-reviewer README
-mono
 https://chainbox-console.example/run/1
 the Guardener link
 ask in #proof-Slack
@@ -112,8 +110,7 @@ imjasonh
 decided (by the reviewers)
 as Matt said
 Justin'"'"'s scrub
-Nghia found it
-the Chainz port'
+Nghia found it'
 
 # Text the markers must leave alone.
 clean='a monotonic count
@@ -204,7 +201,7 @@ while IFS= read -r s; do
 done <<EOF
 $samples
 EOF
-[ "$n" -ge 32 ] || fail "only $n samples ran"
+[ "$n" -ge 27 ] || fail "only $n samples ran"
 echo "ok the scan names each of $n planted markers, and none in what no port gets"
 
 # without LIST I: the |-separated LIST with its Ith entry left out.
@@ -240,7 +237,7 @@ for list in plain words; do
     m=$((m + 1))
   done
 done
-[ "$m" -ge 24 ] || fail "only $m markers were left out"
+[ "$m" -ge 20 ] || fail "only $m markers were left out"
 echo "ok leaving out any one of the $m markers leaves a sample unnamed"
 
 while IFS= read -r s; do

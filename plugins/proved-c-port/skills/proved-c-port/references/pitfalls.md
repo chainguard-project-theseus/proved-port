@@ -1,41 +1,42 @@
 # Pitfalls: dated lessons, one rule each
 
 Each entry is a rule, then the incident that taught it. Dates are
-Pacific, and are when it happened in pcre3, challoc or the port the
-entry names; `#n` is a pull request in that repository, dated by its
+Pacific, and are when it happened in the PCRE2 port, challoc or the
+port the entry names; `#n` is a pull request in challoc, dated by its
 GitHub record.
 
 ## Proofs and coverage
 
 - **Gate rlimit headroom per function, not only proof success.**
-  2026-10-28: pcre3 #551 passed its own checks, and once merged, main's
-  Verus run failed with `lemma_read_live` over its rlimit (#592 gave it
-  its own prover). The same day #583 (VS1), which had passed its own
-  run, tipped `Machine::run`'s loop over its rlimit once main held #589
-  (LE1). #620 then added the per-function headroom gate.
+  2026-10-28: a PCRE2 port PR passed its own checks, and once merged,
+  main's Verus run failed with `lemma_read_live` over its rlimit (a
+  follow-up gave it its own prover). The same day a VS1 PR, which had
+  passed its own run, tipped `Machine::run`'s loop over its rlimit once
+  main held LE1. A later PR then added the per-function headroom gate.
 - **Resolve FLOOR conflicts by re-measuring, never by picking a side.**
-  2026-10-29: pcre3 #689 was approved minutes after it opened, then
+  2026-10-29: a PCRE2 port PR was approved minutes after it opened, then
   updated from main four times, with a fresh presubmit each time, before
   it merged, because FLOOR raises kept landing on main.
 - **Close a coverage shortfall by verifying more, not by lowering.**
-  2026-11-04: the fast compile tier (pcre3 #972) fell just under the
-  lines floor; a small PR verifying five functions (15 shipped lines,
-  #987) landed first instead.
+  2026-11-04: the PCRE2 port's fast compile tier fell just under the
+  lines floor; a small PR verifying five functions (15 shipped lines)
+  landed first instead.
 - **Count verifier-only trusted code as trusted.** 2026-11-07: the
-  counter left out a trusted function built only under
-  `verus_keep_ghost`, though shipped proofs rested on it (pcre3 #1042).
+  PCRE2 port's counter left out a trusted function built only under
+  `verus_keep_ghost`, though shipped proofs rested on it.
 - **Do not narrow a spec's ensures without saying who consumed it.**
-  2026-11-07: pcre3 #1035's anchors layer weakened `lead_of`'s ensures;
-  it shipped only after confirming nothing used the stronger form.
+  2026-11-07: the PCRE2 port's anchors layer weakened `lead_of`'s
+  ensures; it shipped only after confirming nothing used the stronger
+  form.
 - **Never order-compare bools in a Kani harness.** Kani 0.68 emits
   relations CBMC ignores for `<`, `<=`, `>` and `>=` over bools, so the
-  harness passes vacuously; use `==`/`!=` or cast to an integer (chainz
-  `AGENTS.md`, "Environment").
+  harness passes vacuously; use `==`/`!=` or cast to an integer (the
+  zlib port's `AGENTS.md`, "Environment").
 
 ## Harnesses
 
-Each of these cost a run while building chainz's fuzz-abi leg
-(chainz #17, 2026-11-08):
+Each of these cost a run while building the zlib port's fuzz-abi leg
+(2026-11-08):
 
 - **Build UBSan legs with `-fno-wrapv` and plant a UBSan finding in the
   self-test.** Wolfi's clang defaults to `-fwrapv`, so
@@ -63,7 +64,7 @@ Each of these cost a run while building chainz's fuzz-abi leg
 ## Fast paths and architectures
 
 - **Gate on the CI leg that runs the target architecture, not on host
-  tests.** 2026-11-07: on pcre3 #1045, a `cfg` guard in `bt::make`
+  tests.** 2026-11-07: in the PCRE2 port, a `cfg` guard in `bt::make`
   returned `None` off aarch64, so the x86-64 backtracking JIT never ran
   native code. Every aarch64 host test passed; the box run below caught
   it, and the fix added an x86-only test that code is made.
@@ -76,15 +77,16 @@ Each of these cost a run while building chainz's fuzz-abi leg
   both sides were the interpreter.
 - **Keep the runtime checker as a test oracle, not the safety argument.**
   2026-10-31: the checker cost 47% of a one-pass pattern's native build
-  and had never refused a shipped program; pcre3 #818 mapped the
-  anchored tier's code on its proof instead.
+  and had never refused a shipped program; the PCRE2 port then mapped
+  the anchored tier's code on its proof instead.
 
 ## Performance
 
 - **Match the emulator's LLVM to the shipping toolchain.** An emulated
   instruction count from a different LLVM version measures different
   code, and its deltas do not transfer. 2026-11-07: rustup's 1.99.1
-  (LLVM 23) showed pcre3 #1046 at lit -1 / lit2 +12 a compile; the box's
+  (LLVM 23) showed a PCRE2 port PR at lit -1 / lit2 +12 a compile; the
+  box's
   Wolfi 1.99.1 (system LLVM 22) measured +97 / +177 (run keep-grpa4).
   Rebuilding with rustup's 1.98.1, also LLVM 22, reproduced the
   grouped-shape cost.
@@ -92,24 +94,24 @@ Each of these cost a run while building chainz's fuzz-abi leg
   `perf record` skid put a register spill in `engine::compile` into
   libc; uprobes and SPE showed libc identical in both arms.
 - **Confirm `inline(never)` and `inline(always)` fixes on the box.**
-  2026-11-07: a local revision of pcre3 #1047, never pushed and measured
-  only on the box (run keep-grpa6), added
+  2026-11-07: a local revision of a PCRE2 port PR, never pushed and
+  measured only on the box (run keep-grpa6), added
   `#[inline(never)]` on `vm::starts::wt_check` and `unconsumed_init`.
   It restored `finish_tail`'s size, but that run measured it
   worse than the previous head on every row up to K=64 (lit +62 against
-  +39 over the base, same run). The revision was dropped, and #1047
+  +39 over the base, same run). The revision was dropped, and the PR
   merged from its previous head, whose `#[inline(never)]` is on
   `linear::set_program` and `linear::prove_required` and which the box
   had already measured (run keep-grpa5).
-- **Treat type-layout changes as perf changes.** 2026-11-07: pcre3
-  #1028 removed a field it had made dead (`Item::digit`), which changed
-  `Item`'s tail padding, moved an `Option` niche
+- **Treat type-layout changes as perf changes.** 2026-11-07: a PCRE2
+  port PR removed a field it had made dead (`Item::digit`), which
+  changed `Item`'s tail padding, moved an `Option` niche
   and cost +35 to +79 instructions per compile in a same-run box
-  comparison; the Mac analysis had called it free. #1034 restored the
-  field.
+  comparison; the Mac analysis had called it free. A follow-up restored
+  the field.
 - **Name arms by sha and md5-check them.** 2026-10-28: an arm label
-  pointed at the wrong commit and a "bisect" blamed pcre3 #574, which
-  only touches tests; its endpoints built byte-identical libraries.
+  pointed at the wrong commit and a "bisect" blamed a PCRE2 port PR
+  that only touches tests; its endpoints built byte-identical libraries.
 - **Compare like with like.** 2026-10-28: tables compared the port's
   interpreter with the C library's JIT; the baseline became the C
   library rebuilt with its JIT compiled out.
@@ -118,47 +120,49 @@ Each of these cost a run while building chainz's fuzz-abi leg
 - **Read the box's clock in its timezone.** 2026-11-06: ledger entries
   stamped from a UTC uptime clock were read as Pacific.
 - **Make the emulator run the JIT before trusting it on a JIT path.**
-  2026-11-08: pcre3's instruction emulator could not execute mapped
-  native code, so every earlier emulated count on the fast find route
-  measured the interpreter fallback; teaching it to run code above the
-  text segment (cache maintenance, lane loads) came first.
+  2026-11-08: the PCRE2 port's instruction emulator could not execute
+  mapped native code, so every earlier emulated count on the fast find
+  route measured the interpreter fallback; teaching it to run code
+  above the text segment (cache maintenance, lane loads) came first.
 - **Box-confirm any change to a per-match hot path before pushing.**
-  2026-11-08: pcre3's F1 routed the fast find through a verified call;
-  the emulator predicted +1 instruction a match, and the change waited
-  on a same-run box arm before it was published.
+  2026-11-08: the PCRE2 port's F1 routed the fast find through a
+  verified call; the emulator predicted +1 instruction a match, and the
+  change waited on a same-run box arm before it was published.
 
 ## CI and landing
 
 - **Put CI labels on the PR before the push or the open that should run
   them.** The run is planned from the push or open event, so a label
   added after that event is not in its plan, even when it lands before
-  the run's checks appear. 2026-11-07: pcre3 #1046 was opened with its
-  `ci/run:*` labels added eight seconds later, five seconds before its
-  check run was created, and the requested legs still read "skipped:
-  nothing to run"; #1047's labels came one second after its run was
-  created, with the same result. Each needed a new push.
+  the run's checks appear. 2026-11-07: a PCRE2 port PR was opened with
+  its `ci/run:*` labels added eight seconds later, five seconds before
+  its check run was created, and the requested legs still read
+  "skipped: nothing to run"; the next PR's labels came one second after
+  its run was created, with the same result. Each needed a new push.
 - **Never rename a CI check key in place.** The run is refused as a
   change that deselects its own check; keep the key and change its
   steps, or add the new key first and remove the old one later.
-  2026-11-07: pcre3 #1048 renamed `x86jit` to `nox86jit` and its
+  2026-11-07: a PCRE2 port PR renamed `x86jit` to `nox86jit` and its
   presubmit reported "Run creation failed" with no checks run.
 - **Never use the update-branch API on a single-signed-commit repo.**
-  2026-11-07: it added an unsigned merge commit to pcre3 #1030; the fix
+  2026-11-07: it added an unsigned merge commit to a PCRE2 port PR; the
+  fix
   was a local signed rebase and a lease push.
 - **Push with `git -C <literal path>` where `cd` does not persist.**
-  2026-11-07: while opening pcre3 #1046, a `cd` into the clone did not
+  2026-11-07: while opening a PCRE2 port PR, a `cd` into the clone did not
   carry over, and the push ran against a different repository's remote,
   which rejected it.
 - **Treat a reviewer's "Verified at" as an open thread.** 2026-11-07: a
-  landing sweep hid two open threads on pcre3 #1042 for about six hours
+  landing sweep hid two open threads on a PCRE2 port PR for about six
+  hours
   because their last comment came from the author's account, posted by
   a review agent.
 - **Drop slow optional legs before the landing push.** 2026-10-30:
   `fuzz-diff` and `differential` labels made every run slow, so PRs lost
-  merge races; they came off pcre3 #698 once they had passed. Request
+  merge races; they came off a PCRE2 port PR once they had passed. Request
   them for evidence, drop them once passed.
 - **Make reachability gates expand macros from their definitions.**
-  2026-11-08: review of pcre3 #1052, the gate that every function a C
+  2026-11-08: review of a PCRE2 port PR, the gate that every function a C
   entry point reaches is verified or allowlisted, found it did not
   expand `width::fn_ptr!`, so the generated callback conversions, and
   any helper they called, escaped it. Before it merged, the counter
@@ -171,18 +175,18 @@ Each of these cost a run while building chainz's fuzz-abi leg
   scripts in durable paths, and have every agent write a progress file a
   successor can resume from.
 - **Two PRs can each pass and their merge fail.** 2026-11-05: the fast
-  compile tier (pcre3 #972) and a dense-gate change crossed; a test
-  unwrapped a prefilter the fast tier never builds. #998 fixed it
-  forward on main within the hour. Fix forward on main first.
+  compile tier (the PCRE2 port's) and a dense-gate change crossed; a
+  test unwrapped a prefilter the fast tier never builds. A follow-up
+  fixed it forward on main within the hour. Fix forward on main first.
 - **Retry split pushes after a server-side ref error.** 2026-11-05: a
-  combined push of pcre3 #990 and #995 hit `commit_refs_rules`;
-  separate pushes went through, and #990's head had silently stayed on
-  the old sha until it was pushed again.
-- **Verify the signer after every commit.** 2026-11-02: in pcre3 a
-  signing cache issued certificates for the wrong account, and the
-  commits signed from it carried that identity: a restack of #894, then
-  a re-sign of #911. A signer check caught each before the push, and
-  both were signed again.
+  combined push of two PCRE2 port PRs hit `commit_refs_rules`;
+  separate pushes went through, and the first PR's head had silently
+  stayed on the old sha until it was pushed again.
+- **Verify the signer after every commit.** 2026-11-02: in the PCRE2
+  port a signing cache issued certificates for the wrong account, and
+  the commits signed from it carried that identity: a restack of one
+  PR, then a re-sign of another. A signer check caught each before the
+  push, and both were signed again.
 
 ## Allocators (challoc)
 

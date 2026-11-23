@@ -21,8 +21,8 @@ The method is distilled from two ports:
 
 - [chainguard-project-theseus/challoc](https://github.com/chainguard-project-theseus/challoc),
   a `malloc` replacement.
-- pcre3, a PCRE2 10.49 replacement with a proved JIT on aarch64 and
-  x86-64, developed in a private repository.
+- the PCRE2 port, a PCRE2 10.49 replacement with a proved JIT on
+  aarch64 and x86-64, developed in a private repository.
 
 ## Install
 
@@ -116,6 +116,12 @@ describing it:
 
 So a claim reads "proved, modulo these seams", never "proved safe"
 without its scope.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). In short: nothing private goes
+into this public repository, including the names of private
+repositories.
 
 ## License
 

@@ -1,7 +1,7 @@
 # Starter kit: plan
 
 A plan for moving the reusable tooling of proved C-ABI ports into
-`kit/` in this repository, from pcre3 (a private repository),
+`kit/` in this repository, from the PCRE2 port (a private repository),
 chainguard-project-theseus/challoc (main `7ef336c4`) and the box and
 emulator scripts
 that are not yet in any repository. Section 5 gives each step's
@@ -9,19 +9,20 @@ status.
 
 Each step is a **move**: the tool lands here, the port that had it
 consumes it from the kit through its pin (section 4), and the in-tree
-copy is deleted in the same step. A step is done only when pcre3 (and
-challoc, where it had the tool) builds and runs the tool from the kit
+copy is deleted in the same step. A step is done only when the PCRE2
+port (and challoc, where it had the tool) builds and runs the tool from
+the kit
 and no copy is left behind. Two copies would mean two rule sets that
 drift, which is what the move exists to prevent.
 
-Both pcre3 and challoc align to every kit piece: each switches to it in
-the PR that deletes its in-tree copy, never in a separate earlier or
+Both the PCRE2 port and challoc align to every kit piece: each switches
+to it in the PR that deletes its in-tree copy, never in a separate earlier or
 later one, and each kit piece is shown to give the same figures as both
 ports' copies before it lands (kit/count/README.md, "Parity", for step
 2).
 
 Paths below are relative to each source repository. Tools marked
-**local only** live in Matt's working notes (`pcre3-work/`) and in no
+**local only** live in the maintainer's local working notes and in no
 repository; step 0 commits them here before anything depends on them.
 
 Coupling scale (the work to make a tool serve more than one port):
@@ -35,50 +36,50 @@ config file replaces hard-coded crate names, paths or ids), **high**
 
 | tool | path | what it does | coupling | to make generic |
 |---|---|---|---|---|
-| coverage counter | pcre3 `verus/count/` (`main.rs` 3899, `inputs.rs` 1633, `rlimit.rs` 765, `reach.rs` 489 lines) | parses sources with `verus_syn`; classes functions and lines as verified, trusted, discharged, outside; FLOOR with `lowered` lines against `--base-rev`; RLIMIT headroom from Verus's JSON stats with `allow` and `rlimit-raised`; Kani marker/record check; test-only cfg evaluation; shipped-crate selection via `cargo tree` | medium | crate list, `publish = false` rule, feature names (`test-util`) and record directory into a `verus/count.toml`; split the pcre3-only checks (below) behind flags |
+| coverage counter | the PCRE2 port `verus/count/` (`main.rs` 3899, `inputs.rs` 1633, `rlimit.rs` 765, `reach.rs` 489 lines) | parses sources with `verus_syn`; classes functions and lines as verified, trusted, discharged, outside; FLOOR with `lowered` lines against `--base-rev`; RLIMIT headroom from Verus's JSON stats with `allow` and `rlimit-raised`; Kani marker/record check; test-only cfg evaluation; shipped-crate selection via `cargo tree` | medium | crate list, `publish = false` rule, feature names (`test-util`) and record directory into a `verus/count.toml`; split the PCRE2-port-only checks (below) behind flags |
 | counter, single-crate cut | challoc `verus/count/src/main.rs` (2070 lines) | same counter cut to one crate; reads the generated seam ledger to class discharged functions by `src/FILE:LINE` | medium | merge into one counter with two ledger back ends (per-theorem tables, generated per-file ledger) |
-| recursion check | inside pcre3 `verus/count` | fails on call cycles through unverified shipped functions, and verified cycles not named in RN1's table | medium | table path and format into config |
-| entry-point reachability | pcre3 `verus/count/src/reach.rs`, `verus/REACH` | every function a C entry point reaches is verified or listed, with `macro_rules!` expanded from their definitions and anything unexpandable failing closed | medium | root selection (exported `extern "C"` functions) is generic; the allowlist path into config |
-| compile-input check | pcre3 `verus/count/src/inputs.rs` | fails when code reachable from named roots reads mutable statics, `thread_local!`, env or seeded `HashMap`, unless a table row names it | high | roots and table become config; the reachability walk is generic, the root names are not |
+| recursion check | inside the PCRE2 port's `verus/count` | fails on call cycles through unverified shipped functions, and verified cycles not named in RN1's table | medium | table path and format into config |
+| entry-point reachability | the PCRE2 port `verus/count/src/reach.rs`, `verus/REACH` | every function a C entry point reaches is verified or listed, with `macro_rules!` expanded from their definitions and anything unexpandable failing closed | medium | root selection (exported `extern "C"` functions) is generic; the allowlist path into config |
+| compile-input check | the PCRE2 port `verus/count/src/inputs.rs` | fails when code reachable from named roots reads mutable statics, `thread_local!`, env or seeded `HashMap`, unless a table row names it | high | roots and table become config; the reachability walk is generic, the root names are not |
 | seam ledger generator | challoc `verus/seams.sh` (1604 lines, shell) | generates `verus/ledger/src/**.rs.md` from source: kind, verbatim contract, CRC hashes, category, proposed tool, status; `--check` fails when stale; per-file overrides | medium | category and tool heuristics into a rules file; consider a Go rewrite (shell at this size is hard to maintain) |
 | ledger self-test mutants | challoc `verus/seams-mutants.sh` | sed mutants of `seams.sh` (weakened citation and hash rules) that its self-tests must catch | medium | follows whatever form the ledger generator takes (done for the Go generator: `kit/verus/seams/mutants.sh` with `testdata/mutants.txt`, text-matched hand mutants each killed or marked equivalent with its reason; go.yaml `seams-mutants`, #225; `FILE#N/M` names one occurrence of a repeated text, #250) |
-| Kani runner | pcre3 `verus/kani/run.sh`; challoc `ci/kani-regular.sh`, `scripts/kani-boolcmp.sh` | per-crate `cargo kani` with job limits, shards in regular format failing on `warning: ignoring`, a lint for bool ordering comparisons in harnesses | low | crate list and feature matrix as arguments |
-| Kani record template | pcre3 `verus/seams/kani-*.md` (53 records) | five sections: contract, statement, translation, review, tests (mutation check) | low | ship as a template plus a checker that the quoted contract matches the source (done: the template is `kit/templates/verus/seams/kani-TEMPLATE.md`, the checker `make kani-quotes`, #207) |
-| unsafe and assume lint | pcre3 `ci/lint-unsafe.sh`; challoc's `no_assume_or_admit_in_verified_code` test | crate roots carry `forbid(unsafe_code)`; `assume_new` only in allowed token seams; no `assume`/`admit` in shipped verified code | low | allowed-seam list into config |
+| Kani runner | the PCRE2 port `verus/kani/run.sh`; challoc `ci/kani-regular.sh`, `scripts/kani-boolcmp.sh` | per-crate `cargo kani` with job limits, shards in regular format failing on `warning: ignoring`, a lint for bool ordering comparisons in harnesses | low | crate list and feature matrix as arguments |
+| Kani record template | the PCRE2 port `verus/seams/kani-*.md` (53 records) | five sections: contract, statement, translation, review, tests (mutation check) | low | ship as a template plus a checker that the quoted contract matches the source (done: the template is `kit/templates/verus/seams/kani-TEMPLATE.md`, the checker `make kani-quotes`, #207) |
+| unsafe and assume lint | the PCRE2 port `ci/lint-unsafe.sh`; challoc's `no_assume_or_admit_in_verified_code` test | crate roots carry `forbid(unsafe_code)`; `assume_new` only in allowed token seams; no `assume`/`admit` in shipped verified code | low | allowed-seam list into config |
 | guard tests | challoc `testutil::assert_only_at` | a trusted item's call sites are pinned; a new site fails | low | lift into a small crate |
 | restated-body test | challoc `src/api/restated.rs` | compares exec call names of a body and its verification-only restatement | medium | parameterize the body list |
 | inline-asm checks | challoc `verus/isla/`, `verus/emptyasm/` | Isla traces of compiled `asm!` against seam contracts; empty templates emit no instruction, with a `nop` control | high | only for ports with inline assembly; keep as reference |
 | loom pins | challoc `tests/loom/tests/pins.rs` | fails when a source line a model copies changes | medium | the pin file format is generic |
-| skeletons | pcre3 `verus/README.md`, `THEOREMS.md`, `SEAMS.md`, `TODO.md`, `FLOOR`, `RLIMIT`, `theorems/README.md`; challoc `verus/RESULTS.md` | the document structure: trusted base, one file per theorem with `### Seams`, seam columns, FLOOR and RLIMIT headers explaining the rules | low | strip to templates with placeholders |
+| skeletons | the PCRE2 port `verus/README.md`, `THEOREMS.md`, `SEAMS.md`, `TODO.md`, `FLOOR`, `RLIMIT`, `theorems/README.md`; challoc `verus/RESULTS.md` | the document structure: trusted base, one file per theorem with `### Seams`, seam columns, FLOOR and RLIMIT headers explaining the rules | low | strip to templates with placeholders |
 
 ### Comparison harnesses
 
 | tool | path | what it does | coupling | to make generic |
 |---|---|---|---|---|
-| ABI check | pcre3 `ci/abi.sh`, `ci/header-check.sh`, `scripts/link-so.sh`, `crates/pcre3-capi/maps/` | SONAME, version nodes, export set vs map, C smoke tests, header constants vs the distro `-dev` package | medium | library names, map paths, header prefix regex into config |
+| ABI check | the PCRE2 port `ci/abi.sh`, `ci/header-check.sh`, `scripts/link-so.sh`, the C API crate's `maps/` | SONAME, version nodes, export set vs map, C smoke tests, header constants vs the distro `-dev` package | medium | library names, map paths, header prefix regex into config |
 | glibc ceiling check | challoc `ci/glibc-max.sh` | the `.so` needs no `GLIBC_` version above the floor | low | none |
-| conformance ratchet | pcre3 `ci/conformance.sh`, `tests/upstream/` | upstream test data through upstream's driver, per-block failures against a reasoned deviations list, strict both ways, `--update` only removes | high | the ratchet (block keys, reason must cite a ledger id, both-ways strictness) is generic; the driver patching is pcre2-specific |
-| differential runner | pcre3 `ci/conformance-diff.sh` | same inputs on port and C library through the unpatched upstream driver, advisory ratchet | high | reference only |
-| fuzz-diff driver | pcre3 `fuzz/diff/` (`driver.c`, `known.c`, `known_test.c`, `diff.h`), `ci/fuzz-diff.sh` | one C driver `dlopen`s both libraries `RTLD_LOCAL`; preflight (`dladdr`, distinct objects, version strings); known-divergence predicates citing ledger ids; selftest; base64 reproducers | medium | split into a generic shell (loading, preflight, voices, known-table checking, citation lint, reproducer output) and a per-library comparison file |
-| ABI fuzz | pcre3 `ci/fuzz-abi.sh`, `fuzz/abi/` | upstream's OSS-Fuzz harness under ASan/UBSan, guard bytes, tracking allocator, internal-error abort | medium | harness path and patch set as inputs |
-| engine fuzz | pcre3 `ci/fuzz.sh`, `fuzz/` | libFuzzer on the safe engine on stable Rust with SanitizerCoverage flags | low | target names |
-| consumers | pcre3 `ci/consumers.sh`, `tests/consumers/`; challoc `tests/consumers/` | build dependents from pinned sources against the C `-dev`, run their tests with the port first on the path, expected-failures per consumer, PASS/FAIL/SKIP summary | medium | the runner and `fetch`/`loaded` helpers are generic; each consumer's `run.sh` is not |
+| conformance ratchet | the PCRE2 port `ci/conformance.sh`, `tests/upstream/` | upstream test data through upstream's driver, per-block failures against a reasoned deviations list, strict both ways, `--update` only removes | high | the ratchet (block keys, reason must cite a ledger id, both-ways strictness) is generic; the driver patching is pcre2-specific |
+| differential runner | the PCRE2 port `ci/conformance-diff.sh` | same inputs on port and C library through the unpatched upstream driver, advisory ratchet | high | reference only |
+| fuzz-diff driver | the PCRE2 port `fuzz/diff/` (`driver.c`, `known.c`, `known_test.c`, `diff.h`), `ci/fuzz-diff.sh` | one C driver `dlopen`s both libraries `RTLD_LOCAL`; preflight (`dladdr`, distinct objects, version strings); known-divergence predicates citing ledger ids; selftest; base64 reproducers | medium | split into a generic shell (loading, preflight, voices, known-table checking, citation lint, reproducer output) and a per-library comparison file |
+| ABI fuzz | the PCRE2 port `ci/fuzz-abi.sh`, `fuzz/abi/` | upstream's OSS-Fuzz harness under ASan/UBSan, guard bytes, tracking allocator, internal-error abort | medium | harness path and patch set as inputs |
+| engine fuzz | the PCRE2 port `ci/fuzz.sh`, `fuzz/` | libFuzzer on the safe engine on stable Rust with SanitizerCoverage flags | low | target names |
+| consumers | the PCRE2 port `ci/consumers.sh`, `tests/consumers/`; challoc `tests/consumers/` | build dependents from pinned sources against the C `-dev`, run their tests with the port first on the path, expected-failures per consumer, PASS/FAIL/SKIP summary | medium | the runner and `fetch`/`loaded` helpers are generic; each consumer's `run.sh` is not |
 | skip accounting | challoc `ci/skip-summary.sh`, `ci/expected-skips/`, `ci/known-failures.sh` | `SKIP` lines against a per-cell manifest; a new skip fails, a vanished one is a notice; known failures scoped by cell | low | none |
-| ledger format | pcre3 `docs/abi-changes.md` "Entry format" | the `ABI-nnn` template | low | template plus a lint (ids in order, every citation resolves) |
+| ledger format | the PCRE2 port `docs/abi-changes.md` "Entry format" | the `ABI-nnn` template | low | template plus a lint (ids in order, every citation resolves) |
 
 ### Performance tooling
 
 | tool | path | what it does | coupling | to make generic |
 |---|---|---|---|---|
-| in-repo bench | pcre3 `ci/bench.sh`, `bench/pcre3-bench.c`, `bench/README.md` | one C program against the C `-dev` run four ways (C, C+JIT, port, port+JIT); counts must agree or `MISMATCH`; checks alignment flags on the rustc line | medium | workloads are per library; the four-way runner, result-agreement check and flag check are generic |
-| alignment pin | pcre3 `.cargo/config.toml` | `-align-all-functions=6`, `-align-loops=64` | low | a documented snippet; each port keeps its own `.cargo/config.toml` |
-| box setup | local only: `pcre3-work/x86box/setup.sh` | metal box: SMT off, governor, NMI watchdog, clock record; Wolfi run and build trees from `wolfi-base` pinned to the C library's versions; re-runnable per boot | medium | package list and paths into a config; split per-boot from install steps |
-| box lock and build | local only: `pcre3-work/x86box/box/home/{withlock.sh,build.sh,keep-build.sh,build-a0.sh}` | phase lock; build an arm from a `git archive` tarball into `/opt/lib/<arm>`; build the C library with its JIT disabled | medium | build commands per project |
-| run scripts | local only: `pcre3-work/build1103/*/keep-*.sh` (aarch64 box), `pcre3-work/x86box/box/home/{keep-*.sh,rbx2.sh,phpbase.sh}` (x86-64 box) | one `systemd-run` unit per run: md5 before, phases under the lock, interleaved rounds, `perf stat` events, md5 after | high | extract the skeleton (arms by sha, md5 bracket, phase loop, round rotation, event list); workloads stay per project |
-| pull scripts | local only: `pcre3-work/build1103/*/pull.sh` | fetch results over `gcloud compute ssh`, md5 consistency, output identity across arms, empty-counter check, arm relabelling | medium | box name, zone and arm map as arguments |
-| stats | local only: `pcre3-work/build1103/{spillp1,x86bt2}/cmp.awk` (per-row medians, half-split noise bounds, verdicts), `pcre3-work/build1103/{grpa5,grpa6}/tab.awk` (markdown tables). The noise-baseline, three-way tally and table-join tools (`noise.awk`, `mkreps.sh`, `jointab.sh`, `board.awk`) were lost with a retired session directory; no copy survives | per-row medians, half-split noise bounds, verdicts against a noise baseline, three-way tallies, markdown tables | low | one Go tool replacing the awk family (decided 2026-11-08); the lost tools are rewritten from this description and the write-ups that used them |
-| attribution | local only: `pcre3-work/build1103/grpa7/{keep-grpa7spe.sh,spe.awk,u.awk,mcins.awk,sym.awk}` | Arm SPE capture and symbolization, libc uprobes with argument histograms, a memcpy instruction model | medium | probe lists per project; SPE flow generic |
-| emulator | local only, three variants: `pcre3-work/tools/regr2/emu/` (Go, 1862 lines) with `pcre3-work/tools/regr2/shapes.sh`; `pcre3-work/f1emu/emu/` (1932 lines, also runs mapped JIT code: cache maintenance, `CTR_EL0`, lane loads); `pcre3-work/sc/emu/` (a working copy with further SIMD changes) | interprets a static aarch64 ELF from an entry, counts retired instructions per function and block between markers; driver linked with the toolchain's `rust-lld` | medium | reconcile the three variants into one first; already library-agnostic; needs an x86-64 decoder for the second arch, a documented driver ABI (`emu_mark`), and a check that the linked LLVM matches the shipping toolchain |
+| in-repo bench | the PCRE2 port `ci/bench.sh`, the bench C program in `bench/`, `bench/README.md` | one C program against the C `-dev` run four ways (C, C+JIT, port, port+JIT); counts must agree or `MISMATCH`; checks alignment flags on the rustc line | medium | workloads are per library; the four-way runner, result-agreement check and flag check are generic |
+| alignment pin | the PCRE2 port `.cargo/config.toml` | `-align-all-functions=6`, `-align-loops=64` | low | a documented snippet; each port keeps its own `.cargo/config.toml` |
+| box setup | local only: the x86-64 box's `setup.sh` | metal box: SMT off, governor, NMI watchdog, clock record; Wolfi run and build trees from `wolfi-base` pinned to the C library's versions; re-runnable per boot | medium | package list and paths into a config; split per-boot from install steps |
+| box lock and build | local only: the x86-64 box's `withlock.sh`, `build.sh`, `keep-build.sh`, `build-a0.sh` | phase lock; build an arm from a `git archive` tarball into `/opt/lib/<arm>`; build the C library with its JIT disabled | medium | build commands per project |
+| run scripts | local only: per-run `keep-*.sh` (aarch64 box); `keep-*.sh`, `rbx2.sh`, `phpbase.sh` (x86-64 box) | one `systemd-run` unit per run: md5 before, phases under the lock, interleaved rounds, `perf stat` events, md5 after | high | extract the skeleton (arms by sha, md5 bracket, phase loop, round rotation, event list); workloads stay per project |
+| pull scripts | local only: per-run `pull.sh` | fetch results over `gcloud compute ssh`, md5 consistency, output identity across arms, empty-counter check, arm relabelling | medium | box name, zone and arm map as arguments |
+| stats | local only: two copies of `cmp.awk` (per-row medians, half-split noise bounds, verdicts), two copies of `tab.awk` (markdown tables). The noise-baseline, three-way tally and table-join tools (`noise.awk`, `mkreps.sh`, `jointab.sh`, `board.awk`) were lost with a retired session directory; no copy survives | per-row medians, half-split noise bounds, verdicts against a noise baseline, three-way tallies, markdown tables | low | one Go tool replacing the awk family (decided 2026-11-08); the lost tools are rewritten from this description and the write-ups that used them |
+| attribution | local only: `keep-grpa7spe.sh`, `spe.awk`, `u.awk`, `mcins.awk`, `sym.awk` | Arm SPE capture and symbolization, libc uprobes with argument histograms, a memcpy instruction model | medium | probe lists per project; SPE flow generic |
+| emulator | local only, three variants: `regr2/emu/` (Go, 1862 lines) with `regr2/shapes.sh`; `f1emu/emu/` (1932 lines, also runs mapped JIT code: cache maintenance, `CTR_EL0`, lane loads); `sc/emu/` (a working copy with further SIMD changes) | interprets a static aarch64 ELF from an entry, counts retired instructions per function and block between markers; driver linked with the toolchain's `rust-lld` | medium | reconcile the three variants into one first; already library-agnostic; needs an x86-64 decoder for the second arch, a documented driver ABI (`emu_mark`), and a check that the linked LLVM matches the shipping toolchain |
 | codegen diff | challoc `scripts/codegen-diff.sh`, `ci/codegen.sh`, `scripts/codegen-fncmp.py`, `ci/codegen-fncmp-test.sh` | machine-code diff of the hot set from the merge base; reloc-only, padding-only, erratum-stub classes | medium | hot-set list into config; rewrite the Python comparer in Go (decided 2026-11-08) |
 | fast-path budget | challoc `scripts/perf-budget.sh`, `scripts/perf-budget.rs`, `verus/perf-budget*.txt` | instruction, load, store, branch and cache-line counts per hot export; no atomic RMW, fence, call, syscall, back edge | medium | export list and pinned compiler into config |
 | noalias check | challoc `ci/heap-noalias.sh` | rustc IR shows no `noalias` on a `&mut` receiver written through raw pointers | medium | type name as argument |
@@ -88,12 +89,12 @@ config file replaces hard-coded crate names, paths or ids), **high**
 
 | tool | path | what it does | coupling | to make generic |
 |---|---|---|---|---|
-| verus check | pcre3 `.chainguard/ci/verus.yaml`; challoc `verus.yaml` | pinned `verus~` and `kani~` packages, proofs and counter against `CHAINGUARD_BASE_REVISION`, main postsubmit against the previous commit (the kit's template takes `CHAINGUARD_BASE_REVISION` there too, the start of the settled push), arm64 for Z3 speed | low | package pins and `make` target names |
-| comparison legs | pcre3 `.chainguard/ci/{conformance,fuzz,consumers}.yaml` | per-arch checks, on-request legs by label | medium | leg names and scripts |
-| test matrix | pcre3 `test.yaml`; challoc `test.yaml`, `floor.yaml`, `tlscheck.yaml` | arch by build-variant cells; old-kernel floor cells on GCE | medium | matrix as data |
-| lint | pcre3 `lint.yaml`, `ci/shellcheck.sh`; challoc `lint.yaml`, `ci/shellcheck.sh` | fmt, clippy `-D warnings`, source rules, shellcheck pinned by SHA-256, msrv | low | the shellcheck fetcher and its pin move; the check files stay per port |
-| dev env | pcre3 `.chainguard/ci/env/dev.yaml`, `.chainguard/develop.yaml`, `scripts/develop-run.sh` | one Wolfi package set shared by CI and dev sessions; upload worktree, run, pull outputs, delete | medium | package list; outputs list |
-| Makefile targets | pcre3 `Makefile` (`verus`, `kani`, `remote`, `bench`), challoc `Makefile` | `make verus` = `cargo verus focus -p ... -- --time-expanded --output-json > stats`, then the counter with `--floor`, `--rlimit`, `--base-rev` | low | crate list variable |
+| verus check | the PCRE2 port `.chainguard/ci/verus.yaml`; challoc `verus.yaml` | pinned `verus~` and `kani~` packages, proofs and counter against `CHAINGUARD_BASE_REVISION`, main postsubmit against the previous commit (the kit's template takes `CHAINGUARD_BASE_REVISION` there too, the start of the settled push), arm64 for Z3 speed | low | package pins and `make` target names |
+| comparison legs | the PCRE2 port `.chainguard/ci/{conformance,fuzz,consumers}.yaml` | per-arch checks, on-request legs by label | medium | leg names and scripts |
+| test matrix | the PCRE2 port `test.yaml`; challoc `test.yaml`, `floor.yaml`, `tlscheck.yaml` | arch by build-variant cells; old-kernel floor cells on GCE | medium | matrix as data |
+| lint | the PCRE2 port `lint.yaml`, `ci/shellcheck.sh`; challoc `lint.yaml`, `ci/shellcheck.sh` | fmt, clippy `-D warnings`, source rules, shellcheck pinned by SHA-256, msrv | low | the shellcheck fetcher and its pin move; the check files stay per port |
+| dev env | the PCRE2 port `.chainguard/ci/env/dev.yaml`, `.chainguard/develop.yaml`, `scripts/develop-run.sh` | one Wolfi package set shared by CI and dev sessions; upload worktree, run, pull outputs, delete | medium | package list; outputs list |
+| Makefile targets | the PCRE2 port `Makefile` (`verus`, `kani`, `remote`, `bench`), challoc `Makefile` | `make verus` = `cargo verus focus -p ... -- --time-expanded --output-json > stats`, then the counter with `--floor`, `--rlimit`, `--base-rev` | low | crate list variable |
 
 ## 2. Proposed layout
 
@@ -141,8 +142,8 @@ kit/
    directory, hot-export list, box names and zones, package pins.
 2. **Split the counter's project-specific checks** (RN1 recursion table,
    CD1 compile reads) behind opt-in flags with table paths from config.
-3. **Decide one ledger style** or support both: pcre3's per-theorem
-   tables are written by hand; challoc's per-file ledger is generated
+3. **Decide one ledger style** or support both: the PCRE2 port's
+   per-theorem tables are written by hand; challoc's per-file ledger is generated
    and checked. The generated form scales better.
 4. **Separate the fuzz-diff shell from the comparison**: loading,
    preflight, voices, reproducer output and known-table discipline are
@@ -176,8 +177,8 @@ installs the counter as `verus-count`, `kit/make` under
 `/usr/share/proved-port/make/`, every template under
 `/usr/share/proved-port/templates/`, and a KIT record of the tag and
 commit. A port installs it in each check's `environment: packages:`
-pinned with `~` (`theseus-proved-port~X.Y.Z`), the way pcre3 already
-pins `verus~0.2026.10.18` and `kani~0.68.0`, and puts the same pin in
+pinned with `~` (`theseus-proved-port~X.Y.Z`), the way the PCRE2
+port already pins `verus~0.2026.10.18` and `kani~0.68.0`, and puts the same pin in
 `.chainguard/ci/env/dev.yaml` for development sessions. Its Makefile
 names the release once (`PROVED_PORT_VERSION`, which installed mode
 requires) and includes `$(PROVED_PORT_HOME)/make/proved-port.mk`; the
@@ -202,11 +203,12 @@ internal, and the reasons below that hinge on that no longer hold. The
 repository is public, and the package replaced vendoring in v0.3.0):
 
 - **git submodule.** Chainguard Checks' host-side checkout does not
-  fetch submodules (mono's Checks migrator flags `actions/checkout`
+  fetch submodules (the Checks platform's migrator flags
+  `actions/checkout`
   `with.submodules` for that reason), so each check would have to fetch
   the kit itself, with github.com egress and, while the repository was
-  not public, credentials. pcre3's verus checks allowed only crates.io
-  egress then.
+  not public, credentials. The PCRE2 port's verus checks allowed only
+  crates.io egress then.
 - **`go run` of a tagged module.** Needed module-proxy egress and, while
   this repository was internal, GitHub credentials in every check; and it
   covers only the Go tools, not the Rust counter or the shell scripts.
@@ -246,7 +248,8 @@ is deleted in that PR.
    the templates nor a port's files carry that line.) What the
    port drops are restatements elsewhere: `AGENTS.md`, `CONTRIBUTING.md`,
    `verus/README.md` and the check files point at the header instead.
-   pcre3: `verus/FLOOR`, `verus/RLIMIT`, `verus/REACH` and `verus/MINTS`
+   The PCRE2 port: `verus/FLOOR`, `verus/RLIMIT`, `verus/REACH` and
+   `verus/MINTS`
    keep the template's header text (through v0.2.4 with the version
    line); `docs/abi-changes.md` "Entry format" and the
    Kani records keep their text and follow the templates. challoc: the
@@ -256,7 +259,8 @@ is deleted in that PR.
    the kit counter's `checked-*`. The FLOOR template's raise rule is one
    rule for every port: FLOOR and the badge rise in their own PR, to the
    figures the check names, never in the PR that earns them (challoc's,
-   expat-rs's and chainz's rule; pcre3 moves to it from same-PR). Its
+   the Expat port's and the zlib port's rule; the PCRE2 port moves to
+   it from same-PR). Its
    two exceptions are in FLOOR's header: the port's first proof PR
    raises FLOOR from 0.0, and a FLOOR PR may stop below the figure the
    check names, never below the base's, for an open PR that lands that
@@ -269,14 +273,15 @@ is deleted in that PR.
    theorem and Kani record skeletons, the `ABI-nnn` ledger, AGENTS.md and
    CONTRIBUTING.md outlines; `kit/templates/README.md` says how to apply
    them). The rest of the verus README's prose and the TODO skeleton are
-   not templated yet. pcre3's restatements point at its headers.
+   not templated yet. The PCRE2 port's restatements point at its
+   headers.
    The lint that diffs a header against its
    template is `kit/make/headers.sh` (`make verus-headers`), installed
    with the counter by the package: it reads the installed templates,
    and from v0.3.0 neither the templates nor a port's files carry a
    version line (one a port still has ends its header and is not read).
 2. **Counter, unsafe/assume lint and Kani runner.**
-   - pcre3: delete `verus/count/` and `verus/kani/run.sh`; add
+   - The PCRE2 port: delete `verus/count/` and `verus/kani/run.sh`; add
      `verus/count.toml` (the four crates, the `test-util` feature, the
      record directory, RN1's table, CD1's roots, `verus/REACH`). The
      Makefile's `verus` recipe runs the kit counter in place of
@@ -303,22 +308,23 @@ is deleted in that PR.
      and both scripts are deleted.
    - **Status:** the counter is in `kit/count/`, configured by a port's
      `verus/count.toml`, with both back ends (the Kani marker and the
-     generated ledger) and pcre3's REACH, CD1, MINTS, recursion and
-     rlimit checks behind sections of the configuration. Its output is
-     byte-identical to challoc's counter (main `fcde6b2`) and to
-     pcre3's but for the `ok compile inputs` line,
+     generated ledger) and the PCRE2 port's REACH, CD1, MINTS,
+     recursion and rlimit checks behind sections of the configuration.
+     Its output is byte-identical to challoc's counter (main `fcde6b2`)
+     and to the PCRE2 port's but for the `ok compile inputs` line,
      which also names the roots it resolved, under
      `kit/count/configs/`. It also counts Verus's attribute form, for
-     expat-rs. `.chainguard/ci/count.yaml` runs its tests, clippy and
-     rustfmt. pcre3's switch PR carries the call-arity and dropped-rlimit
-     fixes the kit made to pcre3's code, so the two match on the
+     the Expat port. `.chainguard/ci/count.yaml` runs its tests, clippy
+     and rustfmt. The PCRE2 port's switch PR carries the call-arity and
+     dropped-rlimit fixes the kit made to the PCRE2 port's code, so the
+     two match on the
      switching commit. The install mechanism is the theseus-proved-port
      package (section 4): "delete `verus/count/`" above means the port
      carries no counter of its own and runs the package's `verus-count`;
      `count-installed` tests kit/make as the package installs it. The
      Kani runner is `kit/make/kani.sh` (`make kani`), installed with the
-     counter: pcre3's crate halves, chainz's one harness per
-     instance and challoc's weighted shards with a fail pattern, each
+     counter: the PCRE2 port's crate halves, the zlib port's one
+     harness per instance and challoc's weighted shards with a fail pattern, each
      as variables (`make-template` tests it with a stub cargo). The
      unsafe lint's shared rule is `kit/make/lint-unsafe.sh` (`make
      lint-unsafe`, #150): crate roots, workspace lints and a
@@ -326,7 +332,7 @@ is deleted in that PR.
      (`lint-unsafe-test` runs it with cargo); the `assume_new` seam list
      and other port-specific rules stay in each port's script. The
      templates' `source-rules` check runs it (#152), so a new port
-     starts on it. pcre3 and challoc have switched: each runs
+     starts on it. The PCRE2 port and challoc have switched: each runs
      the package's counter through the package's `proved-port.mk` and
      carries no counter of its own (challoc's main
      at `09edeb9`). Still
@@ -335,8 +341,8 @@ is deleted in that PR.
    with `verus/seams-mutants.sh` as its tests). challoc: the Makefile's
    `sh verus/seams.sh --check` runs the kit generator; the generated
    `verus/ledger/` must come out byte-identical; both scripts are
-   deleted. pcre3 keeps its hand-written per-theorem tables until it
-   chooses the generated form.
+   deleted. The PCRE2 port keeps its hand-written per-theorem tables
+   until it chooses the generated form.
    **Status:** the generic core is `kit/verus/seams` (Go, #217): the
    scan, overrides, ledger files, totals, hashes and the claims nothing
    rules, with `-write`, `-check` and `-entries` (one line per seam for
@@ -371,9 +377,9 @@ is deleted in that PR.
    stays in challoc's script reading `-cites` and
    `-entries` until it moves; and challoc's switch. The package installs the tool
    as `proved-port-seams` (#243).
-4. **ABI checks and the deviations ratchet.** pcre3: `ci/abi.sh` and
-   `ci/header-check.sh` move (config: library names,
-   `crates/pcre3-capi/maps/`, the `PCRE2_`/`REG_` prefixes);
+4. **ABI checks and the deviations ratchet.** The PCRE2 port: `ci/abi.sh`
+   and `ci/header-check.sh` move (config: library names,
+   the C API crate's `maps/`, the `PCRE2_`/`REG_` prefixes);
    `test.yaml`'s `C ABI smoke` step, `lint.yaml`'s `header constants vs
    pcre2-dev` step and the Makefile's `test`, `smoke` and `lint`
    recipes call the kit's; `ci/conformance.sh` keeps its pcre2test
@@ -385,26 +391,29 @@ is deleted in that PR.
    in POSIX sh, with `make.yaml`'s `glibc-max-test`. challoc's switch to
    it is to come. The header constant check is `kit/make/header-check.sh`
    (`make header-check HEADER_CHECK_HEADERS=... HEADER_CHECK_PREFIXES=...
-   [HEADER_CHECK_UPSTREAM=/usr/include]`, #203), pcre3's script with its
-   headers, prefixes and upstream directory as arguments, with
-   `make.yaml`'s `header-check-test`; pcre3's switch to it is to come.
-   The per-library ELF part of pcre3's ABI check (its `ci/abi.sh`
+   [HEADER_CHECK_UPSTREAM=/usr/include]`, #203), the PCRE2 port's script
+   with its headers, prefixes and upstream directory as arguments, with
+   `make.yaml`'s `header-check-test`; the PCRE2 port's switch to it is
+   to come. The per-library ELF part of the PCRE2 port's ABI check (its
+   `ci/abi.sh`
    checks 1 to 3: SONAME, needs, thread-locals, version nodes and
    exports against the library's version script) is
    `kit/make/abi-elf.sh` (`make abi-elf ABI_ELF_LIB=... ABI_ELF_MAP=...
    ABI_ELF_SONAME=...`, #205), with `make.yaml`'s `abi-elf-test`;
-   pcre3's C tests, consumer binding and install checks stay in the
+   the PCRE2 port's C tests, consumer binding and install checks stay in the
    port, and its switch to the kit target is to come. The deviations
    ratchet is `kit/make/deviations.sh` (`make deviations
    DEVIATIONS_RESULTS=... DEVIATIONS_LIST=... [DEVIATIONS_LEDGER=docs/abi]
-   [DEVIATIONS_UPDATE=1]`, #209), pcre3's per-block comparison (a
+   [DEVIATIONS_UPDATE=1]`, #209), the PCRE2 port's per-block comparison
+   (a
    `PASS`/`FAIL` line per key against the reasoned list, strict both
    ways, reasons citing active ledger entries, `--update` only
    removes), with `make.yaml`'s `deviations-test` in place of its
-   selftest; pcre3's run, block splitting and display of a new
+   selftest; the PCRE2 port's run, block splitting and display of a new
    failure's block stay in the port, and its switch is to come.
-5. **Comparison harnesses.** pcre3: `fuzz/diff/` splits into the kit's
-   generic driver shell and pcre3's comparison file and `known.c`;
+5. **Comparison harnesses.** The PCRE2 port: `fuzz/diff/` splits into
+   the kit's generic driver shell and the PCRE2 port's comparison file
+   and `known.c`;
    `ci/fuzz-diff.sh` builds the kit driver against them, under the same
    `fuzz-diff` check key. `ci/consumers.sh` and its `fetch`/`loaded`
    helpers move; each `tests/consumers/<name>/run.sh` stays.
@@ -427,15 +436,15 @@ is deleted in that PR.
    `make.yaml`'s `known-failures-test`; it also counts a failing test
    whose name has a blank (a should_panic test or a doctest), which
    challoc's did not. challoc's switch to it is to come.
-   pcre3's known-table citation check is `kit/make/known-cites.sh`
+   The PCRE2 port's known-table citation check is `kit/make/known-cites.sh`
    (`make known-cites KNOWN_CITES_FILE=... KNOWN_CITES_REPO=...
    [KNOWN_CITES_LEDGER=docs/abi] [KNOWN_CITES_MACRO=KNOWN]`, #211),
    its `--check-known` in POSIX sh with the table, macro and
    repositories as inputs, reading the ledger with
    `kit/make/ledger-active.sh` (moved out of deviations.sh, so both
    read a ledger alike), and `make.yaml`'s `known-cites-test`; on
-   pcre3's table and ledger it passes the same 29 rows. pcre3's switch
-   to it is to come. The rest of the driver shell is
+   the PCRE2 port's table and ledger it passes the same 29 rows. The
+   PCRE2 port's switch to it is to come. The rest of the driver shell is
    `kit/make/fuzz-diff.h` and `fuzz-diff.c` (#215), which a port
    compiles into its driver: loading by absolute path with
    `RTLD_LOCAL`, the preflight (each symbol in its library's own
@@ -445,26 +454,27 @@ is deleted in that PR.
    The version voices stay in the port (it checks what its libraries
    report and refuses with `ppd_die`), as do decoding, comparisons and
    `known.c`. A local, unchecked-in run (#216's description gives the
-   edits and commands) rebuilt pcre3's driver on it and gave the same
+   edits and commands) rebuilt the PCRE2 port's driver on it and gave the same
    output on the same inputs, except that the stricter symbol check
    refuses a library whose symbols come from a library it needs. No check
    here repeats that run. As with every move, the step's exit is
-   pcre3's switch PR running both drivers once and pasting the
-   output. That switch is still to come.
-   pcre3's consumer runner and its `fetch`/`loaded` helpers are
+   the PCRE2 port's switch PR running both drivers once and pasting
+   the output. That switch is still to come.
+   The PCRE2 port's consumer runner and its `fetch`/`loaded` helpers are
    `kit/make/consumers.sh` (`make consumers-run CONSUMERS_LIB=...
    [CONSUMERS_SONAME=...] [CONSUMERS_PREFIX=...] [CONSUMERS_NAMES=...]`,
    #213), with the build, the swap directory and the version check left
-   in the port, and `make.yaml`'s `consumers-test`. pcre3's switch to it
-   is to come.
+   in the port, and `make.yaml`'s `consumers-test`. The PCRE2 port's switch
+   to it is to come.
 6. **Box skeleton, pull and stats.** Out of `kit/reference/` into
-   `kit/perf/` (stats rewritten in Go). pcre3: the generic parts of
-   `ci/bench.sh` (the four-way runner, the result-agreement check, the
-   rustc flag check) move, and the Makefile's `bench` recipe calls the
-   kit runner with `bench/pcre3-bench.c`; pcre3's box workloads, which
-   lived only in the local run scripts, are committed to pcre3 as
-   workload files the kit skeleton reads. Exit: an A/A run with the kit
-   skeleton on pcre3's workloads is within noise, and the
+   `kit/perf/` (stats rewritten in Go). The PCRE2 port: the generic
+   parts of `ci/bench.sh` (the four-way runner, the result-agreement
+   check, the rustc flag check) move, and the Makefile's `bench` recipe
+   calls the kit runner with its bench C program; the PCRE2 port's box
+   workloads, which lived only in the local run scripts, are committed
+   to the PCRE2 port as workload files the kit skeleton reads. Exit: an
+   A/A run with the kit skeleton on the PCRE2 port's workloads is
+   within noise, and the
    `kit/reference/` copies are deleted.
    **Status:** the stats tool is `kit/perf/stats` (Go, #176): `med`
    (per-row medians), `cmp` (an arm against a reference with
@@ -529,7 +539,7 @@ is deleted in that PR.
    challoc's script's. challoc's switch to these is to come, as is the
    emulator.
 8. **CI templates and the Makefile include**, once the above have
-   stable interfaces. pcre3 and challoc `include` the kit's
+   stable interfaces. The PCRE2 port and challoc `include` the kit's
    `proved-port.mk` for the `verus`, `kani` and `bench` recipes and
    delete their own. The `.chainguard/ci/*.yaml` files stay in each port
    (Checks reads them from the repository); the kit ships templates for
@@ -542,15 +552,15 @@ is deleted in that PR.
    `remote` are still to come. The templates are in
    `kit/templates/.chainguard/` and
    `kit/templates/.github/` (`kit/templates/README.md`, "Repository
-   configuration"): the check files in the shape pcre3, challoc, chainz
-   and expat-rs share, the default and dev environments, `develop.yaml`,
+   configuration"): the check files in the shape the PCRE2 port,
+   challoc, the zlib port and the Expat port share, the default and dev environments, `develop.yaml`,
    the deps agent's `deps.yaml` (which replaces Dependabot), the
    reviewer's `reviewers.yaml` and prompt skeleton, and the codeowners
    sidecar with its rendering. Each, filled with a sample port's values,
    passes `chainctl checks validate`. One setting is not a file: the
    default branch requires `Chainguard Checks (presubmit)` pinned to the
    `chainguard` check app, through the organization's repository
-   rulesets (`kit/templates/README.md`, "The required check"). pcre3 and challoc include the
+   rulesets (`kit/templates/README.md`, "The required check"). The PCRE2 port and challoc include the
    package's `proved-port.mk` (step 2). The lint's checker is
    `kit/checks/calls` (Go, #256), installed as `proved-port-calls`: it
    reads the resolved configuration `chainctl checks explain
