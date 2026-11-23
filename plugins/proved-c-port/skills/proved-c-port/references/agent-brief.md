@@ -47,7 +47,7 @@ HARD RULES
 - FLOOR: never lower a share if verifying more code can close the gap.
   If impossible, report why; do not add a `lowered` line on your own.
 - rlimit: keep every function under {RLIMIT TARGET} of its rlimit in
-  development, below the CI gate {RLIMIT GATE} (pcre3: 55% and 65%).
+  development, below the CI gate {RLIMIT GATE} (the PCRE2 port: 55% and 65%).
   Restore headroom by spinoff_prover, then a lemma split, then a smaller
   context. Never raise an rlimit without saying so in the report.
 - Every new test or spec change comes with a mutant that fails it.
@@ -59,7 +59,8 @@ HARD RULES
 
 GATE (run before declaring done; paste the summary lines)
 Run these {WHERE: locally | through the repo's remote runner, never on
-the workstation (chainz: `make <target>` via scripts/develop-run.sh)}.
+the workstation (the zlib port: `make <target>` via
+scripts/develop-run.sh)}.
 - {BUILD CMD}            e.g. cargo build --locked --release
 - {TEST CMD, scoped}     e.g. cargo test -p {CRATE} -- {FILTER}
 - {LINT CMD}             e.g. cargo fmt --check; cargo clippy -D warnings

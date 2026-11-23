@@ -1,10 +1,10 @@
 # Lifecycle: phases and exit criteria
 
-The order matters more than the speed. pcre3 went from an empty
-workspace to a full PCRE2 10.49 drop-in in about two days because the
-oracle and the comparison harnesses existed before most of the engine
-did; it then spent two weeks proving and speeding up what it had, with
-the harnesses catching every regression on the way.
+The order matters more than the speed. The PCRE2 port went from an
+empty workspace to a full PCRE2 10.49 drop-in in about two days because
+the oracle and the comparison harnesses existed before most of the
+engine did; it then spent two weeks proving and speeding up what it
+had, with the harnesses catching every regression on the way.
 
 ## Phase 0: scope and principles
 
@@ -12,8 +12,8 @@ Write these down in `AGENTS.md` and `CONTRIBUTING.md` before the first
 PR, as non-negotiable principles an agent must stop and report on rather
 than bend:
 
-- The exact upstream release tracked (pcre3: PCRE2 10.49; one at a
-  time).
+- The exact upstream release tracked (the PCRE2 port: PCRE2 10.49; one
+  at a time).
 - The support floor (challoc: glibc 2.44+, kernel 5.14+, x86_64 and
   aarch64 with 4, 16 and 64 KiB pages). A change must not raise it.
 - Where `unsafe` may live, and the panic policy at the boundary.
@@ -26,8 +26,8 @@ configuration" in its README): the `.chainguard/ci/` checks and the
 `.chainguard/deps.yaml` in place of Dependabot, the Checks reviewer
 (`reviewers.yaml` and `review-prompt.md`), and the `.github/codeowners.yaml`
 sidecar with its rendered `CODEOWNERS`. The required check is not a
-file: add the repository to chainguard-dev/infra's github-iac ruleset
-(as chainguard-dev/infra#5389 does).
+file: add the repository to the github-iac ruleset in the
+organization's infrastructure repository.
 
 Only the kit's Verus files stay held to the kit afterwards
 (`make verus-headers`; `kit/make/VERUS-FILES` names them): the headers
@@ -40,7 +40,7 @@ port's checks.
 
 Start with every Verus check name, so the check selection only grows:
 Chainguard Checks refuses a change that deselects one of its own checks
-(chainz #59 hit it), so a check dropped later cannot land. From the
+(the zlib port hit it), so a check dropped later cannot land. From the
 first commit the port has `verus` and `verus-main`, `kani` and
 `kani-main` when it will discharge seams with Kani, and `msrv` in
 `.chainguard/ci/test.yaml` (`kit/templates/README.md`, "The required
@@ -61,20 +61,20 @@ check.
   against the distro's `-dev` package.
 - Write the linker version map by hand from upstream's. `abi.sh` fails
   when the export set and the map differ, checks SONAME and version
-  nodes, and loads the library under a real consumer (pcre3: Wolfi's
-  `grep`).
+  nodes, and loads the library under a real consumer (the PCRE2
+  port: Wolfi's `grep`).
 - Write down struct layouts the ABI exposes, and which are opaque.
-- Survey consumers (pcre3: `docs/research/consumers.md`,
+- Survey consumers (the PCRE2 port: `docs/research/consumers.md`,
   `api-usage.md`): who calls what, with which options. This decides what
   the ledger's "Affected consumers" field can say.
 - Survey upstream's CVEs and ChangeLog by bug class before designing.
-  pcre3 picked its theorems from that survey (error offsets bounded,
-  ovector sanity, bounded recursion, heap limit honoured).
+  The PCRE2 port picked its theorems from that survey (error offsets
+  bounded, ovector sanity, bounded recursion, heap limit honoured).
 - Turn the bug classes into numbered security rules, each naming the
   check that enforces it ("Review" where none can), and map every CVE to
-  its rule and a pinning test. expat-rs's S1 to S14 (`CONTRIBUTING.md`)
-  and `docs/research/cves.md` are the model; theorems then cite the rule
-  they discharge.
+  its rule and a pinning test. The Expat port's numbered rules
+  (`CONTRIBUTING.md`) and `docs/research/cves.md` are the model;
+  theorems then cite the rule they discharge.
 - When the survey lands, start `verus/VULN-CLASSES.md` from the kit's
   template (`kit/templates/verus/VULN-CLASSES.md`). The survey stays the
   research; the catalog maps each CVE to the theorem that rules its
@@ -86,8 +86,8 @@ check.
 - Pick the oracle's source. A port that tracks the distro compares with
   its `-dev` package; a port pinned to one upstream release builds the
   oracle from upstream's release tarball, checked by SHA-256, so the
-  oracle does not move when the distro does (expat-rs's
-  `ci/fuzz-diff.sh`).
+  oracle does not move when the distro does (the Expat
+  port's `ci/fuzz-diff.sh`).
 
 Exit: the header, map and smoke checks pass against the C library
 itself, and the consumer survey exists.
@@ -97,7 +97,7 @@ itself, and the consumer survey exists.
 Build the harnesses first, run them against the C library, and keep
 them as CI legs. `references/abi-compat.md` has the detail.
 
-| harness | pcre3 | challoc |
+| harness | the PCRE2 port | challoc |
 |---|---|---|
 | upstream's suite through upstream's driver | `ci/conformance.sh testdata`, a per-block ratchet | vendored glibc and mimalloc suites under `LD_PRELOAD` |
 | differential runner | `conformance.sh differential` against Wolfi's libpcre2, plain and `-jit` | `tests/c` programs, `cb` against glibc and jemalloc |
@@ -117,7 +117,8 @@ architectures.
 - Split crates so the C ABI crate holds all `unsafe` and the engine
   crates forbid it.
 - No length pre-pass, no fixed buffers, no unbounded native recursion,
-  checked size arithmetic, one budget for every limit (pcre3 design 6).
+  checked size arithmetic, one budget for every limit (the PCRE2 port's
+  design 6).
 - Every behaviour change comes with a test, and security-relevant
   behaviour with negative tests: NULL arguments, truncated buffers, bad
   magic, invalid UTF, limits that must trip, overflowing sizes, unknown
@@ -125,9 +126,9 @@ architectures.
 - A test that cannot check its claim on a host prints `SKIP <name>
   <reason>`. It never passes silently.
 - A port may replace the C a piece at a time over the unedited vendored
-  source instead of starting with no C left. chainz builds zlib with
-  `Z_PREFIX`, so the C's internal calls go to `z_*` names, and Rust
-  supplies those names piece by piece. Check that every export is Rust
+  source instead of starting with no C left. The zlib port builds zlib
+  with `Z_PREFIX`, so the C's internal calls go to `z_*` names, and
+  Rust supplies those names piece by piece. Check that every export is Rust
   or forwards to the vendored C, and that the forwarding list only
   shrinks.
 
@@ -139,9 +140,9 @@ or an open bug.
 
 `references/proofs.md` has the practice. The shape of the work:
 
-1. Bring the Verus toolchain into CI as a pinned package first (pcre3
-   landed its first theorem before the CI gate existed and paid for it
-   in post-merge rlimit breaks).
+1. Bring the Verus toolchain into CI as a pinned package first (the
+   PCRE2 port landed its first theorem before the CI gate existed and
+   paid for it in post-merge rlimit breaks).
 2. Bootstrap the counter with the first proof, unless the port already
    has it from its setup (a port set up with the kit's package and the
    templates has the counter and FLOOR 0.0 in its first commit, and
@@ -163,13 +164,13 @@ or an open bug.
    the check names, never below the base's, for an open PR that lands
    that share lower (FLOOR's header). No
    figure can rise before a counter and a proof exist, so the first
-   raise lands with them (expat-rs #193). A port whose counter landed
-   earlier at FLOOR 0.0 (from its setup, or in a PR of its own) takes
-   the same exception: its first proof PR may raise FLOOR and the badge
-   from 0.0 in that PR.
+   raise lands with them (as in the Expat port). A port whose counter
+   landed earlier at FLOOR 0.0 (from its setup, or in a PR of its own)
+   takes the same exception: its first proof PR may raise FLOOR and the
+   badge from 0.0 in that PR.
    A port that already has its own counter adopts the kit's in a PR of
-   its own and keeps any check of its own that is stricter (chainz #59
-   kept its seam-spelling rejection and per-theorem floor beside it).
+   its own and keeps any check of its own that is stricter (the zlib
+   port kept its seam-spelling rejection and per-theorem floor beside it).
    Where the port has a `verus/floor/` directory, name the kit's FLOOR
    file something else, in both the counter's `--floor` flag (the head
    read) and `[floor] path` in `verus/count.toml` (the `--base-rev`
@@ -198,9 +199,10 @@ or an open bug.
 5. Then the interpreter's state model, so later fast paths have
    something to be proved equal to.
 
-pcre3's history shows the layering: T1 (UTF decoding) on day 3, then
-parse (PA*), lower (IR*, IC*), analysis (AW*, AP1), compile (EN3, T3),
-VM (T2, T5, VS*), and only then the JIT (JIT1) and the direct emit (DE1).
+The PCRE2 port's history shows the layering: T1 (UTF decoding) on day
+3, then parse (PA*), lower (IR*, IC*), analysis (AW*, AP1), compile
+(EN3, T3), VM (T2, T5, VS*), and only then the JIT (JIT1) and the
+direct emit (DE1).
 
 Exit per layer: Verus 0 errors on the PR's base and on main after the
 merge, FLOOR at or above main's, every new seam recorded.
@@ -209,7 +211,7 @@ merge, FLOOR at or above main's, every new seam recorded.
 
 A JIT, a direct compile path, or a fast tier is the riskiest code in a
 port: it turns attacker input into executable code or skips a pipeline
-stage. pcre3's rules:
+stage. The PCRE2 port's rules:
 
 - Prototype it unproved, measure it on the box, and drop it if it misses
   its predicted number.
@@ -219,17 +221,18 @@ stage. pcre3's rules:
 - The end state is correct by construction: the emitter's postcondition
   proves the certificate (memory safety, bounded steps), the equality to
   the interpreter, and what attacker input can place in the code. The
-  runtime checker becomes test-only. pcre3 measured its checker at 47% of
-  a native build before dropping it.
+  runtime checker becomes test-only. The PCRE2 port measured its
+  checker at 47% of a native build before dropping it.
 - A second architecture shares the proofs through a neutral layer (see
   `references/proofs.md`, "Transport").
 - A fast path the C library has always had (zlib's `inffast`, which
-  chainz ports as `inflate/fast.rs`) is on from the start, so phase 6
-  does not apply; it still needs the equality theorem and a fuzz voice
-  without it. The differential against the C library cannot see a
-  misreading both share, since the C library runs the same algorithm.
+  the zlib port ports as `inflate/fast.rs`) is on from the start, so
+  phase 6 does not apply; it still needs the equality theorem and a
+  fuzz voice without it. The differential against the C library cannot
+  see a misreading both share, since the C library runs the same
+  algorithm.
 
-The fuzz voice can land before the proof. chainz #61's shape:
+The fuzz voice can land before the proof. The zlib port's shape:
 
 - A cargo feature, off by default, compiles the fast path's call out;
   a second feature plants a mutant for the self-test. No shipped build
@@ -258,7 +261,8 @@ the leg that runs without it is the phase 5 fuzz voice.
 
 - Flip the feature in the default build in its own PR, last.
 - Keep the build without it, tested and linted, as its own CI leg
-  (pcre3's `x86jit` leg tests `--no-default-features --features jit`).
+  (the PCRE2 port's `x86jit` leg tests
+  `--no-default-features --features jit`).
 - Confirm on the target architecture's box that the default build
   actually runs native code (an instruction-count sanity gate before the
   full run). A cfg guard that compiles the fast path out on one arch

@@ -368,7 +368,7 @@ verdict "no workspace lints pass with UNSAFE_WORKSPACE_LINTS=no" 0 "lint-unsafe:
 d=$(copy)
 printf '[workspace]\nmembers = ["crates/*"]\nresolver = "2"\n\n[workspace.lints.rust]\nunsafe_code = { level = "forbid", priority = 1 }\n' > "$d/Cargo.toml"
 # With forbid, which the fence crates' allow cannot lower, they do not
-# inherit the workspace lints (cg-libarchive).
+# inherit the workspace lints (the libarchive port).
 for c in cmem capi; do
   awk '!/^\[lints\]$/ && !/^workspace = true$/' "$d/crates/$c/Cargo.toml" > "$tmp/m" && cp "$tmp/m" "$d/crates/$c/Cargo.toml"
 done

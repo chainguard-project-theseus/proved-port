@@ -1,23 +1,24 @@
 # Proofs: Verus and Kani practice
 
-Both pcre3 and challoc verify in place: functions inside `verus! { ... }`
-are checked for overflow, out-of-bounds indexing, reachable panics,
-termination and their `requires`/`ensures`. Ghost code erases from
-ordinary builds, so the shipped library is unchanged.
+Both the PCRE2 port and challoc verify in place: functions inside
+`verus! { ... }` are checked for overflow, out-of-bounds indexing,
+reachable panics, termination and their `requires`/`ensures`. Ghost
+code erases from ordinary builds, so the shipped library is unchanged.
 
 ## Choosing the spec
 
 - Always specify against an independent definition when one exists,
-  never against a restatement of the code. pcre3's `utf::decode` is
+  never against a restatement of the code. The PCRE2 port's
+  `utf::decode` is
   specified with vstd's `valid_first_scalar` and `decode_first_scalar`,
   so the proof checks the decoder against a separate definition of
   UTF-8.
 - Treat generated tables as the specification of their lookups, and say
-  so in the trusted base (pcre3: the UCD tables; their match with
+  so in the trusted base (the PCRE2 port: the UCD tables; their match with
   upstream is checked by `ucdgen --check`, not proved).
 - When a premise comes from a hand-written table and a test pins it
-  rather than a proof (expat-rs's U1 needs the byte-type table to give
-  a lead byte its sequence length), list it in the theorem file's
+  rather than a proof (the Expat port's U1 needs the byte-type table to
+  give a lead byte its sequence length), list it in the theorem file's
   Premises table with the test that pins it.
 - Prefer theorems that remove a whole vulnerability class over theorems
   that rule out one defect. Pick them from upstream's CVE survey
@@ -29,13 +30,14 @@ ordinary builds, so the shipped library is unchanged.
 - Write the spec of the slow path first (an interpreter's state model,
   `vm_run_c`), so every fast path has something to be proved equal to.
 - For whole-compile equality, prove an observational statement over a
-  key rather than full functional correctness. pcre3's CD1 proves the
-  cache compares the whole key and checks mechanically that compile
-  reads nothing but its key.
+  key rather than full functional correctness. The PCRE2 port's CD1
+  proves the cache compares the whole key and checks mechanically that
+  compile reads nothing but its key.
 
 ## Writing verifiable Rust
 
-Choose constructs Verus can check. pcre3's `AGENTS.md` keeps a table,
+Choose constructs Verus can check. The PCRE2 port's `AGENTS.md` keeps a
+table,
 re-checked on each Verus upgrade:
 
 | instead of | write |
@@ -59,7 +61,7 @@ re-measures after proving.
 
 A `verus!` block needs vstd's `verus!` macro in every build, so vstd
 must be an ordinary dependency. A port whose MSRV is below vstd's
-(expat-rs: Rust 1.82, while vstd's proc-macro dependencies need 1.85)
+(the Expat port: Rust 1.82, while vstd's proc-macro dependencies need 1.85)
 keeps vstd optional behind a feature and uses Verus's attribute form
 instead: plain Rust functions carry their contracts in
 `#[cfg_attr(feature = "verus", verus_spec(...))]` (with `verus_verify`),
@@ -90,13 +92,13 @@ Each layer extends the spec first, then the code over it, in its own PR:
 3. A fast-path layer is proved only for the operations the spec covers;
    anything else declines to the slow path, and the decline is tested.
 
-pcre3's JIT1 is the model: JS1 (memory safety) and JS2 (bounded steps)
-from a certificate; JS3 (the code answers as its program); JS4 (the
-program answers as the table); JS5 (W^X and the call); JS6 (a call
-answered natively answers as with no native code, over the
-never-JIT-compiled baseline); JS7 (what a pattern can put in the code);
-JS8 (no silent fallback, tested). A profile maps code only once every
-one of its theorems holds.
+The PCRE2 port's JIT1 is the model: JS1 (memory safety) and JS2
+(bounded steps) from a certificate; JS3 (the code answers as its
+program); JS4 (the program answers as the table); JS5 (W^X and the
+call); JS6 (a call answered natively answers as with no native code,
+over the never-JIT-compiled baseline); JS7 (what a pattern can put in
+the code); JS8 (no silent fallback, tested). A profile maps code only
+once every one of its theorems holds.
 
 DE1 (direct emit equals the full compile) grew a construct at a time,
 23 items, each with its proof, and the emit declines at the first unit
@@ -104,7 +106,7 @@ it does not cover. Grow a fast path's subset the same way.
 
 ## Transport over a neutral layer (multi-arch)
 
-Never port proofs per architecture. pcre3's design:
+Never port proofs per architecture. The PCRE2 port's design:
 
 - A neutral operation enum with a meaning of its own (`op::nstep`) that
   names no architecture's model.
@@ -141,15 +143,16 @@ spellings.
 - One `external_body` or `assume_specification` around the single
   unverifiable call, with a contract stating only what callers rely on.
 - One row per seam, with an id that is never reused, in the owning
-  theorem's table (pcre3) or a generated per-file ledger (challoc's
-  `verus/seams.sh --write`, checked by `--check` in CI).
+  theorem's table (the PCRE2 port) or a generated per-file ledger
+  (challoc's `verus/seams.sh --write`, checked by `--check` in CI).
 - Statuses: trusted, discharged (another tool covers the whole
   contract), discharged on premises (named C or platform premises stay),
   partly checked.
-- With hand-written tables (pcre3), a Kani discharge needs four things
-  in the same change: the harness, a `verus/seams/kani-<id>.md` record
-  (contract quoted, harnesses, inputs and bounds, toolchain, mutation
-  check), the row's status, and the inert
+- With hand-written tables (the PCRE2 port), a Kani discharge needs
+  four things in the same change: the harness, a
+  `verus/seams/kani-<id>.md` record (contract quoted, harnesses, inputs
+  and bounds, toolchain, mutation check), the row's status, and the
+  inert
   `#[cfg_attr(any(), discharged_by = "kani")]` marker. The counter fails
   a marker with no record.
 - A shipped function outside `verus!` (plain Rust, such as FFI glue)
@@ -179,8 +182,9 @@ spellings.
   counter refuses the marker in this mode, so a function cannot be
   discharged twice.
 - Cross-project discharge by reading is allowed but stays trusted:
-  pcre3's `c_malloc`/`c_free` seam is discharged by reading challoc's
-  theorems at a pinned commit, and the record says nothing re-checks it.
+  the PCRE2 port's `c_malloc`/`c_free` seam is discharged by reading
+  challoc's theorems at a pinned commit, and the record says nothing
+  re-checks it.
 - challoc adds tools per seam kind: Isla traces inline assembly on
   Sail's Arm and x86 models; `make emptyasm` checks empty `asm!`
   templates emit nothing; loom and GenMC check copies of atomics
@@ -191,11 +195,11 @@ spellings.
   (challoc's `assert_only_at`).
 
 Never add any of the seam spellings above to make a proof pass. Lint
-for them (pcre3's `ci/lint-unsafe.sh`,
+for them (the PCRE2 port's `ci/lint-unsafe.sh`,
 challoc's `no_assume_or_admit_in_verified_code`). The counter classes a
 function as trusted rather than refusing it, so keep the lint beside the
-counter; chainz's `verus/count.sh` also refuses an `external` attribute
-on an `impl` or a `mod`.
+counter; the zlib port's `verus/count.sh` also refuses an `external`
+attribute on an `impl` or a `mod`.
 
 ## The FLOOR ratchet
 
@@ -210,7 +214,7 @@ fails when:
   `lowered FIGURE P REASON` line for that figure and value;
 - a discharged marker has no record;
 - a recursion cycle or a nondeterministic compile read is not in its
-  theorem's table (pcre3's RN1 and CD1 checks).
+  theorem's table (the PCRE2 port's RN1 and CD1 checks).
 
 Rules:
 
@@ -228,8 +232,8 @@ Rules:
   none while the share is within it. Every port records it the same way, as the kit's FLOOR header
   states: FLOOR, and the README badge that shows it, rise in a PR of
   their own, to the figures the check names on main, never in the PR
-  that earns them, so parallel PRs never conflict there (pcre3's
-  same-PR raises once cost #689 four updates from main;
+  that earns them, so parallel PRs never conflict there (the PCRE2
+  port's same-PR raises once cost one PR four updates from main;
   `references/pitfalls.md`). One exception is the port's first
   proof PR, which may raise FLOOR from 0.0 in the same PR, whether it
   brings the counter or the counter landed earlier at FLOOR 0.0
@@ -237,8 +241,8 @@ Rules:
   below the one the check names, never below the base's, when an open
   PR lands that share lower without a `lowered` line (code that
   verifies in fewer lines); its description names that PR, and the next
-  FLOOR PR records the figure the check names then (cg-bzip2 #306,
-  #337).
+  FLOOR PR records the figure the check names then (as the bzip2 port
+  did).
 - FLOOR compares with one base, the one Checks sets
   (`CHAINGUARD_BASE_REVISION`): the PR's base on a PR, and on main the
   start of the push the run covers. Not `HEAD^`: Checks settles a burst
@@ -262,8 +266,8 @@ Rules:
 - A drop is closed by verifying more code, in the PR or in a small PR
   that lands first. A `lowered` line is the last resort, and its reason
   names exactly which functions or lines became trusted or outside, with
-  counts (pcre3's FLOOR has examples). Deleting verified code, whole
-  functions or lines of one, lowers a share with nothing becoming
+  counts (the PCRE2 port's FLOOR has examples). Deleting verified code,
+  whole functions or lines of one, lowers a share with nothing becoming
   trusted or outside; that reason names the functions removed or
   shortened, says nothing became trusted or outside, and gives the same
   counts (the FLOOR template's header).
@@ -277,9 +281,9 @@ every run of its own PR and fails on main once a neighbour in the same
 module adds a little. Each PR passes on its own base; the merge fails.
 
 - Gate in CI: every function's share of its rlimit stays under
-  `max-share` (pcre3: 65%), read from Verus's `--output-json` statistics.
-  The allowlist only shrinks; a raised `#[verifier::rlimit(N)]` needs an
-  `rlimit-raised NAME N REASON` line.
+  `max-share` (the PCRE2 port: 65%), read from Verus's `--output-json`
+  statistics. The allowlist only shrinks; a raised
+  `#[verifier::rlimit(N)]` needs an `rlimit-raised NAME N REASON` line.
 - Work to 55%: when a function crosses 55% in development, restore
   headroom before pushing.
 - Restore in this order: `#[verifier::spinoff_prover]`; split the proof
@@ -287,9 +291,11 @@ module adds a little. Each PR passes on its own base; the merge fails.
   scope, a lemma in place of an inline proof). Raise the rlimit last, if
   at all. Never weaken a contract or add an `assume`.
 - Prefer `requires`/`ensures` pairs over implications in builder
-  contracts; pcre3 measured implications at 2 to 4 times the cost.
-- Keep a large derived view out of commonly named types: pcre3's CD1
-  found a `View` on `CompileOptions` tripled a neighbour's rlimit use.
+  contracts; the PCRE2 port measured implications at 2 to 4 times the
+  cost.
+- Keep a large derived view out of commonly named types: the PCRE2
+  port's CD1 found a `View` on `CompileOptions` tripled a neighbour's
+  rlimit use.
 
 ## Mutants: proving that tests and proofs bite
 
@@ -310,8 +316,8 @@ in the same PR:
 ## Test doubles and duplicated decisions
 
 A test that exercises a path production does not take certifies
-something untrue, just as a double that diverges does (mono's
-`sentinel/docs/testing-doubles.md`). For ports:
+something untrue, just as a double that diverges does (the Checks
+platform's guide to test doubles). For ports:
 
 - When a decision exists on a fast and a slow path, test the one that
   runs, or assert the two agree on a shared table.

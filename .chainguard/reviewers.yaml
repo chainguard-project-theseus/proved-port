@@ -1,5 +1,5 @@
 # Checks code reviewers for proved-port. Read from the default branch by
-# the Chainguard Checks code reviewer (mono's
+# the Chainguard Checks code reviewer (the Checks platform's
 # ai-cicd/sandbox/cmd/code-reviewer), so a change here takes effect once
 # it merges. The reviewer named here is the `bot:proved-port` owner of
 # every path in .github/codeowners.yaml. Shaped on the kit's own template
@@ -11,8 +11,8 @@ approve: true
 # Per-pass read limits, at their ceilings: kit/count/src/main.rs is near
 # 7,000 lines and kit/count/tests/cli.rs near 2,000, and a counter rule
 # change touches both and the README that states the rule, so each pass
-# may read the diff and its context. No `diff_lines`: mono's
-# code-reviewer README lists it as deprecated, and the reviewer ignores
+# may read the diff and its context. No `diff_lines`: the Checks
+# platform's code-reviewer README lists it as deprecated, and the reviewer ignores
 # it.
 limits:
   read_calls: 60

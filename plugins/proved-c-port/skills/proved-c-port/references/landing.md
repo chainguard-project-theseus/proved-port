@@ -32,8 +32,9 @@ and safe to merge while main moves every 15 minutes.
 ## Layered stacks
 
 - Land big work as a stack of single-commit PRs in dependency order,
-  each proved and gated on its own (pcre3's JIT: encoder and model;
-  certificate; equality; mapping and hook; native DFA; fast entry; JS7).
+  each proved and gated on its own (the PCRE2 port's JIT: encoder and
+  model; certificate; equality; mapping and hook; native DFA; fast
+  entry; JS7).
 - Keep each child rebased onto its parent's exact head once the parent
   has settled (review answered, CI mostly green, auto-merge armed), so
   the child's PR goes up minutes after the parent merges.
@@ -45,10 +46,10 @@ and safe to merge while main moves every 15 minutes.
 - When a large draft is split into slices, land the build files and the
   CI definitions first, so every later slice is gated on its own. Slices
   cut in parallel off one base onto a main that does not build have no
-  CI until the last one lands (chainz's first split).
+  CI until the last one lands (the zlib port's first split).
 - Deferring review findings out of a large split is fine when each one
   becomes a numbered follow-up with a citation to its thread, kept in
-  the repository (chainz's `docs/handoff.md`, F1 to F21), and the thread
+  the repository (the zlib port's `docs/handoff.md`), and the thread
   names the follow-up.
 
 ## Pushing
@@ -78,7 +79,7 @@ and safe to merge while main moves every 15 minutes.
   after it is skipped by that run, even seconds later; re-push a new
   sha to pick it up.
 - One label requests one leg, and where a repository splits a leg by
-  architecture, each architecture's leg has its own label. pcre3's:
+  architecture, each architecture's leg has its own label. The PCRE2 port's:
   `ci/run:differential` (the amd64 differential only),
   `ci/run:conformance/differential-arm64` (the aarch64 differential,
   the one that runs the native aarch64 JIT), `ci/run:fuzz-diff`,
@@ -94,7 +95,8 @@ and safe to merge while main moves every 15 minutes.
 - A new port's check keys, labels and deps entries start from the kit's
   `kit/templates/.chainguard/` files, so `ci/run:<check>` means the same
   leg in every port; `main` requires only `Chainguard Checks
-  (presubmit)`, set in chainguard-dev/infra's github-iac.
+  (presubmit)`, set in the github-iac ruleset of the organization's
+  infrastructure repository.
 
 ## Merging
 
@@ -118,8 +120,8 @@ and safe to merge while main moves every 15 minutes.
 
 Some ports require one approval and let a Checks reviewer bot give it,
 with the author squash-merging once CI is green and the PR is approved
-(chainz's `.chainguard/reviewers.yaml`; expat-rs's codeowners and
-`reviewer/expat-rs`). There:
+(the zlib port's `.chainguard/reviewers.yaml`; the Expat port's
+codeowners and its `reviewer/` bot). There:
 
 - The bot's approval presumes green CI; merge only when both hold on
   the same head.
@@ -150,7 +152,7 @@ with the author squash-merging once CI is green and the PR is approved
 
 - Start with the issue line (`Fixes #n`, or `Refs #n` for upstream
   issues and multi-PR work), unless the repository's `AGENTS.md` states
-  its own form (expat-rs: every PR body starts with `Fixes #n`).
+  its own form (the Expat port: every PR body starts with `Fixes #n`).
 - Say what changed, how it is verified (Verus result, FLOOR figures,
   mutants refused, tests added), any known differences (ledger ids), and
   the checks run.
@@ -158,4 +160,4 @@ with the author squash-merging once CI is green and the PR is approved
   `references/perf.md`, "Reporting in a PR").
 - Refresh the body on every push that changes what it describes.
 - Keep PR bodies and reply drafts in an untracked directory in the
-  clone (pcre3 used `.prbodies/`), never in the commit.
+  clone (the PCRE2 port used `.prbodies/`), never in the commit.

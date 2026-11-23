@@ -17,20 +17,21 @@ is a work item until it is root-caused and closed.
 5. After proving, re-measure on the box. A proof can change code
    layout, inlining and spills.
 
-Why: pcre3 fully verified a search-tries change that then regressed a
-PHP row by 56%. Verus time on a dead end is the most expensive waste in
-the loop.
+Why: the PCRE2 port fully verified a search-tries change that then
+regressed a PHP row by 56%. Verus time on a dead end is the most
+expensive waste in the loop.
 
 Correctness fixes are the exception: prove them directly.
 
 ## Arms
 
 - Name every port arm after the exact commit it was built from
-  (`keep-3ce1923e`), never a reused label. Record the mapping once, in
-  the write-up. A run may carry a label (pcre3's run `keep-grpa6`); the
-  port arms in it may not. The C library's baseline arms (pcre3's `A`
-  and `A0`) are not built from the port, so the write-up identifies
-  them by package version, build flags and library md5 instead.
+  (`keep-<sha8>`), never a reused label. Record the mapping once, in
+  the write-up. A run may carry a label (the PCRE2 port's run
+  `keep-grpa6`); the port arms in it may not. The C library's baseline
+  arms (the PCRE2 port's `A` and `A0`) are not built from the port, so
+  the write-up identifies them by package version, build flags and
+  library md5 instead.
 - Build arms from `git archive <sha> | gzip -n` tarballs and record the
   tarball md5 (it must match on the Mac and the box) and the library
   md5.
@@ -48,9 +49,9 @@ Every table shown to decision-makers has exactly these, all from one run
 with the arms interleaved:
 
 1. the port without its fast path against the C library without its
-   fast path (pcre3: arm A0, Wolfi's pcre2 rebuilt with `--disable-jit`,
-   so every consumer falls back to the interpreter and no per-consumer
-   switch can be missed);
+   fast path (the PCRE2 port: arm A0, Wolfi's pcre2 rebuilt with
+   `--disable-jit`, so every consumer falls back to the interpreter and
+   no per-consumer switch can be missed);
 2. the port with its fast path against the C library with its fast path;
 3. the port's fast path against the port without it.
 
@@ -59,11 +60,11 @@ trail, not in the headline table. Mark any cell from a different run or
 not yet measured; never fill it from another run.
 
 Correct: "noJIT vs pcre2 A0: M 45 / 4 / 55 (WIN / PAR / BEHIND,
-instructions)" for arm `keep-7ffd6880` (pcre3 main at #1032), with all
-three tallies from the one run that measured it.
+instructions)" for the PCRE2 port's arm named after its main commit,
+with all three tallies from the one run that measured it.
 
 Wrong: comparing the port's interpreter with the C library's JIT without
-saying so (pcre3's early Varnish -30% was mostly that).
+saying so (the PCRE2 port's early Varnish -30% was mostly that).
 
 ## Full tables
 
@@ -78,8 +79,8 @@ saying so (pcre3's early Varnish -30% was mostly that).
 
 ## Boxes
 
-- Use bare-metal cloud machines for reportable numbers (pcre3:
-  `c4a-highmem-96-metal` for aarch64, `c4-standard-288-metal` for
+- Use bare-metal cloud machines for reportable numbers (the PCRE2
+  port: `c4a-highmem-96-metal` for aarch64, `c4-standard-288-metal` for
   x86-64). Shared runners and laptops are for plumbing only.
 - Run them on demand: start for a queued arm, run, pull, write up, stop.
   Stop, not delete: disks and setup persist. Log start and stop times
@@ -117,10 +118,10 @@ per block (the kit's `emu`, an aarch64 interpreter in Go).
 
 - Prefer precise sampling: Arm SPE (`arm_spe_0`, retired ops, an
   interval with jitter) on aarch64, PEBS precise events on x86-64.
-- Interrupt-based `perf record` skids. In pcre3's grpa7 run it put a
-  per-pattern-byte stack reload in `engine::compile` into libc; uprobes
-  on libc showed identical call counts and sizes in both arms, and SPE
-  put the cost back where it was.
+- Interrupt-based `perf record` skids. In the PCRE2 port's grpa7 run it
+  put a per-pattern-byte stack reload in `engine::compile` into libc;
+  uprobes on libc showed identical call counts and sizes in both arms,
+  and SPE put the cost back where it was.
 - Cross-check attribution with uprobes on the suspect library's entry
   points (counts and size histograms per arm).
 - Raise `perf_event_max_sample_rate` and lower
@@ -130,10 +131,11 @@ per block (the kit's `emu`, an aarch64 interpreter in Go).
 ## Layout, inlining and spills
 
 - Pin code alignment in the build config so unrelated size changes do
-  not move hot loops (pcre3: `-C llvm-args=-align-all-functions=6
-  -C llvm-args=-align-loops=64`, about 10% more `.text`). A comparison
-  build that sets `RUSTFLAGS` must carry the same flags; the bench
-  script checks the rustc command line and refuses otherwise.
+  not move hot loops (the PCRE2 port:
+  `-C llvm-args=-align-all-functions=6 -C llvm-args=-align-loops=64`,
+  about 10% more `.text`). A comparison build that sets `RUSTFLAGS` must
+  carry the same flags; the bench script checks the rustc command line
+  and refuses otherwise.
 - Small type-layout changes move LLVM decisions. Removing one enum
   variant changed `Item`'s tail padding, moved an `Option` niche, and
   re-split 64-byte copies into a per-byte stack reload; restoring the
