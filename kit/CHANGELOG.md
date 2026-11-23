@@ -837,6 +837,7 @@ where it reports drift.
   package is the first that builds the three tools, so a port relying
   on them moves its pin to 0.4.12 once that package is out, as for any
   release.
+- The counter's version is 0.4.12, ready for the v0.4.12 tag.
 
 ### Porting notes
 
@@ -1058,6 +1059,12 @@ where it reports drift.
     changes the command each ledger file's header names, so it
     rewrites its ledger (`proved-port-seams -write`) in the same
     commit. A port that uses none of these changes nothing.
+17. After notes 2 and 5, move the pin together, to 0.4.12, as 0.3.1's
+    note 1 lists, once the 0.4.12 package is out. Then, on the new
+    kit, run `make verus-headers` (note 6 is the drift it reports),
+    `make lint-unsafe` (note 1), and note 16 where it applies. A port
+    moving from 0.4.10 or earlier applies the notes of each release in
+    between first.
 
 ## 0.4.11
 
