@@ -402,22 +402,24 @@ reach.go	strings.HasPrefix(p, "/") || path.Join(dir, p) != root	path.Join(dir, p
 reach.go	regexp.MustCompile(`^\[\[?[^\[\]]+\]\]?$`)	regexp.MustCompile(`^\[\[?[^\[\]]+\]\]?`)
 #
 # #239: the manifest reader: open multi-line values, SOURCE not src.
-reach.go	if open > 0 {	if false {
+reach.go	if open != "" {	if false {
 reach.go	if t != "" && t[0] == '[' {	if false {
-reach.go	if open != 0 {	if open < 0 {
+reach.go	if len(open) > 0 {	if len(open) < 0 {
 reach.go	if msg := brackets(r, man, root); msg != "" {	if msg := ""; msg != "" {
 reach.go	if why := brackets(r, man, root); why != "" {	if why := ""; why != "" {
-reach.go	open = r.depth // what the value	open = 1 // what the value
-reach.go	open = r.depth // what this value	open = 0 // what this value
+reach.go	open = r.open // what the value	open = "[" // what the value
+reach.go	open = r.open // what this value	open = "" // what this value
 reach.go	if !r.eq {	if false {
 reach.go	if t == "" {	if false {
 reach.go	case r.under:	case false:
 reach.go	case r.reopen:	case false:
 reach.go	r.reopen = r.reopen || ended	r.reopen = r.reopen && ended
-reach.go	r.under = r.under || r.depth < 0	r.under = false
-reach.go	ended = r.depth == 0	ended = false
-reach.go	r.depth++	r.depth += 0
-reach.go	r.depth--	r.depth -= 0
+reach.go	r.under = true	r.under = false
+reach.go	ended = r.open == ""	ended = false
+reach.go	r.open += string(c)	r.open += "["
+reach.go	r.open = r.open[:n-1]	r.open = r.open[:n]
+reach.go	want = '{'	want = '['
+reach.go	n == 0 || r.open[n-1] != want	n == 0 || want == 0
 reach.go	case c == '=':	case false:
 reach.go	if at < 0 {	if true {
 reach.go	strings.TrimSpace(l[at+1:end])	strings.TrimSpace(l[at+1:])
@@ -426,10 +428,11 @@ reach.go	break scan	continue scan
 reach.go	r.text, r.closed = strings.TrimSpace(l[:end]), q == 0	r.text, r.closed = strings.TrimSpace(l[:end]), true
 reach.go	if i == 0 {	if i == 1 {
 reach.go	if strings.Contains(l, bom) {	if false {
-reach.go	braces++	braces += 0
-reach.go	braces--	braces -= 0
-reach.go	ended = r.depth == 0 && braces == 0	ended = r.depth == 0
-reach.go	ended = braces == 0 && r.depth == 0	ended = false
+#
+# #246: braces tracked over lines with brackets (multi-line inline tables).
+reach.go	case c == '[' || c == '{':	case c == '[':
+reach.go	case c == ']' || c == '}':	case c == ']':
+reach.go	if c == '}' {	if false {
 reach.go	named = true	named = false
 reach.go	root != def && !named	!named
 reach.go	root != def && !named	root != def && (!named || named)

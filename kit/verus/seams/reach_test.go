@@ -280,8 +280,8 @@ func TestReachTargets(t *testing.T) {
 		// Along the line, not only its end: a `]` past the value's start,
 		// or a `[` after the value closes, on a key line or a later one.
 		{libTree, "![package]\nname = \"p\"\nx = ] [\n", "Cargo.toml has a value with an unmatched `]`"},
-		{libTree, "![package]\nname = \"p\"\nx = [\n  1], [2,\n]\n", "Cargo.toml has a `[` after a value closes"},
-		{libTree, "![package]\nname = \"p\"\nx = [1] [2]\n", "Cargo.toml has a `[` after a value closes"},
+		{libTree, "![package]\nname = \"p\"\nx = [\n  1], [2,\n]\n", "Cargo.toml has a `[` or `{` after a value closes"},
+		{libTree, "![package]\nname = \"p\"\nx = [1] [2]\n", "Cargo.toml has a `[` or `{` after a value closes"},
 		{libTree, "![package]\nname = \"p\"\nx = [\n  1]]\n", "Cargo.toml has a value with an unmatched `]`"},
 		{libTree, "![package]\nname = \"p\"\nx = [[1], [2]]\ny = [\n  1, [2],\n  3]\n", ""},
 		// Outside a value, a line that is no header and no key (a stray
@@ -299,7 +299,27 @@ func TestReachTargets(t *testing.T) {
 		// An inline table's arrays: the value closes outside its braces.
 		{libTree, "[package.metadata]\nfoo = { a = [1], b = [2] }\n", ""},
 		{libTree, "[lints.rust]\nunexpected_cfgs = { level = \"warn\", check-cfg = [\"cfg(a)\"], other = [\"b\"] }\n", ""},
-		{libTree, "![package]\nname = \"p\"\nx = { a = [1] } [2]\n", "Cargo.toml has a `[` after a value closes"},
+		{libTree, "![package]\nname = \"p\"\nx = { a = [1] } [2]\n", "Cargo.toml has a `[` or `{` after a value closes"},
+		{libTree, "![package]\nname = \"p\"\nx = { a = 1 } { b = 2 }\n", "Cargo.toml has a `[` or `{` after a value closes"},
+		// A TOML 1.1 multi-line inline table (#246): its braces are
+		// tracked over its lines like an array's brackets, so its lines
+		// are the value's and its `}` line is no stray line.
+		{libTree, "[package.metadata.x]\nopts = {\n  a = 1,\n}\n", ""},
+		{libTree, "[package.metadata.x]\nopts = { # options\n  a = [\n    1,\n  ],\n  b = { c = 2 },\n  d = {\n    e = \"}\",\n  },\n}\n", ""},
+		// A key inside it under [lib] is the value's (lib.x.path), not
+		// [lib]'s own path; [lib]'s path after the table still counts.
+		{libTree, "[lib]\nx = {\n  path = \"src/ffi.rs\",\n}\n", ""},
+		{libTree, "[lib]\nx = {\n  a = 1,\n}\npath = \"src/ffi.rs\"\n", "Cargo.toml sets a target path \"src/ffi.rs\""},
+		// A line starting with `[` inside it is refused; so are a table
+		// left open at the end, a closer of the other kind, and the
+		// target spellings it would hide.
+		{libTree, "[package.metadata.x]\nopts = {\n[lib]\npath = \"src/ffi.rs\"\n}\n", "Cargo.toml has a line starting with `[` inside a multi-line value"},
+		{libTree, "![package]\nname = \"p\"\nx = {\n  a = 1,\n", "Cargo.toml has a value that does not close before its end"},
+		{libTree, "![package]\nname = \"p\"\nx = {\n  a = [1,\n}\n]\n", "Cargo.toml has a value with an unmatched `]` or `}`"},
+		{libTree, "![package]\nname = \"p\"\nx = [1}\n", "Cargo.toml has a value with an unmatched `]` or `}`"},
+		{libTree, "![package]\nname = \"p\"\nx = {\n  a = 1,\n} [2]\n", "Cargo.toml has a `[` or `{` after a value closes"},
+		{libTree, "lib = {\n  path = \"src/ffi.rs\",\n}\n", "Cargo.toml sets lib in a form the check does not read"},
+		{libTree, "[lib]\npath = {\n  a = \"b\",\n}\n", "Cargo.toml sets a target path {"},
 		// The key is read up to the first `=` outside quoted strings.
 		{libTree, "[lib]\n\"a=b\" = 1\npath = \"src/ffi.rs\"\n", "Cargo.toml sets a target path \"src/ffi.rs\""},
 		{libTree, "[lib]\n'x=y' = 'src/lib.rs'\n", ""},
