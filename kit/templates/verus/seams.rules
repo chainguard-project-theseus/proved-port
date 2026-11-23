@@ -83,14 +83,20 @@ cite-tag	GenMC	partial
 # whose doc comment or body names the seam's function in backquotes, in
 # a file that names the seam's source file in backquotes and that
 # DIR/lib.rs declares with `mod MOD;`, DIR/../Cargo.toml keeping
-# DIR/lib.rs the library root with its tests on. The other tags (GenMC here) are
-# the port's own checks to resolve, from seams -cites (one line per
-# citation).
+# DIR/lib.rs the library root with its tests on. A cite-case tag cites
+# `CASE [MODEL ...]`: the one line of DIR/cases (`name | template |
+# models | constants | expected`) naming CASE, expecting `pass` alone,
+# run under exactly those models in that order, whose DIR/TEMPLATE.rs
+# names the seam's source file and function in backquotes. Any other
+# tag is the port's own check to resolve, from seams -cites (one line
+# per citation).
 cite-fn	Kani	kani::proof	kani
 cite-module	kani_proofs	src/kani
 cite-assert	const assert
 # challoc's loom models, `#[cfg(test)] mod m;` lines in tests/loom/src/lib.rs:
 # cite-test	loom	tests/loom/src	test
+# challoc's GenMC cases, tests/genmc/cases as tests/genmc/run.sh reads it:
+# cite-case	GenMC	tests/genmc
 # challoc's guard tests: `callers: PATH` names a #[test] fn with its row
 # in the guard-test table:
 # cite-tag	callers

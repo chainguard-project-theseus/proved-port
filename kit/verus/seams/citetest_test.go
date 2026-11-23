@@ -586,7 +586,7 @@ func TestCiteTestRules(t *testing.T) {
 		{base + "cite-test\tK\n", "r:6: want cite-test<TAB>TAG<TAB>DIR[<TAB>CFG...]"},
 		{base + "cite-test\tK\td\t\n", "with no empty field"},
 		{base + "cite-test\tK\t../d\n", "r:6: cite-test ../d: want a path inside the tree"},
-		{base + "cite-test\tK\td\ncite-test\tK\te\n", "r:7: cite-test K: the tag already has a cite-fn, cite-assert or cite-test line"},
+		{base + "cite-test\tK\td\ncite-test\tK\te\n", "r:7: cite-test K: the tag already has a cite-fn, cite-assert, cite-test or cite-case line"},
 		{base + "cite-fn\tK\ttest\ncite-test\tK\td\n", "r:7: cite-test K: the tag already has"},
 		{base + "cite-test\tK\td\ncite-assert\tK\n", "r:7: cite-assert K: the tag already has"},
 		{base + "cite-test\tK\td\tfeature = \"loom\"\n", "r:6: cite-test K: CFG feature = \"loom\" holds a literal"},

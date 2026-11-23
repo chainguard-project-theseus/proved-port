@@ -334,8 +334,8 @@ func (v *resolver) row(rw citeRow, target string) bool {
 }
 
 // resolveCites checks each citation of a tag the rules give a check
-// (cite-fn, cite-assert, cite-row): one line per citation that does not
-// resolve, once each.
+// (cite-fn, cite-assert, cite-test, cite-case, cite-row): one line per
+// citation that does not resolve, once each.
 func resolveCites(root string, r *Rules, es []*entry) []string {
 	v := &resolver{root: root, r: r, files: map[string]*srcFile{}}
 	var out []string
@@ -364,6 +364,12 @@ func resolveCites(root string, r *Rules, es []*entry) []string {
 			}
 			if ct, ok := r.CiteTest[c.tag]; ok {
 				if why := v.test(ct, e, c.target); why != "" {
+					add(fmt.Sprintf("%s%s: %s: %s", at, c.tag, c.target, why))
+					continue
+				}
+			}
+			if dir, ok := r.CiteCase[c.tag]; ok {
+				if why := v.caseCite(dir, e, c.target); why != "" {
 					add(fmt.Sprintf("%s%s: %s: %s", at, c.tag, c.target, why))
 					continue
 				}

@@ -365,8 +365,10 @@ is deleted in that PR.
    pins, `verus/kani/pins.txt`), seams.sh's `pins()` and `copies()`
    (#248). A `cite-test` line resolves a test crate's citations
    (`MOD::TEST`, challoc's loom models), seams.sh's `loomtest()`
-   (#252). Still to come: resolving the rest (Isla, emptyasm,
-   GenMC), which stays in challoc's script reading `-cites` and
+   (#252). A `cite-case` line resolves a cases table's citations
+   (`CASE [MODELS]`, challoc's GenMC cases), seams.sh's `genmctest()`
+   (#254). Still to come: resolving the rest (Isla, emptyasm), which
+   stays in challoc's script reading `-cites` and
    `-entries` until it moves; and challoc's switch. The package installs the tool
    as `proved-port-seams` (#243).
 4. **ABI checks and the deviations ratchet.** pcre3: `ci/abi.sh` and
