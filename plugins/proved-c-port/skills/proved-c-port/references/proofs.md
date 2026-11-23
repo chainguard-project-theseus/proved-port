@@ -20,7 +20,12 @@ ordinary builds, so the shipped library is unchanged.
   a lead byte its sequence length), list it in the theorem file's
   Premises table with the test that pins it.
 - Prefer theorems that remove a whole vulnerability class over theorems
-  that rule out one defect. Pick them from upstream's CVE survey.
+  that rule out one defect. Pick them from upstream's CVE survey
+  (`docs/research/cves.md`); `verus/VULN-CLASSES.md` (the kit's
+  template is `kit/templates/verus/VULN-CLASSES.md`) maps each CVE to
+  the theorem that rules its class out for every input of the exported
+  functions, or to the `vuln class: <class> (<ids>)` issue that will
+  (references/lifecycle.md, the survey step).
 - Write the spec of the slow path first (an interpreter's state model,
   `vm_run_c`), so every fast path has something to be proved equal to.
 - For whole-compile equality, prove an observational statement over a

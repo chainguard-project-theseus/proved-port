@@ -75,6 +75,11 @@ check.
   its rule and a pinning test. expat-rs's S1 to S14 (`CONTRIBUTING.md`)
   and `docs/research/cves.md` are the model; theorems then cite the rule
   they discharge.
+- When the survey lands, start `verus/VULN-CLASSES.md` from the kit's
+  template (`kit/templates/verus/VULN-CLASSES.md`). The survey stays the
+  research; the catalog maps each CVE to the theorem that rules its
+  class out for every input, or to the `vuln class: <class> (<ids>)`
+  issue that will. A class with only a pinning test is a gap there.
 - Pick the oracle's source. A port that tracks the distro compares with
   its `-dev` package; a port pinned to one upstream release builds the
   oracle from upstream's release tarball, checked by SHA-256, so the
