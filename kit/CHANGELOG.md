@@ -218,6 +218,7 @@ where it reports drift.
   "none"), its "Keeping this current"
   names the check, and the template's `verus/seams.rules` holds the
   line commented. A port without the line sees no change.
+- The counter's version is 0.4.13, ready for the v0.4.13 tag.
 
 ### Porting notes
 
@@ -279,6 +280,13 @@ where it reports drift.
    paragraph is missing or cites neither form (write "none" in a
    paragraph with nothing to cite). A port with another layout, or
    without the line, changes nothing.
+9. After note 5, move the pin together, to 0.4.13, as 0.3.1's note 1
+   lists, once the 0.4.13 package, the first with `proved-port-calls`,
+   is out. Then, on the new kit, run `make verus-headers`: no file it
+   holds changed in this release, so it reports no drift. Notes 2, 3,
+   4, 6 and 8 are optional and may follow in later commits. A port
+   moving from 0.4.11 or earlier applies the notes of each release in
+   between first.
 
 ## 0.4.12
 
