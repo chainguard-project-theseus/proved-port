@@ -497,6 +497,11 @@ is deleted in that PR.
    stand-in perf and taskset. `rounds.sh -E SET` takes a `perf stat`
    event list per arch from `kit/perf/box/events.tsv` (#182), which
    holds port A's aarch64 `frontend` list; there is no x86-64 list yet.
+   The PCRE2 port's `ci/bench.sh` runner, agreement check and rustc
+   flag check are `kit/make/bench.sh` (`make bench-run`, #262), with
+   make.yaml's `bench-test`; it is unvalidated until a box run of the
+   port's workloads through it matches the port's own runner, and the
+   port's switch to it is to come.
    Still to come: the noise-baseline
    verdicts, the table join, the per-port workload files, the pull's
    fetch, and the rest of section 3's item 5 (the box run skeleton):
@@ -548,8 +553,9 @@ is deleted in that PR.
    the package in `/usr/share/proved-port/make/`, with the `verus` (and its
    `verus-proofs` and `verus-count` halves), `verus-count-test`,
    `verus-headers`, `kani`, `kani-list`, `kani-regular`,
-   `lint-unsafe` (#150), `noalias` (#159) and `verify` (#61) targets; `bench` and
-   `remote` are still to come. The templates are in
+   `lint-unsafe` (#150), `noalias` (#159) and `verify` (#61) targets, and
+   `bench-run` (#262, unvalidated; a port's `bench` wraps it); `remote`
+   is still to come. The templates are in
    `kit/templates/.chainguard/` and
    `kit/templates/.github/` (`kit/templates/README.md`, "Repository
    configuration"): the check files in the shape the PCRE2 port,
@@ -573,5 +579,5 @@ is deleted in that PR.
    explain's output with the port's `ci/kit-calls.rules`; the template
    of that file lists the template's checks, lint.yaml's source-rules
    runs the target, and go.yaml's `kit-calls-template` runs it with the
-   real chainctl over the filled templates. Still to come: the `bench`
-   and `remote` targets above.
+   real chainctl over the filled templates. Still to come: the `remote`
+   target above.

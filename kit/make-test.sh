@@ -547,6 +547,16 @@ expect "make -n consumers-run, the defaults" \
 expect "make -n consumers-run, names, sonames, a prefix and directories" \
   "$(shows consumers-run CONSUMERS_LIB=swap CONSUMERS_NAMES=' grep  git ' CONSUMERS_SONAME='libfoo.so.1  libfoo-posix.so.3' CONSUMERS_PREFIX=' CG_FOO ' CONSUMERS_DIR=' t/c ' CONSUMERS_WORK=' w ')" \
   "CONSUMERS_DIR='t/c' CONSUMERS_WORK='w' CONSUMERS_SONAME='libfoo.so.1 libfoo-posix.so.3' CONSUMERS_PREFIX='CG_FOO' sh $home/make/consumers.sh run 'swap' 'grep' 'git'"
+# bench-run passes every variable stripped in the script's environment,
+# always (an empty one the script reads as unset), with the directories'
+# defaults, then the suite and each word of BENCH_ARGS as one argument.
+bench_set="BENCH_SRC=' bench/b.c ' BENCH_PACKAGE=foo-capi BENCH_REF=foo BENCH_PORT=cg-foo BENCH_SO='target/release/libfoo.so*'"
+expect "make -n bench-run, the defaults" \
+  "$(eval "shows bench-run $bench_set BENCH_MODES=' '")" \
+  "BENCH_SRC='bench/b.c' BENCH_PACKAGE='foo-capi' BENCH_REF='foo' BENCH_PORT='cg-foo' BENCH_SO='target/release/libfoo.so*' BENCH_SUITES='bench' BENCH_OUT='target/remote-out/bench' BENCH_WORK='target/bench' BENCH_CRATE='' BENCH_FLAGS='' BENCH_LINK='' BENCH_CC='' BENCH_CFLAGS='' BENCH_LDLIBS='' BENCH_MODES='' BENCH_REF_ARGS='' BENCH_PORT_ARGS='' BENCH_NEEDS='' BENCH_REF_FILE='' BENCH_PREFIX='' sh $home/make/bench.sh"
+expect "make -n bench-run, every variable, a suite and arguments" \
+  "$(eval "shows bench-run $bench_set BENCH_CRATE=foo_capi BENCH_FLAGS='llvm-args=-align-loops=64  x' BENCH_LINK='sh scripts/link-so.sh release' BENCH_CC=gcc BENCH_CFLAGS=-O3 BENCH_LDLIBS=-lfoo BENCH_MODES='interp jit' BENCH_REF_ARGS='--expect foo' BENCH_PORT_ARGS='--expect cg-foo' BENCH_NEEDS=/usr/include/foo.h BENCH_REF_FILE=/usr/lib/libfoo.so.1 BENCH_PREFIX=CG_FOO BENCH_SUITES=s BENCH_OUT=o BENCH_WORK=w BENCH_SUITE=' consumers ' BENCH_ARGS='--size 4M  --only sherlock*'")" \
+  "BENCH_SRC='bench/b.c' BENCH_PACKAGE='foo-capi' BENCH_REF='foo' BENCH_PORT='cg-foo' BENCH_SO='target/release/libfoo.so*' BENCH_SUITES='s' BENCH_OUT='o' BENCH_WORK='w' BENCH_CRATE='foo_capi' BENCH_FLAGS='llvm-args=-align-loops=64 x' BENCH_LINK='sh scripts/link-so.sh release' BENCH_CC='gcc' BENCH_CFLAGS='-O3' BENCH_LDLIBS='-lfoo' BENCH_MODES='interp jit' BENCH_REF_ARGS='--expect foo' BENCH_PORT_ARGS='--expect cg-foo' BENCH_NEEDS='/usr/include/foo.h' BENCH_REF_FILE='/usr/lib/libfoo.so.1' BENCH_PREFIX='CG_FOO' sh $home/make/bench.sh 'consumers' '--size' '4M' '--only' 'sherlock*'"
 
 # verify runs every target VERIFY_TARGETS lists, in order, each with the
 # command line's variables. Under -n make prints its loop (a line naming
@@ -656,6 +666,13 @@ refuses_make "make -n known-cites with KNOWN_CITES_OFFLINE=0" "KNOWN_CITES_OFFLI
 refuses_make "make -n consumers-run with no CONSUMERS_LIB" "CONSUMERS_LIB is empty" consumers-run
 refuses_make "make -n consumers-run with a blank CONSUMERS_DIR" "CONSUMERS_DIR is empty" consumers-run CONSUMERS_LIB=swap CONSUMERS_DIR=' '
 refuses_make "make -n consumers-run with no CONSUMERS_WORK" "CONSUMERS_WORK is empty" consumers-run CONSUMERS_LIB=swap CONSUMERS_WORK=
+for v in BENCH_SRC BENCH_PACKAGE BENCH_REF BENCH_PORT BENCH_SO BENCH_SUITES BENCH_OUT BENCH_WORK; do
+  refuses_make "make -n bench-run with a blank $v" "$v is empty" bench-run BENCH_SRC=b.c BENCH_PACKAGE=p BENCH_REF=r BENCH_PORT=q BENCH_SO=s "$v= "
+done
+refuses_make "make -n bench-run with a single quote" "BENCH_LINK holds a single quote" bench-run BENCH_SRC=b.c BENCH_PACKAGE=p BENCH_REF=r BENCH_PORT=q BENCH_SO=s "BENCH_LINK=sh -c 'x'"
+refuses_make "make -n bench-run with a single quote in BENCH_ARGS" "BENCH_ARGS holds a single quote" bench-run BENCH_SRC=b.c BENCH_PACKAGE=p BENCH_REF=r BENCH_PORT=q BENCH_SO=s "BENCH_ARGS=--only 'x'"
+refuses_make "make -n bench-run with two suites" "BENCH_SUITE is 'a b': name one suite" bench-run BENCH_SRC=b.c BENCH_PACKAGE=p BENCH_REF=r BENCH_PORT=q BENCH_SO=s "BENCH_SUITE=a b"
+refuses_make "make -n bench-run with a suite starting with -" "BENCH_SUITE is '--x': name one suite" bench-run BENCH_SRC=b.c BENCH_PACKAGE=p BENCH_REF=r BENCH_PORT=q BENCH_SO=s BENCH_SUITE=--x
 refuses_make "make -n kit-calls with no KIT_CALLS" "KIT_CALLS is empty" kit-calls KIT_CALLS=
 refuses_make "make -n kit-calls with a blank KIT_CALLS_RULES" "KIT_CALLS_RULES is empty" kit-calls KIT_CALLS_RULES=' '
 
@@ -845,7 +862,7 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run kit-calls verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run bench-run kit-calls verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;

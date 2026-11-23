@@ -1255,7 +1255,7 @@ A port takes it this way:
   ifneq ($(wildcard $(PROVED_PORT_HOME)/make/proved-port.mk),)
   include $(PROVED_PORT_HOME)/make/proved-port.mk
   else
-  PROVED_PORT_TARGETS = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run kit-calls verify
+  PROVED_PORT_TARGETS = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run bench-run kit-calls verify
   .PHONY: $(PROVED_PORT_TARGETS)
   $(PROVED_PORT_TARGETS):
   	@echo "$@: no proved-port kit at $(PROVED_PORT_HOME): install theseus-proved-port~$(PROVED_PORT_VERSION), or set PROVED_PORT_HOME to a kit install root (make/, templates/ and KIT, as the package lays out /usr/share/proved-port)" >&2; exit 1

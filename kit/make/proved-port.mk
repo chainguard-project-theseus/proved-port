@@ -3,7 +3,7 @@
 # lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs,
 # skip-summary.sh, glibc-max.sh, known-failures.sh, header-check.sh,
 # abi-elf.sh, kani-quotes.sh, deviations.sh, ledger-active.sh,
-# known-cites.sh, consumers.sh, fuzz-diff.h, fuzz-diff.c (the
+# known-cites.sh, consumers.sh, bench.sh, fuzz-diff.h, fuzz-diff.c (the
 # differential fuzzer's driver shell, which a port compiles into its
 # driver; no target) and VERUS-FILES, in
 # /usr/share/proved-port/make/, the kit's templates in
@@ -123,6 +123,13 @@
 #                     CONSUMERS_DIR, against the swap directory
 #                     CONSUMERS_LIB, with the fetch and loaded helpers
 #                     (the PCRE2 port's consumer harness).
+#   bench-run         bench.sh: the port's C bench program BENCH_SRC on
+#                     the reference library and the port's (BENCH_SO,
+#                     built from BENCH_PACKAGE with the rustc flags
+#                     BENCH_FLAGS checked) in each of BENCH_MODES, its
+#                     counts checked to agree, and a table; or the suite
+#                     BENCH_SUITE (the PCRE2 port's ci/bench.sh;
+#                     unvalidated on a box, #262).
 #   kit-calls         proved-port-calls over `chainctl checks explain`:
 #                     the port's checks call the kit's targets, and run
 #                     no in-tree copy the kit replaced, as the rules
@@ -342,7 +349,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run kit-calls verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run bench-run kit-calls verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -743,6 +750,62 @@ consumers-run: ## each consumer in CONSUMERS_DIR, run against the swap directory
 	$(if $(strip $(CONSUMERS_WORK)),,$(error $(consumers_work_empty)))
 	CONSUMERS_DIR='$(strip $(CONSUMERS_DIR))' CONSUMERS_WORK='$(strip $(CONSUMERS_WORK))' CONSUMERS_SONAME='$(strip $(CONSUMERS_SONAME))' CONSUMERS_PREFIX='$(strip $(CONSUMERS_PREFIX))' sh $(PROVED_PORT_MAKE)consumers.sh run '$(strip $(CONSUMERS_LIB))'$(foreach n,$(CONSUMERS_NAMES), '$(n)')
 
+# --- bench-run -------------------------------------------------------------
+# bench.sh [SUITE] [ARGS...]; its header says what it does and what the
+# bench program prints. UNVALIDATED: no box run has compared it with the
+# PCRE2 port's own ci/bench.sh yet (#262). The target is bench-run, not
+# bench, so a port's own `bench` target (which runs it in a session and
+# brings BENCH_OUT back) can call it. The port's Makefile sets
+# BENCH_SRC (its C bench program), BENCH_PACKAGE (the cargo package of
+# its library), BENCH_REF and BENCH_PORT (the two sides' names) and
+# BENCH_SO (the library files to copy, as patterns); the target fails
+# while any is empty. The rest are optional: BENCH_CRATE, BENCH_FLAGS,
+# BENCH_LINK, BENCH_CC, BENCH_CFLAGS, BENCH_LDLIBS, BENCH_MODES,
+# BENCH_REF_ARGS, BENCH_PORT_ARGS, BENCH_NEEDS, BENCH_REF_FILE,
+# BENCH_PREFIX, and the directories BENCH_SUITES (bench), BENCH_OUT
+# (target/remote-out/bench) and BENCH_WORK (target/bench). On the
+# command line, BENCH_SUITE names a suite (one word, not starting with
+# `-`) and BENCH_ARGS the program's or suite's arguments, each word one
+# argument. All are passed stripped, always (the script reads an empty
+# one as unset), and each in single quotes, so the target fails while
+# any holds a single quote.
+BENCH_SRC ?=
+BENCH_PACKAGE ?=
+BENCH_REF ?=
+BENCH_PORT ?=
+BENCH_SO ?=
+BENCH_CRATE ?=
+BENCH_FLAGS ?=
+BENCH_LINK ?=
+BENCH_CC ?=
+BENCH_CFLAGS ?=
+BENCH_LDLIBS ?=
+BENCH_MODES ?=
+BENCH_REF_ARGS ?=
+BENCH_PORT_ARGS ?=
+BENCH_NEEDS ?=
+BENCH_REF_FILE ?=
+BENCH_PREFIX ?=
+BENCH_SUITES ?= bench
+BENCH_OUT ?= target/remote-out/bench
+BENCH_WORK ?= target/bench
+BENCH_SUITE ?=
+BENCH_ARGS ?=
+bench_required = BENCH_SRC BENCH_PACKAGE BENCH_REF BENCH_PORT BENCH_SO BENCH_SUITES BENCH_OUT BENCH_WORK
+bench_env = $(bench_required) BENCH_CRATE BENCH_FLAGS BENCH_LINK BENCH_CC BENCH_CFLAGS BENCH_LDLIBS BENCH_MODES BENCH_REF_ARGS BENCH_PORT_ARGS BENCH_NEEDS BENCH_REF_FILE BENCH_PREFIX
+bench_empty = $(firstword $(foreach v,$(bench_required),$(if $(strip $($(v))),,$(v))))
+bench_quoted = $(firstword $(foreach v,$(bench_env) BENCH_SUITE BENCH_ARGS,$(if $(findstring ',$($(v))),$(v))))
+bench_empty_msg = $(bench_empty) is empty: the port's Makefile sets BENCH_SRC, BENCH_PACKAGE, BENCH_REF, BENCH_PORT and BENCH_SO (kit/make/bench.sh's header), and BENCH_SUITES, BENCH_OUT and BENCH_WORK have defaults
+bench_quoted_msg = $(bench_quoted) holds a single quote, which the recipe's quoting cannot pass
+bench_suite_bad = BENCH_SUITE is '$(strip $(BENCH_SUITE))': name one suite, a word not starting with -
+
+bench-run: ## the port's bench program against the reference and the port library in each mode, the counts checked to agree, after a build whose rustc flags are checked (bench.sh; BENCH_SUITE runs a suite)
+	$(proved_port_version_check)
+	$(if $(bench_empty),$(error $(bench_empty_msg)))
+	$(if $(bench_quoted),$(error $(bench_quoted_msg)))
+	$(if $(or $(word 2,$(BENCH_SUITE)),$(filter -%,$(BENCH_SUITE))),$(error $(bench_suite_bad)))
+	$(foreach v,$(bench_env),$(v)='$(strip $($(v)))') sh $(PROVED_PORT_MAKE)bench.sh$(if $(strip $(BENCH_SUITE)), '$(strip $(BENCH_SUITE))')$(foreach a,$(BENCH_ARGS), '$(a)')
+
 # --- kit-calls -------------------------------------------------------------
 # PLAN step 8's lint that the port's checks call the kit's targets. The
 # recipe writes `chainctl checks explain --output=json .` (the resolved
@@ -793,7 +856,7 @@ kit-calls: ## the port's checks call the kit's targets and run no in-tree copy i
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run kit-calls
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run bench-run kit-calls
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end
