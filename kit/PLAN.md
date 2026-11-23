@@ -264,7 +264,7 @@ is deleted in that PR.
    Exit: neither port restates a header's rule
    outside the header, and each header holds the template's text.
    **Status:** the kit side is done: `kit/templates/` (FLOOR, RLIMIT,
-   REACH, MINTS, SEAMS.md, THEOREMS.md, a verus README.md with the
+   REACH, MINTS, SEAMS.md, THEOREMS.md, VULN-CLASSES.md (#264), a verus README.md with the
    sections the headers cite and Coverage and Counter in prose, the
    theorem and Kani record skeletons, the `ABI-nnn` ledger, AGENTS.md and
    CONTRIBUTING.md outlines; `kit/templates/README.md` says how to apply
