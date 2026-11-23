@@ -167,6 +167,21 @@ where it reports drift.
   target each template check's steps name, over a fixture of explain's
   output (`kit/checks/calls/testdata/templates.json`), and
   `kit-calls-template` runs it over the real chainctl's output too.
+- The templates gain `verus/VULN-CLASSES.md` (#264), a skeleton of the
+  vulnerability-class catalog every port keeps: scope and the
+  every-input rule (every argument of the exported functions a row
+  names that meets the C caller's premise; a theorem on an inner
+  function whose `requires` is not proved on every route in is
+  `partial:`), what the construction gives and what it does not, how
+  to read a row, the catalog table (`id | year | class | upstream |
+  {PORT} counterpart | ruled out by | sources`; `by construction:`
+  names its check, and a memory-safety row also names the theorem or
+  gap for the panic left), a section per class (property, proved, by
+  construction, partial or trusted, gap), the `vuln class:` gaps list,
+  and keeping it current. It is a starting point the port reshapes; no
+  kit check reads it, and `make verus-headers` does not hold it. The
+  skill's survey step (references/lifecycle.md) starts the catalog
+  from it.
 - `make noalias` finds the library's LLVM IR with cargo 1.100 (Wolfi's
   rust-1.100) and later. That cargo's build directory layout writes
   each unit's outputs to `release/build/PACKAGE/HASH/out` (or
@@ -234,7 +249,10 @@ where it reports drift.
    does not forbid `ci/lint-unsafe.sh`, where ports keep their own
    SAFETY: comment check. A port that does none of this changes
    nothing.
-7. A port on rust-1.99 or older changes nothing for these two targets.
+7. Nothing to change. A port without a `verus/VULN-CLASSES.md` starts
+   one from `templates/verus/VULN-CLASSES.md`; a port that has one may
+   keep its own layout.
+8. A port on rust-1.99 or older changes nothing for these two targets.
    A port moving to rust-1.100 or later moves its pin to 0.4.13 first,
    or in the same change as its rust stream, as 0.3.1's note 1 lists
    (`PROVED_PORT_VERSION` and every `theseus-proved-port~` pin), once
