@@ -363,7 +363,9 @@ is deleted in that PR.
    not-Copy checks, seams.sh's trackedcheck and notcopycheck (#235).
    A `pins` line holds a pins file's rows in place (challoc's Kani
    pins, `verus/kani/pins.txt`), seams.sh's `pins()` and `copies()`
-   (#248). Still to come: resolving the rest (Isla, emptyasm, loom,
+   (#248). A `cite-test` line resolves a test crate's citations
+   (`MOD::TEST`, challoc's loom models), seams.sh's `loomtest()`
+   (#252). Still to come: resolving the rest (Isla, emptyasm,
    GenMC), which stays in challoc's script reading `-cites` and
    `-entries` until it moves; and challoc's switch. The package installs the tool
    as `proved-port-seams` (#243).

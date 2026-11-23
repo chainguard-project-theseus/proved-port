@@ -362,6 +362,12 @@ func resolveCites(root string, r *Rules, es []*entry) []string {
 					continue
 				}
 			}
+			if ct, ok := r.CiteTest[c.tag]; ok {
+				if why := v.test(ct, e, c.target); why != "" {
+					add(fmt.Sprintf("%s%s: %s: %s", at, c.tag, c.target, why))
+					continue
+				}
+			}
 			if r.CiteAssert[c.tag] && !v.assertion(c.target) {
 				add(fmt.Sprintf("%s%s: %s names no one labeled assertion (a top-level `const _: () = assert!(` right under a `// LABEL` comment, no attribute above it, in FILE)", at, c.tag, c.target))
 				continue

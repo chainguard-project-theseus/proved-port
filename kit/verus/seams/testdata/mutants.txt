@@ -264,8 +264,9 @@ resolve.go	if !seen[s] {	if true {
 resolve.go	f.clean = append(f.clean, lx.depth == 0 && lx.str == 0)	f.clean = append(f.clean, true)
 rules.go	"cite-row": max(len(f), 4)	"cite-row": len(f)
 rules.go	if !slices.Contains(r.CiteTags, f[1]) {	if false {
-rules.go	ok || r.CiteAssert[f[1]]	ok
-rules.go	ok || r.CiteAssert[f[1]]	(ok && false) || r.CiteAssert[f[1]]
+rules.go	fn || test || r.CiteAssert[f[1]]	fn || test
+rules.go	fn || test || r.CiteAssert[f[1]]	(fn && false) || test || r.CiteAssert[f[1]]
+rules.go	fn || test || r.CiteAssert[f[1]]	fn || (test && false) || r.CiteAssert[f[1]]
 rules.go	strings.ContainsAny(f[2], "[] ")	false
 rules.go	if _, ok := r.CiteRow[f[1]]; ok {	if false {
 rules.go	bad("cite-module %s: want an identifier", name)	_ = name
@@ -333,7 +334,7 @@ reach.go	if strings.HasPrefix(p, d+"/") || p == d+".rs" && !strings.HasPrefix(p,
 reach.go	if strings.HasPrefix(p, d+"/") || p == d+".rs" && !strings.HasPrefix(p, v.r.Source+"/") {	if strings.HasPrefix(p, d+"/") || p == d+".rs" {
 reach.go	if strings.HasPrefix(p, d+"/") || p == d+".rs" && !strings.HasPrefix(p, v.r.Source+"/") {	if strings.HasPrefix(p, d+"/") {
 reach.go	return p + " cannot be read whole"	return ""
-reach.go	if ln := innerGate(f); ln > 0 {	if ln := innerGate(f); false {
+reach.go	if ln := innerGate(f, nil); ln > 0 {	if ln := innerGate(f, nil); false {
 reach.go	if v.exists(lib) {	if false {
 reach.go	} else if !v.exists(main) {	} else if false {
 reach.go	if p == root {	if false {
@@ -352,7 +353,7 @@ reach.go	if ln == 0 {	if false {
 reach.go	if why != "" {	if false {
 reach.go	`[ \t]*;`)	`[ \t]*`)
 reach.go	if b.open == 0 && reOuterAttr.MatchString(strings.TrimLeft(c, " \t")) {	if false {
-reach.go	if reGateAttr.MatchString(a) {	if false {
+reach.go	if reGateAttr.MatchString(a) && !slices.Contains(allow, strings.TrimSpace(a)) {	if false {
 reach.go	if rePathAttr.MatchString(a) {	if false {
 reach.go	b = attrBlock{}	_ = b
 reach.go	if re.MatchString(c) && d0 != 0 {	if re.MatchString(c) && d0 != d0 {
@@ -380,7 +381,7 @@ reach.go	strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "")	strings.NewRep
 reach.go	strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "")	strings.NewReplacer(" ", "", "\t", "", `"`, "")
 reach.go	if p := strings.Trim(val, `"'`); strings.HasPrefix(p, "/") || path.Join(dir, p) != root {	if p := strings.Trim(val, `"'`); p == "\x00" {
 reach.go	if p := strings.Trim(val, `"'`); strings.HasPrefix(p, "/")	if p := val; strings.HasPrefix(p, "/")
-reach.go	strings.HasPrefix(val, "false")	val != ""
+reach.go#2/2	strings.HasPrefix(val, "false")	val != ""
 reach.go	(lib && k == "autolib" || !lib && k == "autobins")	(k == "autolib" || k == "autobins")
 reach.go	case table == "[lib]" && k == "path":	case false:
 reach.go	if !lib && table == "[[bin]]" {	if false {
@@ -554,3 +555,73 @@ scan.go#1/4	s.aopen > 0	false
 scan.go#2/4	s.aopen > 0	false
 scan.go#3/4	s.aopen > 0	false
 scan.go#4/4	s.aopen > 0	false
+# #252 (cite-test, seams.sh's loomtest()).
+citetest.go	!ok || !reIdent.MatchString(mod) || 	!ok ||
+citetest.go	 || !reIdent.MatchString(t)	 || false
+citetest.go	if !f.ok {	if false {
+citetest.go#1/2	ln == 0 {	false {
+citetest.go#2/2	ln == 0 {	false {
+citetest.go	} else if why != "" {	} else if false {
+citetest.go	v.modLine(lib, mod, ct.cfgs)	v.modLine(lib, mod, nil)
+citetest.go	[]string{lib, file}	[]string{file}
+citetest.go	[]string{lib, file}	[]string{lib}
+citetest.go	innerGate(v.file(p), ct.inner())	innerGate(v.file(p), nil)
+citetest.go	"#!"+strings.TrimPrefix(c, "#")	c
+citetest.go	ok && strings.Contains(rel, "/")	ok
+citetest.go	named = named || strings.Contains(l, src) || strings.Contains(l, short)	named = named || strings.Contains(l, src)
+citetest.go	named = named || strings.Contains(l, src) || strings.Contains(l, short)	named = named || strings.Contains(l, short)
+citetest.go	if !named {	if false {
+citetest.go	if strings.Contains(name, "::") {	if false {
+citetest.go	if path.Base(m) == "mod" {	if false {
+citetest.go	if sp == name {	if false {
+citetest.go	ok && reWordPath.MatchString(pre)	ok && (true || reWordPath.MatchString(pre))
+citetest.go	i += 2	i++
+citetest.go	if d0 != 0 && b.open == 0 {	if false && d0 != 0 && b.open == 0 {
+citetest.go	if d0 != 0 && b.open == 0 {	if d0 != 0 {
+citetest.go	f.clean[i] && reTestDoc	reTestDoc
+citetest.go	doc += " " + f.raw[i]	doc += ""
+citetest.go	if strings.TrimSpace(c) == "" {	if false {
+citetest.go	if hash {	if false && hash {
+citetest.go	if b.open == 0 && reLoneHash.MatchString(strings.TrimSpace(c)) {	if false {
+citetest.go	if cut := attrEnd(c, 0); cut > 0 {	if cut := attrEnd(c, 0); false && cut > 0 {
+citetest.go	raws[n] = raw	raws[n] = ""
+citetest.go	b, raws, doc = tailBlock(c), nil, ""	raws, doc = nil, ""
+citetest.go	b, raws, doc = tailBlock(c), nil, ""	b, raws, doc = attrBlock{}, nil, ""
+citetest.go	if nest(t[:s]) != 0 {	if false {
+citetest.go	if end == 0 {	if true {
+citetest.go	if end == 0 {	if false {
+citetest.go	at = s + end	break
+citetest.go	if loc == nil {	if true {
+citetest.go	if z := zeroAt(f.code[k], d); z >= 0 {	if z := zeroAt(f.code[k], d); false && z >= 0 {
+citetest.go	" " + f.raw[k][:min(z, len(f.raw[k]))]	" " + f.raw[k]
+citetest.go	" " + f.raw[k][:min(z, len(f.raw[k]))]	" "
+citetest.go	if z < 0 {	if true {
+citetest.go	d := d0	d := d0 + 1
+citetest.go	d--	d++
+citetest.go	b, raws, doc = tailBlock(rest), nil, ""	raws, doc = nil, ""
+citetest.go	b, raws, doc = tailBlock(rest), nil, ""	b, raws, doc = attrBlock{}, nil, ""
+citetest.go	hash = hashEnd(rest)	hash = false
+citetest.go	if why := v.targetsOf(ct.dir, lib, true); why != "" {	if why := v.targetsOf(ct.dir, lib, true); false && why != "" {
+citetest.go	v.targetsOf(ct.dir, lib, true)	v.targetsOf(ct.dir, lib, false)
+reach.go	case tests && table == "[lib]" && (k == "test" || k == "harness")	case table == "[lib]" && (k == "test" || k == "harness")
+reach.go	case tests && table == "[lib]" && (k == "test" || k == "harness")	case tests && (k == "test" || k == "harness")
+reach.go	(k == "test" || k == "harness") && strings.HasPrefix(val, "false")	k == "test" && strings.HasPrefix(val, "false")
+reach.go	(k == "test" || k == "harness") && strings.HasPrefix(val, "false")	k == "harness" && strings.HasPrefix(val, "false")
+reach.go	(k == "test" || k == "harness") && strings.HasPrefix(val, "false")	(k == "test" || k == "harness")
+citetest.go	test = test || reTestAttr.MatchString(a)	test = true
+citetest.go	if reShouldPanic.MatchString(a) {	if false {
+citetest.go	if reGateAttr.MatchString(a) && !slices.Contains(allow, raws[k]) {	if false && reGateAttr.MatchString(a) && !slices.Contains(allow, raws[k]) {
+citetest.go	!slices.Contains(allow, raws[k])	!slices.Contains(allow[:0], raws[k])
+citetest.go	if !test {	if false {
+citetest.go	text := doc	text := ""
+citetest.go	if !namesFn(text, name) {	if false {
+citetest.go	\(\) \{$`	`
+citetest.go#1/2	hash = hashEnd(c)	hash = false
+citetest.go#2/2	hash = hashEnd(c)	hash = false
+rules.go	"cite-test": max(len(f), 3)	"cite-test": 3
+rules.go	if f[0] == "cite-test" {	if false {
+rules.go	if strings.ContainsAny(g, "\"'") {	if false {
+rules.go	ct.cfgs = append(ct.cfgs, "#[cfg("+g+")]")	ct.cfgs = append(ct.cfgs, g)
+resolve.go	if why := v.test(ct, e, c.target); why != "" {	if why := v.test(ct, e, c.target); false {
+reach.go	!(ia <= 0 && slices.Contains(allow, strings.TrimSpace(text)))	true
+reach.go	!slices.Contains(allow, strings.TrimSpace(a))	!slices.Contains(allow, a)
