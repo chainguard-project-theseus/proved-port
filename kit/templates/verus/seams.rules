@@ -9,12 +9,13 @@
 # deda0db); reshape the lists and the guesses to the port's code.
 #
 # Where the ledger and the sources are, and the command that writes the
-# ledger (named in each ledger file's header). The package does not
-# install the generator yet: build it from the kit's kit/verus/seams with
-# go at the tag the port pins, and write here how the port runs it.
+# ledger (named in each ledger file's header). The theseus-proved-port
+# package installs the generator as proved-port-seams (on PATH; a
+# checkout's kit/install.sh installs it too); a port that runs it some
+# other way writes here how.
 ledger	verus/ledger
 source	src
-command	seams -write
+command	proved-port-seams -write
 seams-doc	verus/SEAMS.md
 #
 # Test files under SOURCE: not scanned for seams, read only for `unsafe

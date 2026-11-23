@@ -1,7 +1,11 @@
 #!/bin/sh
 # kit/install.sh PREFIX: installs this checkout's kit under PREFIX as the
 # theseus-proved-port package installs it under /usr: the counter built
-# from kit/count as PREFIX/bin/verus-count, kit/make/* (mode 0644) in
+# from kit/count as PREFIX/bin/verus-count, the kit's Go tools built
+# with go as PREFIX/bin/proved-port-fncmp (kit/perf/codegen/fncmp, the
+# codegen comparer), PREFIX/bin/proved-port-stats (kit/perf/stats, the
+# bench summaries) and PREFIX/bin/proved-port-seams (kit/verus/seams,
+# the seam ledger generator), kit/make/* (mode 0644) in
 # PREFIX/share/proved-port/make/, all of kit/templates in
 # PREFIX/share/proved-port/templates/, kit/CHANGELOG.md (the releases'
 # porting notes) as PREFIX/share/proved-port/CHANGELOG.md, and
@@ -24,7 +28,11 @@
 # --dev installs a development tree all the same, saying so; a port's
 # runs against it check nothing about a release.
 # kit/installed-test.sh installs the kit through this script. It builds
-# the counter (cargo; CARGO_TARGET_DIR, if set, is where).
+# the counter (cargo; CARGO_TARGET_DIR, if set, is where) and the Go
+# tools (go, with GOTOOLCHAIN=local and GOFLAGS=-mod=mod as the kit's
+# Go checks build them, into the same target directory's
+# go/), all before it touches PREFIX, so a failed build leaves an
+# earlier install as it was.
 set -eu
 
 dev=
@@ -36,8 +44,22 @@ fi
 prefix=$1
 kit=$(cd "$(dirname "$0")" && pwd)
 target=${CARGO_TARGET_DIR:-$kit/count/target}
+# Absolute, as cargo reads a relative one from here: the Go builds run
+# from each module's directory.
+case $target in
+  /*) ;;
+  *) target=$(pwd)/$target ;;
+esac
 
 cargo build --locked --release --manifest-path "$kit/count/Cargo.toml" --target-dir "$target"
+# The Go tools: the package's names, a module directory each. The names
+# carry the kit's prefix because fncmp, stats and seams are too generic
+# for /usr/bin.
+gotools='fncmp:perf/codegen/fncmp stats:perf/stats seams:verus/seams'
+mkdir -p "$target/go"
+for t in $gotools; do
+  (cd "$kit/${t#*:}" && GOTOOLCHAIN=local GOFLAGS=-mod=mod CGO_ENABLED=0 go build -trimpath -o "$target/go/proved-port-${t%%:*}" .)
+done
 # The package's version is its tag's, which is the counter's --version.
 version=$("$target/release/verus-count" --version | sed 's/^verus-count //')
 [ -n "$version" ] || { echo "kit/install.sh: verus-count --version printed no version" >&2; exit 1; }
@@ -68,6 +90,9 @@ rm -f "$home/KIT"
 rm -rf "$home/make" "$home/templates"
 mkdir -p "$prefix/bin" "$home/make" "$home/templates"
 install -m755 "$target/release/verus-count" "$prefix/bin/verus-count"
+for t in $gotools; do
+  install -m755 "$target/go/proved-port-${t%%:*}" "$prefix/bin/proved-port-${t%%:*}"
+done
 install -m644 "$kit"/make/* "$home/make/"
 cp -a "$kit/templates/." "$home/templates/"
 install -m644 "$kit/CHANGELOG.md" "$home/CHANGELOG.md"
@@ -76,4 +101,4 @@ install -m644 "$kit/CHANGELOG.md" "$home/CHANGELOG.md"
   echo "commit $commit"
   echo "tag v$version"
 } > "$home/KIT"
-echo "kit/install.sh: kit v$version ($commit) in $home, verus-count in $prefix/bin"
+echo "kit/install.sh: kit v$version ($commit) in $home, verus-count and proved-port-{fncmp,stats,seams} in $prefix/bin"

@@ -22,8 +22,9 @@ checks:
   go-toolchain:
     description: >-
       The Go toolchain is the stream this file's environment names
-      (go env GOVERSION), and .chainguard/develop.yaml installs the same
-      stream.
+      (go env GOVERSION), and .chainguard/develop.yaml and count.yaml
+      (its environment and its count-installed check, which build the Go
+      tools through kit/install.sh) install the same stream.
     trigger: [presubmit, postsubmit]
     timeout: 5m
     cmd:
@@ -37,6 +38,10 @@ checks:
         [ -n "$s" ] || { echo "FAIL: go.yaml names no go-1.NN stream first in its packages"; exit 1; };
         case $v in "go${s#go-}" | "go${s#go-}".*) ;; *) echo "FAIL: $v is not $s"; exit 1 ;; esac;
         grep -qx "    - $s" .chainguard/develop.yaml || { echo "FAIL: .chainguard/develop.yaml does not install $s"; exit 1; };
+        c=$(sed -n '/^  count-installed:/,/^  [a-z]/s/^      packages: \[.*\(go-1\.[0-9]*\).*\]$/\1/p' .chainguard/ci/count.yaml);
+        [ "$c" = "$s" ] || { echo "FAIL: count.yaml's count-installed installs '$c', not $s"; exit 1; };
+        c=$(sed -n 's/^  packages: \[.*\(go-1\.[0-9]*\).*\]$/\1/p' .chainguard/ci/count.yaml);
+        [ "$c" = "$s" ] || { echo "FAIL: count.yaml's environment installs '$c', not $s"; exit 1; };
         echo PASS
 
   fncmp-test:

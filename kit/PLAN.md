@@ -364,8 +364,8 @@ is deleted in that PR.
    Still to come: resolving the rest (Isla, emptyasm, loom, GenMC) and
    the Kani pins,
    which stay in challoc's script reading `-cites` and `-entries` until
-   they move; challoc's switch; and installing the tool in the
-   package, which does not install it yet.
+   they move; and challoc's switch. The package installs the tool
+   as `proved-port-seams` (#243).
 4. **ABI checks and the deviations ratchet.** pcre3: `ci/abi.sh` and
    `ci/header-check.sh` move (config: library names,
    `crates/pcre3-capi/maps/`, the `PCRE2_`/`REG_` prefixes);
@@ -475,7 +475,7 @@ is deleted in that PR.
    arm's on one row, with positive counts and the same non-empty
    output, checked
    by `stats-test` against hand-worked lines (port A's gate had no
-   saved results to compare). The package does not install it yet. The box's run skeleton is `kit/perf/box` (#180):
+   saved results to compare). The package installs it as `proved-port-stats` (#243). The box's run skeleton is `kit/perf/box` (#180):
    `rounds.sh` (rounds with the arms rotated per round, one perf stat
    line per run in the layout stats reads) and `md5.sh` (one side of
    the md5 bracket), checked by the go.yaml check `box-test` with
@@ -514,9 +514,9 @@ is deleted in that PR.
    (`codegen-diff.sh`, `ci/codegen.sh`, `ci/codegen-notices.sh`) is
    `kit/make/codegen.sh` (`make codegen`, `codegen-capture` and
    `codegen-compare`, #168), calling fncmp, with `go.yaml`'s
-   `codegen-test` running it over a fixture library. The package does
-   not install fncmp, so a port builds it with go from the kit's tree
-   and names it in `CODEGEN_FNCMP`. The fast-path budget is
+   `codegen-test` running it over a fixture library. The package
+   installs fncmp as `proved-port-fncmp`, `CODEGEN_FNCMP`'s default
+   (#243). The fast-path budget is
    `kit/make/perf-budget.sh` with challoc's checker as
    `kit/make/perf-budget.rs` (`make perf-budget` and
    `perf-budget-print`, #173), with `count.yaml`'s `perf-budget-test`
