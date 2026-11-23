@@ -17,6 +17,19 @@ where it reports drift.
 
 ### Changes
 
+- The reach check's manifest reader (`proved-port-seams -check` with
+  `[reach]`) reads a TOML 1.1 multi-line inline table (#246). Its braces
+  are tracked over its lines with an array's brackets, innermost last,
+  so the lines inside it are the value's: its `}` line no longer fails
+  as "neither a table header nor a key", and a key inside it (`path` in
+  `x = {` .. `}` under `[lib]`, which is `lib.x.path`) is not read as
+  the table's own. A line starting with `[` inside it fails, as inside
+  an array. Three forms, none a valid manifest, now fail too: a `]` or
+  `}` that closes a delimiter of the other kind (`x = [1}`), a `{` after
+  a value closes (`x = { a = 1 } { b = 2 }`), and an inline table left
+  open at the end of its line and the manifest (before, `x = { a = 1`
+  alone passed). The two messages name both kinds ("an unmatched `]` or
+  `}`", "a `[` or `{` after a value closes").
 - `make noalias` finds the library's LLVM IR with cargo 1.100 (Wolfi's
   rust-1.100) and later. That cargo's build directory layout writes
   each unit's outputs to `release/build/PACKAGE/HASH/out` (or
@@ -38,7 +51,12 @@ where it reports drift.
 
 ### Porting notes
 
-1. A port on rust-1.99 or older changes nothing for these two targets.
+1. Nothing to change for the reach check. A manifest that passed
+   0.4.12's reach check passes this one unless it is one Cargo cannot
+   read; one with a multi-line inline table, which failed, now passes
+   when the rest of it does.
+
+2. A port on rust-1.99 or older changes nothing for these two targets.
    A port moving to rust-1.100 or later moves its pin to 0.4.13 first,
    or in the same change as its rust stream, as 0.3.1's note 1 lists
    (`PROVED_PORT_VERSION` and every `theseus-proved-port~` pin), once
@@ -871,6 +889,7 @@ where it reports drift.
   package is the first that builds the three tools, so a port relying
   on them moves its pin to 0.4.12 once that package is out, as for any
   release.
+- The counter's version is 0.4.12, ready for the v0.4.12 tag.
 
 ### Porting notes
 
@@ -1092,6 +1111,12 @@ where it reports drift.
     changes the command each ledger file's header names, so it
     rewrites its ledger (`proved-port-seams -write`) in the same
     commit. A port that uses none of these changes nothing.
+17. After notes 2 and 5, move the pin together, to 0.4.12, as 0.3.1's
+    note 1 lists, once the 0.4.12 package is out. Then, on the new
+    kit, run `make verus-headers` (note 6 is the drift it reports),
+    `make lint-unsafe` (note 1), and note 16 where it applies. A port
+    moving from 0.4.10 or earlier applies the notes of each release in
+    between first.
 
 ## 0.4.11
 
