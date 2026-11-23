@@ -30,6 +30,45 @@ where it reports drift.
   open at the end of its line and the manifest (before, `x = { a = 1`
   alone passed). The two messages name both kinds ("an unmatched `]` or
   `}`", "a `[` or `{` after a value closes").
+- The seam ledger generator's pins checks (#248), seams.sh's `pins()`
+  and `copies()`: a rules line `pins<TAB>FILE` (each FILE once; a port
+  may give several) makes `-check` hold FILE's
+  `SRC<TAB>LINE[<TAB>NAME:ROLE]` rows in place, with seams.sh's
+  messages. SRC's rows appear in it in order, each on the line after
+  the one before (blank and `//` lines skipped, lines trimmed), a `...`
+  row allowing any lines between, and the first line of each run occurs
+  in SRC exactly once; for each NAME the `NAME:orig` rows equal the
+  `NAME:copy` rows and each side's rows are consecutive. A FILE or SRC
+  that is gone, and an overrides file that names FILE with no row for
+  its source file, fail. Where seams.sh was lax, the check fails
+  closed: a row of one field (seams.sh skipped it), an empty field, a
+  SRC that is no clean path inside the tree, a `...` row that does not
+  stand between two rows of its SRC, and a `...` row with a third field
+  (seams.sh counted it as a row of its side, so a tagged `...` kept a
+  side consecutive across a gap no row pins) fail, and so does a FILE
+  with no rows (empty, or only comments), which holds nothing in place.
+  In a local run at this commit (#249's description has the commands;
+  no check repeats it), challoc 2e71814 passed `-check` with `pins
+  verus/kani/pins.txt`, and on ten broken variants of its pins file and
+  source the check printed what seams.sh's functions print. A port
+  without a `pins` line sees no change.
+- The seam ledger generator's mutant runner (`kit/verus/seams/mutants.sh`)
+  names one occurrence of a repeated FROM (#250): FILE written
+  `FILE#N/M` is the Nth of M occurrences (1 <= N <= M, M >= 2, each at
+  most 9 digits with no leading zero), and the line fails unless FROM
+  occurs exactly M times; only the Nth is replaced, and the result lines
+  name `FILE#N/M`. The count catches an occurrence added or removed,
+  not one moved, so a `FILE#N/M` row may not be marked equivalent (a
+  mark names one place: widen FROM until it occurs once). A plain FILE
+  still needs FROM exactly once. Any
+  mutant that leaves its file unchanged (TO equal to FROM) now fails as
+  a bad line, though marked equivalent. `testdata/mutants.txt` gains
+  #218's hand mutants whose FROM occurs two to four times, at every
+  occurrence (58 rows: 55 killed, 3 marked equivalent with their
+  reasons, those three with FROMs widened to occur once), and two tests close the gaps they found: the paren form
+  `#[verifier(assume_unsupported_attributes)]`, and the blanks a block
+  comment leaves in an export's contract. Nothing is installed; ports
+  see no change.
 - `make noalias` finds the library's LLVM IR with cargo 1.100 (Wolfi's
   rust-1.100) and later. That cargo's build directory layout writes
   each unit's outputs to `release/build/PACKAGE/HASH/out` (or
@@ -56,7 +95,16 @@ where it reports drift.
    read; one with a multi-line inline table, which failed, now passes
    when the rest of it does.
 
-2. A port on rust-1.99 or older changes nothing for these two targets.
+2. Optional: a port whose own script checks a pins file (challoc's
+   `pins()` and `copies()` in `verus/seams.sh` over
+   `verus/kani/pins.txt`) can add `pins<TAB>verus/kani/pins.txt` to
+   `verus/seams.rules` and drop those functions, then run
+   `proved-port-seams -check`: a row of one field, an empty field, a
+   path that is not clean, or a `...` row first, last, doubled for its
+   file or with a third field now fails and names the row, and a pins
+   file with no rows fails. A port that does neither changes nothing.
+
+3. A port on rust-1.99 or older changes nothing for these two targets.
    A port moving to rust-1.100 or later moves its pin to 0.4.13 first,
    or in the same change as its rust stream, as 0.3.1's note 1 lists
    (`PROVED_PORT_VERSION` and every `theseus-proved-port~` pin), once

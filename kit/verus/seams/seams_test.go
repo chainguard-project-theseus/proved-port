@@ -304,6 +304,7 @@ func TestScanner(t *testing.T) {
 		{"no_decreases", lines("#[verifier::exec_allows_no_decreases_clause]", "fn spin() { loop {} }"), "no_decreases spin"},
 		{"external_fn_specification", lines("verus! {", "#[verifier::external_fn_specification]", "pub fn ex_foo(x: u8) -> (r: u8)", "    ensures r == x,", "{", "    foo(x)", "}", "pub axiom fn a();", "}"), "assume_spec ex_foo; axiom a"},
 		{"unsupported attributes", lines("verus! {", "#[verifier::assume_unsupported_attributes]", "#[unsafe(no_mangle)]", "pub extern \"C\" fn malloc() {}", "#[verifier::assume_unsupported_attributes]", "pub static mut G: u8 = 0;", "}"), "unsupported-attribute malloc; unsupported-attribute G"},
+		{"paren form unsupported attributes", lines("verus! {", "#[verifier(assume_unsupported_attributes)]", "#[unsafe(no_mangle)]", "pub extern \"C\" fn free() {}", "}"), "unsupported-attribute free"},
 		{"string and comment braces", lines("verus! {", "#[verifier::external_body]", "fn f() { let s = \"}{\"; // }", "    let c = '{';", "}", "#[verifier::external_body]", "fn g() {}", "}"), "external_body f; external_body g"},
 	}
 	for _, c := range cases {
@@ -405,6 +406,16 @@ func TestMintsNote(t *testing.T) {
 	res := generate(testRules(t), input{sources: []namedText{{"src/a/b.rs", lines("verus! {", "#[verifier::external_body]", "fn f() {", "    let t = Tracked::assume_new();", "    let p = ptr::null();", "}", "}")}}}, true)
 	want(t, "note", res.ledger["src/a/b.rs.md"], "\nBody mints Tracked at line 4.\n")
 	want(t, "body guess", res.ledger["src/a/b.rs.md"], "Category: raw pointer (internal).\n")
+}
+
+// A block comment in an unsupported-attribute export's line, as the
+// ledger's contract shows it: strip writes one blank for each run of the
+// comment's non-blank bytes (`/*`, `c`, `*/`) and keeps the blanks
+// between them, so `(/* c */)` reads `(     )` (norm folds them for the
+// hash).
+func TestStripCommentBlank(t *testing.T) {
+	res := generate(testRules(t), input{sources: []namedText{{"src/a/b.rs", lines("verus! {", "#[verifier::assume_unsupported_attributes]", "pub extern \"C\" fn f(/* c */) {}", "}")}}}, true)
+	want(t, "contract", res.ledger["src/a/b.rs.md"], "pub extern \"C\" fn f(     ) {}\n")
 }
 
 func TestFmtSpecImpl(t *testing.T) {

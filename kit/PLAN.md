@@ -41,7 +41,7 @@ config file replaces hard-coded crate names, paths or ids), **high**
 | entry-point reachability | pcre3 `verus/count/src/reach.rs`, `verus/REACH` | every function a C entry point reaches is verified or listed, with `macro_rules!` expanded from their definitions and anything unexpandable failing closed | medium | root selection (exported `extern "C"` functions) is generic; the allowlist path into config |
 | compile-input check | pcre3 `verus/count/src/inputs.rs` | fails when code reachable from named roots reads mutable statics, `thread_local!`, env or seeded `HashMap`, unless a table row names it | high | roots and table become config; the reachability walk is generic, the root names are not |
 | seam ledger generator | challoc `verus/seams.sh` (1604 lines, shell) | generates `verus/ledger/src/**.rs.md` from source: kind, verbatim contract, CRC hashes, category, proposed tool, status; `--check` fails when stale; per-file overrides | medium | category and tool heuristics into a rules file; consider a Go rewrite (shell at this size is hard to maintain) |
-| ledger self-test mutants | challoc `verus/seams-mutants.sh` | sed mutants of `seams.sh` (weakened citation and hash rules) that its self-tests must catch | medium | follows whatever form the ledger generator takes (done for the Go generator: `kit/verus/seams/mutants.sh` with `testdata/mutants.txt`, text-matched hand mutants each killed or marked equivalent with its reason; go.yaml `seams-mutants`, #225) |
+| ledger self-test mutants | challoc `verus/seams-mutants.sh` | sed mutants of `seams.sh` (weakened citation and hash rules) that its self-tests must catch | medium | follows whatever form the ledger generator takes (done for the Go generator: `kit/verus/seams/mutants.sh` with `testdata/mutants.txt`, text-matched hand mutants each killed or marked equivalent with its reason; go.yaml `seams-mutants`, #225; `FILE#N/M` names one occurrence of a repeated text, #250) |
 | Kani runner | pcre3 `verus/kani/run.sh`; challoc `ci/kani-regular.sh`, `scripts/kani-boolcmp.sh` | per-crate `cargo kani` with job limits, shards in regular format failing on `warning: ignoring`, a lint for bool ordering comparisons in harnesses | low | crate list and feature matrix as arguments |
 | Kani record template | pcre3 `verus/seams/kani-*.md` (53 records) | five sections: contract, statement, translation, review, tests (mutation check) | low | ship as a template plus a checker that the quoted contract matches the source (done: the template is `kit/templates/verus/seams/kani-TEMPLATE.md`, the checker `make kani-quotes`, #207) |
 | unsafe and assume lint | pcre3 `ci/lint-unsafe.sh`; challoc's `no_assume_or_admit_in_verified_code` test | crate roots carry `forbid(unsafe_code)`; `assume_new` only in allowed token seams; no `assume`/`admit` in shipped verified code | low | allowed-seam list into config |
@@ -361,10 +361,11 @@ is deleted in that PR.
    lines, as seams.sh's `checkcite()` resolved Kani, callers and const
    assert (#231). A `notcopy` line holds tracked types to challoc's
    not-Copy checks, seams.sh's trackedcheck and notcopycheck (#235).
-   Still to come: resolving the rest (Isla, emptyasm, loom, GenMC) and
-   the Kani pins,
-   which stay in challoc's script reading `-cites` and `-entries` until
-   they move; and challoc's switch. The package installs the tool
+   A `pins` line holds a pins file's rows in place (challoc's Kani
+   pins, `verus/kani/pins.txt`), seams.sh's `pins()` and `copies()`
+   (#248). Still to come: resolving the rest (Isla, emptyasm, loom,
+   GenMC), which stays in challoc's script reading `-cites` and
+   `-entries` until it moves; and challoc's switch. The package installs the tool
    as `proved-port-seams` (#243).
 4. **ABI checks and the deviations ratchet.** pcre3: `ci/abi.sh` and
    `ci/header-check.sh` move (config: library names,
