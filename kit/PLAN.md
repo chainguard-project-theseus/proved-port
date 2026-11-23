@@ -361,10 +361,11 @@ is deleted in that PR.
    lines, as seams.sh's `checkcite()` resolved Kani, callers and const
    assert (#231). A `notcopy` line holds tracked types to challoc's
    not-Copy checks, seams.sh's trackedcheck and notcopycheck (#235).
-   Still to come: resolving the rest (Isla, emptyasm, loom, GenMC) and
-   the Kani pins,
-   which stay in challoc's script reading `-cites` and `-entries` until
-   they move; and challoc's switch. The package installs the tool
+   A `pins` line holds a pins file's rows in place (challoc's Kani
+   pins, `verus/kani/pins.txt`), seams.sh's `pins()` and `copies()`
+   (#248). Still to come: resolving the rest (Isla, emptyasm, loom,
+   GenMC), which stays in challoc's script reading `-cites` and
+   `-entries` until it moves; and challoc's switch. The package installs the tool
    as `proved-port-seams` (#243).
 4. **ABI checks and the deviations ratchet.** pcre3: `ci/abi.sh` and
    `ci/header-check.sh` move (config: library names,

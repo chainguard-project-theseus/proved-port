@@ -443,3 +443,47 @@ reach.go	if c == q {	if c == '\x00' {
 reach.go	case c == '"' || c == '\'':	case c == '\'':
 reach.go	case c == '"' || c == '\'':	case c == '"':
 reach.go	case c == '#':	case false:
+#
+# #248: the pins checks (seams.sh's pins() and copies()).
+rules.go	r.Pins = append(r.Pins, c)	_ = c
+rules.go	if slices.Contains(r.Pins, c) {	if false {
+main.go	res.drift = append(res.drift, pinChecks(*root, r, in.overrides)...)	_ = pinChecks
+pins.go	strings.HasPrefix(l, "#") || strings.TrimSpace(l) == ""	strings.TrimSpace(l) == ""
+pins.go	case len(f) > 3:	case false:
+pins.go	case len(f) < 2:	case false:
+pins.go	case slices.Contains(f, ""):	case false:
+pins.go	path.IsAbs(c) || c == "." || c == ".." || strings.HasPrefix(c, "../") || c != f[0]	c == "." || c == ".." || strings.HasPrefix(c, "../") || c != f[0]
+pins.go	path.IsAbs(c) || c == "." || c == ".." || strings.HasPrefix(c, "../") || c != f[0]	path.IsAbs(c) || c == "." || c == ".." || c != f[0]
+pins.go	path.IsAbs(c) || c == "." || c == ".." || strings.HasPrefix(c, "../") || c != f[0]	path.IsAbs(c) || c == "." || c == ".." || strings.HasPrefix(c, "../")
+pins.go	if len(f) == 3 {	if false {
+pins.go	if r.text == "..." {	if false {
+pins.go	if len(rows) == 0 && len(errs) == 0 {	if false {
+pins.go	if len(rows) == 0 && len(errs) == 0 {	if len(rows) == 0 {
+pins.go	if r.text == "..." && (!seen || prev == "...") {	if r.text == "..." && (!seen || prev == "x") {
+pins.go	if r.text == "..." && (!seen || prev == "...") {	if r.text == "..." && (!seen && false || prev == "...") {
+pins.go	if t == "..." {	if t == "x" {
+pins.go	if p[k] != "..." && (k == 0 || p[k-1] == "...") {	if p[k] != "..." && k == 0 {
+pins.go	if p[k] != "..." && (k == 0 || p[k-1] == "...") {	if false {
+pins.go	k, gap, done := 0, true, false	k, gap, done := 0, false, false
+pins.go	t := strings.Trim(l, " \t")	t := l
+pins.go	if t == "" || strings.HasPrefix(t, "//") {	if t == "" {
+pins.go	starts[t]++	starts[t] = 1
+pins.go	if done || k >= n {	if false && done || k >= n {
+pins.go	if k < n && p[k] == "..." {	if false {
+pins.go	if !gap {	if !gap && false {
+pins.go	if k < n {	if false {
+pins.go	if c != 1 {	if c > 1 {
+pins.go	if nm == "" || role != "orig"	if role != "orig"
+pins.go	&& role != "copy-only" {	&& true {
+pins.go	names = append(names, nm)	_ = nm
+pins.go	if strings.HasPrefix(role, "orig") {	if role == "orig" {
+pins.go	if s.last-s.first+1 != s.cnt {	if false {
+pins.go	if !both {	if !both && false {
+pins.go	if len(o) == 0 {	if false {
+pins.go	if len(o) != len(c) {	if false {
+pins.go	if o[j] != c[j] {	if false {
+pins.go	orig[nm] = append(orig[nm], r.text)	_ = nm
+pins.go	cp[nm] = append(cp[nm], r.text)	_ = cp
+pins.go	if !strings.Contains(o.text, pf) {	if false {
+pins.go	return p.file == src	return true
+pins.go	if !ok {	if !ok && false {

@@ -30,12 +30,42 @@ where it reports drift.
   open at the end of its line and the manifest (before, `x = { a = 1`
   alone passed). The two messages name both kinds ("an unmatched `]` or
   `}`", "a `[` or `{` after a value closes").
+- The seam ledger generator's pins checks (#248), seams.sh's `pins()`
+  and `copies()`: a rules line `pins<TAB>FILE` (each FILE once; a port
+  may give several) makes `-check` hold FILE's
+  `SRC<TAB>LINE[<TAB>NAME:ROLE]` rows in place, with seams.sh's
+  messages. SRC's rows appear in it in order, each on the line after
+  the one before (blank and `//` lines skipped, lines trimmed), a `...`
+  row allowing any lines between, and the first line of each run occurs
+  in SRC exactly once; for each NAME the `NAME:orig` rows equal the
+  `NAME:copy` rows and each side's rows are consecutive. A FILE or SRC
+  that is gone, and an overrides file that names FILE with no row for
+  its source file, fail. Where seams.sh was lax, the check fails
+  closed: a row of one field (seams.sh skipped it), an empty field, a
+  SRC that is no clean path inside the tree, a `...` row that does not
+  stand between two rows of its SRC, and a `...` row with a third field
+  (seams.sh counted it as a row of its side, so a tagged `...` kept a
+  side consecutive across a gap no row pins) fail, and so does a FILE
+  with no rows (empty, or only comments), which holds nothing in place.
+  In a local run at this commit (#249's description has the commands;
+  no check repeats it), challoc 2e71814 passed `-check` with `pins
+  verus/kani/pins.txt`, and on ten broken variants of its pins file and
+  source the check printed what seams.sh's functions print. A port
+  without a `pins` line sees no change.
 
 ### Porting notes
 
 1. Nothing to change. A manifest that passed 0.4.12's reach check passes
    this one unless it is one Cargo cannot read; one with a multi-line
    inline table, which failed, now passes when the rest of it does.
+2. Optional: a port whose own script checks a pins file (challoc's
+   `pins()` and `copies()` in `verus/seams.sh` over
+   `verus/kani/pins.txt`) can add `pins<TAB>verus/kani/pins.txt` to
+   `verus/seams.rules` and drop those functions, then run
+   `proved-port-seams -check`: a row of one field, an empty field, a
+   path that is not clean, or a `...` row first, last, doubled for its
+   file or with a third field now fails and names the row, and a pins
+   file with no rows fails. A port that does neither changes nothing.
 
 ## 0.4.12
 

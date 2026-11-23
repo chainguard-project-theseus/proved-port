@@ -161,6 +161,30 @@
 // a cite-module DIR may not be SOURCE or hold it. An item's head split
 // over lines (`pub` / `mod NAME;`) is one item.
 //
+// With pins lines, -check also holds each pins FILE's rows in place,
+// seams.sh's pins() and copies(). FILE lists the source lines a check
+// runs a copy of (challoc's verus/kani/pins.txt: Kani cannot run an
+// inline `asm!` block, so a harness runs a copy of the body without
+// it), so a change to an original or its copy fails until the copy, the
+// list and the status citing the check are revisited. A row is
+// `SRC<TAB>LINE[<TAB>NAME:ROLE]` (`#` lines and lines of blanks are
+// comments; a row of one field or more than three, an empty field, and
+// a SRC that is no clean path inside the tree fail). SRC's rows must
+// appear in it in their order, each on the line after the one before
+// (lines compared with leading and trailing blanks and tabs removed;
+// SRC's blank lines and lines starting `//` skipped), but where a `...`
+// row allows any lines between; a `...` row stands between two rows of
+// its SRC and has no third field (a tagged one would count as a row of a
+// side, keeping it consecutive across a gap). The first row of SRC, and each after a `...`, starts a run,
+// which must occur in SRC exactly once, so a second copy (in a block
+// comment) cannot stand in for it. A third field ties a copy to its
+// original: for each NAME, the `NAME:orig` rows in order must equal the
+// `NAME:copy` rows, and each side's rows (`orig` and `orig-only`, `copy`
+// and `copy-only`) must be consecutive rows of FILE; another ROLE, or a
+// NAME with no rows of a side, fails. -check also fails a FILE that is
+// gone or has no rows, a SRC that is gone, and an overrides file whose text names FILE
+// with no row in FILE for its source file.
+//
 // -entries prints, per seam: source file, line, kind, id (the name, with
 // #N when shared in its file), category, tool, status, overrides file (or
 // -), and the contract normalized as its hash reads it. Each seam is
@@ -212,6 +236,9 @@
 //	notcopy<TAB>FILE<TAB>TAG   the tracked types' not-Copy checks are in
 //	                           FILE, and a tracked-type seam cites them with
 //	                           TAG, a tag with a cite-assert line above (once)
+//	pins<TAB>FILE              FILE lists source lines a check runs a copy
+//	                           of, which -check holds in place (each FILE
+//	                           once)
 //	guess<TAB>CAT|-<TAB>COND.. a category heuristic: the first guess whose
 //	                           conditions all hold names the category (-
 //	                           for none); COND is FIELD=RE or FIELD!RE,
@@ -336,6 +363,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			files = append(files, f.name)
 		}
 		res.drift = append(res.drift, notCopyChecks(*root, r, res.entries, files)...)
+		res.drift = append(res.drift, pinChecks(*root, r, in.overrides)...)
 		return checkLedger(*root, r, in, res, stdout, stderr)
 	case *cites:
 		x := entryField.Replace
