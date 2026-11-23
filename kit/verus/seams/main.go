@@ -66,13 +66,13 @@
 // citations in the order they stand in it (a name that serves several
 // seams prints its citations once per seam). A port's checks resolve
 // each line of a tag the rules give no check (challoc's Isla citation
-// reads `NAME in TARGET`, its emptyasm, loom and GenMC ones `NAME @
-// TARGET`).
+// reads `NAME in TARGET`, its emptyasm and GenMC ones `NAME @ TARGET`).
 //
-// -check resolves each citation of a tag with a cite-fn, cite-assert or
-// cite-row line, and fails each that does not resolve (once, though a
-// name serves several seams), as seams.sh's checkcite() resolved Kani,
-// callers and const assert citations. A cite-fn citation is a path
+// -check resolves each citation of a tag with a cite-fn, cite-assert,
+// cite-test or cite-row line, and fails each that does not resolve
+// (once, though a name serves several seams), as seams.sh's
+// checkcite() resolved Kani, callers, const assert and loom citations.
+// A cite-fn citation is a path
 // `a::b::m::f`: the file is the longest leading run of the segments but
 // the last that names SOURCE/a/b.rs or else SOURCE/a/b/mod.rs (a first
 // segment a cite-module line names reads under its DIR, and a path that
@@ -100,8 +100,33 @@
 // assertion on it, right under a block of `//` lines whose first starts
 // `// LABEL`, where the last line of code above the block (across
 // blank lines, comment lines and block comments) is no attribute (a
-// line starting `#[` or ending `]`). A cite-row citation, once
-// its cite-fn or cite-assert check passes, needs a line starting `| ` in
+// line starting `#[` or ending `]`). A cite-test citation is
+// `MOD::TEST`, a test of the test crate in DIR (challoc's loom models in
+// tests/loom/src; seams.sh's loomtest()): DIR/MOD.rs names the seam's
+// source file in backquotes (`SOURCE/a/b.rs`, or `a/b.rs` for a file in
+// a directory under SOURCE) and holds a top-level line `fn TEST() {` (a
+// visibility allowed) whose attributes (up to the previous line of
+// other code, across blank and comment lines, those before it on its
+// line too, and the last top-level run after other code or an item's
+// closing delimiter on that line) hold `#[test]`, no `#[should_panic]`
+// (a control fails by design) and no cfg, cfg_attr or ignore attribute
+// but `#[cfg(CFG)]` whole on its line for a CFG field; and the `///`
+// lines among those attributes, or the body (to the delimiter that
+// closes it), name the seam's
+// function in backquotes: the name without `#N`, and for a name with no
+// `::` `m::name`, m the source file's module (its base name, the
+// directory's for a mod.rs, `lib` for lib.rs), alone or after a path of
+// words (`a::m::f`). The test crate's manifest (DIR/../Cargo.toml, read
+// as the reach check reads the main crate's) must keep DIR/lib.rs its
+// tested root: DIR is the package's src, no `[lib] path` names another
+// root, no `autolib = false`, no `[lib]` `test = false` or `harness =
+// false`. DIR/lib.rs must declare `mod MOD;` at its top level under
+// no cfg, cfg_attr or ignore attribute but `#[cfg(CFG)]` and no
+// `#[path]`, read as the reach check reads a `mod` line, and neither file
+// may hold an inner cfg attribute but `#![cfg(CFG)]` whole on its line.
+// A `#[doc = ".."]` attribute is not read as a doc comment. A cite-row
+// citation, once
+// its cite-fn, cite-assert or cite-test check passes, needs a line starting `| ` in
 // FILE's table under the line `## HEADING` (to the next `## ` line)
 // whose first cell holds the citation in backquotes and whose text holds
 // every PART. Each file is read with the lexer: a line in a block
@@ -223,7 +248,12 @@
 //	                           ignore attribute but `#[cfg(CFG)]` (the
 //	                           cfg the tool builds under, `kani`)
 //	cite-assert<TAB>TAG        each TAG citation names a labeled assertion
-//	                           (a tag takes cite-fn or cite-assert, once)
+//	cite-test<TAB>TAG<TAB>DIR[<TAB>CFG...]
+//	                           each TAG citation names a test `MOD::TEST`
+//	                           in DIR/MOD.rs naming the seam's function,
+//	                           under no gate but `#[cfg(CFG)]` (CFG with
+//	                           no literal); a tag takes one of cite-fn,
+//	                           cite-assert and cite-test, once
 //	cite-row<TAB>TAG<TAB>FILE<TAB>HEADING<TAB>PART...
 //	                           each TAG citation needs a row in FILE's
 //	                           `## HEADING` table holding every PART (once
@@ -231,7 +261,7 @@
 //	cite-module<TAB>NAME<TAB>DIR
 //	                           a cite-fn path starting `NAME::` reads under
 //	                           DIR (once per NAME); the TAG of cite-fn,
-//	                           cite-assert and cite-row is a cite-tag
+//	                           cite-assert, cite-test and cite-row is a cite-tag
 //	                           above the line
 //	notcopy<TAB>FILE<TAB>TAG   the tracked types' not-Copy checks are in
 //	                           FILE, and a tracked-type seam cites them with

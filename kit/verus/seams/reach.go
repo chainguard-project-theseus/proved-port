@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -61,8 +62,9 @@ func (b *attrBlock) feed(t string) bool {
 
 // innerGate is the line of a file's inner attribute that may compile the
 // whole file out: `#![cfg(..)]`, or a `#![cfg_attr(..)]` that adds a cfg
-// (one that adds a lint level is harmless). 0 for none.
-func innerGate(f *srcFile) int {
+// (one that adds a lint level is harmless), but an attribute of allow,
+// as written, whole on its line. 0 for none.
+func innerGate(f *srcFile, allow []string) int {
 	// depth: the delimiters open before the line. Only an inner
 	// attribute at depth 0 is the file's; one in a block (`mod tests {
 	// #![cfg(test)] }`) is the block's. ia: the brackets the inner
@@ -83,7 +85,7 @@ func innerGate(f *srcFile) int {
 		// `#![cfg(..)]` itself, or a cfg a cfg_attr adds (read as the
 		// attribute's lines come): `cfg_attr(` is no `cfg(`, and a cfg
 		// predicate holds none.
-		if reCfgToken.MatchString(text) {
+		if reCfgToken.MatchString(text) && !(ia <= 0 && slices.Contains(allow, strings.TrimSpace(text))) {
 			return at
 		}
 	}
@@ -115,7 +117,7 @@ func (v *resolver) reach(file string) string {
 		if !f.ok {
 			return p + " cannot be read whole"
 		}
-		if ln := innerGate(f); ln > 0 {
+		if ln := innerGate(f, nil); ln > 0 {
 			return fmt.Sprintf("%s:%d holds an inner cfg attribute, which may leave the file out", p, ln)
 		}
 		// The crate root: lib.rs, or main.rs when there is no lib.rs (with
@@ -156,7 +158,7 @@ func (v *resolver) reach(file string) string {
 		next := ""
 		for _, par := range parents {
 			// A parent that is not there holds no line.
-			ln, why := v.modLine(par, name)
+			ln, why := v.modLine(par, name, nil)
 			if ln == 0 {
 				continue
 			}
@@ -189,7 +191,16 @@ var tomlKey = strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "")
 // for main.rs, no `[[bin]] path` other than it and no `autobins =
 // false`. reach reads only the default crate roots.
 func (v *resolver) targets(root string) string {
-	dir := path.Dir(v.r.Source)
+	return v.targetsOf(v.r.Source, root, false)
+}
+
+// targetsOf is targets for the package whose source directory is src
+// (its Cargo.toml beside src). With tests (a cite-test crate, whose
+// tests the citations name) a `[lib]` `test = false` or `harness =
+// false`, under which `cargo test` runs none of the library's #[test]
+// fns, fails too.
+func (v *resolver) targetsOf(src, root string, tests bool) string {
+	dir := path.Dir(src)
 	man := path.Join(dir, "Cargo.toml")
 	// The manifest must be there and be a package's: the check reads the
 	// default roots of a package rooted beside SOURCE, and nothing else.
@@ -292,6 +303,8 @@ func (v *resolver) targets(root string) string {
 				return fmt.Sprintf("%s sets a target path %s, so %s may not be the crate root it builds (the check reads only the default roots)", man, val, root)
 			}
 			named = true
+		case tests && table == "[lib]" && (k == "test" || k == "harness") && strings.HasPrefix(val, "false"):
+			return fmt.Sprintf("%s sets %s = false under [lib], so `cargo test` runs none of %s's tests", man, k, root)
 		case table == "[package]" && (lib && k == "autolib" || !lib && k == "autobins") && strings.HasPrefix(val, "false"):
 			return fmt.Sprintf("%s sets %s = false, so %s may not be built (the check reads only the default roots)", man, k, root)
 		}
@@ -398,8 +411,9 @@ var reTomlHeader = regexp.MustCompile(`^\[\[?[^\[\]]+\]\]?$`)
 
 // modLine finds `mod NAME;` (a visibility allowed) in file: its line,
 // and why it does not count ("" when it does): under a cfg, cfg_attr
-// or ignore attribute, or a `#[path]`. 0 when there is none.
-func (v *resolver) modLine(file, name string) (int, string) {
+// or ignore attribute (but an attribute of allow, as written, whole
+// alone), or a `#[path]`. 0 when there is none.
+func (v *resolver) modLine(file, name string, allow []string) (int, string) {
 	f := v.file(file)
 	if !f.ok {
 		return 0, ""
@@ -443,7 +457,7 @@ func (v *resolver) modLine(file, name string) (int, string) {
 			nested = i + 1
 		} else if re.MatchString(c) {
 			for _, a := range b.attrs {
-				if reGateAttr.MatchString(a) {
+				if reGateAttr.MatchString(a) && !slices.Contains(allow, strings.TrimSpace(a)) {
 					return i + 1, "under a cfg, cfg_attr or ignore attribute, which may leave the file out"
 				}
 				if rePathAttr.MatchString(a) {

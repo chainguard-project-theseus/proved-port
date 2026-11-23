@@ -77,12 +77,20 @@ cite-tag	GenMC	partial
 # under a `// LABEL` comment block, with no attribute above it. A
 # cite-row tag's citations each also need a row in FILE's table under
 # `## HEADING` that names the citation in backquotes in its first cell
-# and holds every PART. The other tags (loom and GenMC here) are the
-# port's own checks to resolve, from seams -cites (one line per
+# and holds every PART. A cite-test tag cites `MOD::TEST`: a top-level
+# #[test] fn TEST in DIR/MOD.rs, not #[should_panic] (a control), under
+# no cfg, cfg_attr or ignore attribute but `#[cfg(CFG)]` for a CFG field,
+# whose doc comment or body names the seam's function in backquotes, in
+# a file that names the seam's source file in backquotes and that
+# DIR/lib.rs declares with `mod MOD;`, DIR/../Cargo.toml keeping
+# DIR/lib.rs the library root with its tests on. The other tags (GenMC here) are
+# the port's own checks to resolve, from seams -cites (one line per
 # citation).
 cite-fn	Kani	kani::proof	kani
 cite-module	kani_proofs	src/kani
 cite-assert	const assert
+# challoc's loom models, `#[cfg(test)] mod m;` lines in tests/loom/src/lib.rs:
+# cite-test	loom	tests/loom/src	test
 # challoc's guard tests: `callers: PATH` names a #[test] fn with its row
 # in the guard-test table:
 # cite-tag	callers
