@@ -798,7 +798,17 @@ where it reports drift.
     it fails rather than change the table. Brackets, and the `#` that
     starts a comment, are read outside quoted strings, so a `"]"` or
     `"#"` in a string cannot close the count early. A string that does
-    not close on its line fails.
+    not close on its line fails. So does a value still open at the end
+    of the manifest, one with a `]` anywhere along a line that closes
+    more than are open, or one with a `[` after it closes on its line,
+    outside an inline table's braces (`1], [2,`; `x = [1] [2]`; but `x =
+    { a = [1], b = [2] }` passes) (#241): none is a valid manifest, so
+    Cargo builds nothing from it. Outside a value, a line that is
+    neither a table header nor a key (an `=` outside quoted strings)
+    fails too, such as a stray token. A key is read up to the first `=`
+    outside quoted strings. A UTF-8 byte-order mark at the start of the
+    manifest is dropped, as Cargo drops it, so the header or key behind
+    it is read; one anywhere else fails.
   - Cargo's default roots are `src/lib.rs` and `src/main.rs` beside the
     manifest. A SOURCE root elsewhere (`source lib`) counts only when a
     `[lib] path` names it exactly.

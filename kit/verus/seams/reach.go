@@ -173,6 +173,9 @@ func (v *resolver) reach(file string) string {
 	}
 }
 
+// bom is a UTF-8 byte-order mark (Go source may not hold one).
+var bom = string(rune(0xFEFF))
+
 // tomlKey normalises a TOML key or table header for comparison: TOML
 // allows blanks and tabs around its parts and quoted keys (`"path"`,
 // `["lib"]`), so both go. A quoted key that holds a dot (`"lib.path"`)
@@ -198,7 +201,16 @@ func (v *resolver) targets(root string) string {
 	// open: the brackets a value left open, over its lines;
 	// named: a [lib] path names root.
 	table, pkg, open, named := "", false, 0, false
-	for _, l := range f.raw {
+	for i, l := range f.raw {
+		// A byte-order mark at the start is no text (Cargo's TOML reader
+		// drops it); one anywhere else is refused, as it would hide a
+		// key or header from the reader.
+		if i == 0 {
+			l = strings.TrimPrefix(l, bom)
+		}
+		if strings.Contains(l, bom) {
+			return fmt.Sprintf("%s holds a byte-order mark after its start, which the check does not read, so %s may not be the crate root it builds", man, root)
+		}
 		// The reader is line by line: a multi-line string, which may hold
 		// a line like a header, is not read.
 		if strings.Contains(l, `"""`) || strings.Contains(l, `'''`) {
@@ -207,8 +219,9 @@ func (v *resolver) targets(root string) string {
 		// The line's text before a comment and its brackets, both read
 		// outside quoted strings; a string that does not close on its
 		// line is not read.
-		t, n, closed := tomlLine(l)
-		if !closed {
+		r := tomlLine(l, open)
+		t := r.text
+		if !r.closed {
 			return fmt.Sprintf("%s has a string that does not close on its line, which the check does not read, so %s may not be the crate root it builds", man, root)
 		}
 		if strings.Contains(t, `\`) {
@@ -222,7 +235,10 @@ func (v *resolver) targets(root string) string {
 			if t != "" && t[0] == '[' {
 				return fmt.Sprintf("%s has a line starting with `[` inside a multi-line value, which the check does not read, so %s may not be the crate root it builds", man, root)
 			}
-			open += n
+			if msg := brackets(r, man, root); msg != "" {
+				return msg
+			}
+			open = r.depth // what the value still leaves open
 			continue
 		}
 		if strings.HasPrefix(t, "[") {
@@ -246,9 +262,20 @@ func (v *resolver) targets(root string) string {
 			}
 			continue
 		}
-		k, val, _ := strings.Cut(t, "=")
-		k, val = tomlKey.Replace(k), strings.TrimSpace(val)
-		open = n
+		if t == "" {
+			continue
+		}
+		// Outside a value, a line is a header or a key line (an `=`
+		// outside quoted strings): any other (a stray token, a header
+		// after a byte-order mark) is one the check does not read.
+		if !r.eq {
+			return fmt.Sprintf("%s has a line that is neither a table header nor a key, which the check does not read, so %s may not be the crate root it builds", man, root)
+		}
+		k, val := tomlKey.Replace(r.key), r.val
+		if why := brackets(r, man, root); why != "" {
+			return why
+		}
+		open = r.depth // what this value leaves open (from 0)
 		// Spellings the check does not read: dotted keys and inline
 		// tables for the targets and their discovery.
 		if strings.HasPrefix(k, "lib.") || strings.HasPrefix(k, "package.auto") ||
@@ -268,6 +295,10 @@ func (v *resolver) targets(root string) string {
 			return fmt.Sprintf("%s sets %s = false, so %s may not be built (the check reads only the default roots)", man, k, root)
 		}
 	}
+	// A value still open at the end is no valid manifest (#241).
+	if open != 0 {
+		return fmt.Sprintf("%s has a value that does not close before its end, which the check does not read, so %s may not be the crate root it builds", man, root)
+	}
 	if !pkg {
 		return fmt.Sprintf("%s has no [package] table (a workspace's virtual manifest, or one the check cannot read), so no package builds %s", man, root)
 	}
@@ -280,13 +311,45 @@ func (v *resolver) targets(root string) string {
 	return ""
 }
 
-// tomlLine reads a manifest line: its text before a comment (a `#`
-// outside a quoted string), the brackets it opens less those it closes
-// outside quoted strings (an inline table is one line in TOML 1.0, so its
-// braces never stay open), and whether every string on it closes. An
-// escape is refused by the caller, so a quote always ends its string.
-func tomlLine(l string) (text string, nest int, closed bool) {
-	q := byte(0)
+// brackets says why a value's line r is no valid TOML ("" when its
+// brackets are): a `]` along the line, not only at its end, closes more
+// than are open, or a `[` follows the value's close.
+func brackets(r tomlRead, man, root string) string {
+	switch {
+	case r.under:
+		return fmt.Sprintf("%s has a value with an unmatched `]`, which the check does not read, so %s may not be the crate root it builds", man, root)
+	case r.reopen:
+		return fmt.Sprintf("%s has a `[` after a value closes, which the check does not read, so %s may not be the crate root it builds", man, root)
+	}
+	return ""
+}
+
+// tomlRead is a manifest line as tomlLine reads it.
+type tomlRead struct {
+	text     string // the line before a comment, trimmed
+	key, val string // around its first `=` outside quoted strings
+	eq       bool   // it has such an `=`
+	depth    int    // the brackets open after it
+	under    bool   // a `]` closed more than were open
+	reopen   bool   // a `[` came after the open value closed
+	closed   bool   // every string on it closes
+}
+
+// tomlLine reads a manifest line with depth brackets open before it (0
+// outside a value): its text before a comment (a `#` outside a quoted
+// string), its key and value around the first `=` outside quoted
+// strings, the brackets open after it, counted outside quoted strings
+// (an inline table is one line in TOML 1.0, so its braces never stay
+// open), whether a `]` closes more than are open or a `[` follows the
+// close of the value (`1], [2,`; `x = [1] [2]`), which no valid value
+// does, and whether every string on it closes. An escape is refused by
+// the caller, so a quote always ends its string.
+func tomlLine(l string, depth int) tomlRead {
+	r := tomlRead{depth: depth}
+	// braces: the inline tables open along the line; a value closes
+	// only outside them (`x = { a = [1], b = [2] }`).
+	q, end, at, ended, braces := byte(0), len(l), -1, false, 0
+scan:
 	for i := 0; i < len(l); i++ {
 		switch c := l[i]; {
 		case q != 0:
@@ -296,14 +359,32 @@ func tomlLine(l string) (text string, nest int, closed bool) {
 		case c == '"' || c == '\'':
 			q = c
 		case c == '#':
-			return strings.TrimSpace(l[:i]), nest, true
+			end = i
+			break scan
+		case c == '=':
+			if at < 0 {
+				at = i
+			}
 		case c == '[':
-			nest++
+			r.reopen = r.reopen || ended
+			r.depth++
 		case c == ']':
-			nest--
+			r.depth--
+			r.under = r.under || r.depth < 0
+			ended = r.depth == 0 && braces == 0
+		case c == '{':
+			braces++
+		case c == '}':
+			braces--
+			ended = braces == 0 && r.depth == 0
 		}
 	}
-	return strings.TrimSpace(l), nest, q == 0
+	// (A `#` ends the scan only outside a string, so q is 0 there too.)
+	r.text, r.closed = strings.TrimSpace(l[:end]), q == 0
+	if at >= 0 {
+		r.key, r.val, r.eq = l[:at], strings.TrimSpace(l[at+1:end]), true
+	}
+	return r
 }
 
 // reTomlHeader is a whole table header, normalised by tomlKey: `[name]`
