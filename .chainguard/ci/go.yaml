@@ -208,5 +208,5 @@ checks:
     environment:
       # The file's go stream, and count.yaml's rust stream with
       # build-base for the fixture's build.
-      packages: [go-1.27, rust-1.99, build-base, busybox, git, binutils]
+      packages: [go-1.27, rust-1.100, build-base, busybox, git, binutils]
     cmd: [sh, kit/codegen-test.sh]

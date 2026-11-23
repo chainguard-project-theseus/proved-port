@@ -12,7 +12,7 @@ version: 1
 resources: large
 environment:
   packages:
-    - rust-1.99
+    - rust-1.100
     - go-1.27
     - build-base
     - busybox

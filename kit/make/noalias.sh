@@ -32,7 +32,9 @@
 # NOALIAS_CRATE[-HASH].ll (no hash for a cdylib or dylib), or one
 # NOALIAS_CRATE[-HASH].*.rcgu.ll file for each codegen unit when the
 # release profile has more than one, in release/deps, or in
-# TRIPLE/release/deps for each target the build names; each target's IR
+# TRIPLE/release/deps for each target the build names (from cargo 1.100
+# on, in the out directory of the library's unit,
+# release/build/PACKAGE/HASH/out, or under TRIPLE/); each target's IR
 # is scanned on its own and must pass on its own (its lines then name
 # it). Each inherent method of the type
 # that rustc emits out of line then has its own `define` (methods, below,
@@ -414,21 +416,39 @@ cd "$root"
 tname=${ty##*::}
 pat=$(pattern "$crate" "$ty")
 base=${NOALIAS_TARGET_DIR:-target}
+# libdir DIR: DIR may hold the library's outputs: a deps directory (a
+# cargo before 1.100), or, from cargo 1.100 on, the out directory of a
+# unit of the library (build/PACKAGE/HASH/out, whose
+# HASH/fingerprint has a lib-CRATE file), not that of a build script or
+# its run.
+libdir() {
+  [ -d "$1" ] || return 1
+  case $1 in
+    */deps) return 0 ;;
+  esac
+  [ -e "${1%/out}/fingerprint/lib-$crate" ]
+}
 for b in $builds; do
   flags=
   eval "flags=\${NOALIAS_FLAGS_$b-}"
   target=$base/noalias-$b
-  # The library's outputs in deps/: release/deps, or TRIPLE/release/deps
-  # when the build names a target (--target, CARGO_BUILD_TARGET, a
-  # [build] target).
+  # The library's outputs: in release/deps, or TRIPLE/release/deps when
+  # the build names a target (--target, CARGO_BUILD_TARGET, a [build]
+  # target), with a cargo before 1.100; from cargo 1.100 on (its build
+  # directory layout), in release/build/PACKAGE/HASH/out (or under
+  # TRIPLE/), one HASH directory per unit. Of those, only the library's
+  # units hold its outputs: the ones whose fingerprint directory has a
+  # lib-CRATE file; another HASH's out is a build script's OUT_DIR, whose
+  # files stay.
   # Those of an earlier run go first, its IR with them: cargo then
   # compiles the library again rather than take it as fresh (it does not
   # know the IR is an output, and would write none), and a codegen unit
   # this build does not write is not scanned. Its dependencies stay
   # built. cargo names them CRATE-HASH, or CRATE alone for a library
   # that builds a cdylib or dylib.
-  for deps in "$target/release/deps" "$target"/*/release/deps; do
-    [ ! -d "$deps" ] || rm -f "$deps/$crate".* "$deps/$crate"-* "$deps/lib$crate".* "$deps/lib$crate"-*
+  for deps in "$target/release/deps" "$target"/*/release/deps "$target/release/build"/*/*/out "$target"/*/release/build/*/*/out; do
+    libdir "$deps" || continue
+    rm -f "$deps/$crate".* "$deps/$crate"-* "$deps/lib$crate".* "$deps/lib$crate"-*
   done
   # -C opt-level=3, after the profile's: rustc marks parameters noalias
   # and readonly only when it optimizes, so with opt-level 0 (a profile,
@@ -436,9 +456,10 @@ for b in $builds; do
   # and the run would pass on IR that shows nothing.
   # shellcheck disable=SC2086 # the flags are word lists
   CARGO_PROFILE_RELEASE_LTO=false CARGO_TARGET_DIR=$target cargo rustc --release --locked --lib -q ${NOALIAS_CARGO_FLAGS-} $flags -- --emit=llvm-ir -C no-prepopulate-passes -C opt-level=3
-  # The IR, in each deps directory (one per target the build names):
-  # CRATE[-HASH].ll, or with several codegen units one
-  # CRATE[-HASH].*.rcgu.ll each, chosen for each directory on its own,
+  # The IR, for each target the build names (release, or
+  # TRIPLE/release), in its deps directory or its library's out
+  # directories: CRATE[-HASH].ll, or with several codegen units one
+  # CRATE[-HASH].*.rcgu.ll each, chosen for each target on its own,
   # since two targets may differ in codegen units. Only this build's are
   # left.
   # Each target is scanned on its own and must pass on its own: its own
@@ -446,24 +467,27 @@ for b in $builds; do
   # rustflags and cfg. One line of $work/targets per target with IR: its
   # name (host, or the triple) and its files.
   : >"$work/targets"
-  for deps in "$target/release/deps" "$target"/*/release/deps; do
+  for rel in "$target/release" "$target"/*/release; do
     whole=
     units=
-    for f in "$deps/$crate".ll "$deps/$crate"-*.ll "$deps/$crate".*.rcgu.ll; do
-      [ -s "$f" ] || continue
-      case ${f##*/} in
-        *.rcgu.ll) units=$units${units:+ }$f ;;
-        *) whole=$whole${whole:+ }$f ;;
-      esac
+    for deps in "$rel/deps" "$rel/build"/*/*/out; do
+      libdir "$deps" || continue
+      for f in "$deps/$crate".ll "$deps/$crate"-*.ll "$deps/$crate".*.rcgu.ll; do
+        [ -s "$f" ] || continue
+        case ${f##*/} in
+          *.rcgu.ll) units=$units${units:+ }$f ;;
+          *) whole=$whole${whole:+ }$f ;;
+        esac
+      done
     done
     f=${whole:-$units}
-    t=${deps#"$target"/}
-    t=${t%/release/deps}
-    [ "$t" != release/deps ] || t=host
+    t=${rel#"$target"/}
+    t=${t%/release}
+    [ "$t" != release ] || t=host
     [ -z "$f" ] || printf '%s %s\n' "$t" "$f" >>"$work/targets"
   done
   [ -s "$work/targets" ] || {
-    echo "$b: no LLVM IR for $crate in $target/release/deps or $target/*/release/deps (is NOALIAS_CRATE the library's crate name?)" >&2
+    echo "$b: no LLVM IR for $crate in $target/release/deps or $target/*/release/deps, or in the library's $target/release/build/*/*/out or $target/*/release/build/*/*/out (is NOALIAS_CRATE the library's crate name?)" >&2
     exit 1
   }
   label=$b

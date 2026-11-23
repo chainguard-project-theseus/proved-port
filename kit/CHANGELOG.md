@@ -13,6 +13,40 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.14
+
+### Changes
+
+- `make noalias` finds the library's LLVM IR with cargo 1.100 (Wolfi's
+  rust-1.100) and later. That cargo's build directory layout writes
+  each unit's outputs to `release/build/PACKAGE/HASH/out` (or
+  `TRIPLE/release/build/PACKAGE/HASH/out`) instead of `release/deps`,
+  so with 0.4.13 and earlier every build failed with `no LLVM IR for
+  CRATE`. It now reads, and clears before each build, the out
+  directories of the library's units (those whose fingerprint has a
+  `lib-CRATE` file) as well as `deps/`, so an older cargo works as
+  before. A build script's `OUT_DIR`, a sibling there, is neither
+  scanned nor cleared.
+- `make lint-unsafe` lets through the one `--force-warn` cargo 1.100
+  and later pass every rustc themselves,
+  `--force-warn=unused_crate_dependencies` (which leaves unsafe_code's
+  level alone), written either way, also in an @FILE argument file.
+  With 0.4.13 and earlier every member's compile on that cargo was
+  refused as getting a flag that outranks `-Funsafe_code`. Any other
+  `--force-warn` (of unsafe_code, a group, or with no lint after it) is
+  still refused, as is `--cap-lints`.
+
+### Porting notes
+
+1. A port on rust-1.99 or older changes nothing for these two targets.
+   A port moving to rust-1.100 or later moves its pin to 0.4.14 first,
+   or in the same change as its rust stream, as 0.3.1's note 1 lists
+   (`PROVED_PORT_VERSION` and every `theseus-proved-port~` pin), once
+   the 0.4.14 package is out: on an older kit, `make noalias` fails with
+   `no LLVM IR` and `make lint-unsafe` refuses
+   `--force-warn=unused_crate_dependencies`. Then run both targets on
+   the new toolchain.
+
 ## 0.4.13
 
 ### Changes

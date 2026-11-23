@@ -20,7 +20,7 @@
 version: 1
 
 environment:
-  packages: [rust-1.99, build-base, busybox, git, apk-tools, wolfi-keys, make, go-1.27]
+  packages: [rust-1.100, build-base, busybox, git, apk-tools, wolfi-keys, make, go-1.27]
 
 checks:
   count-test:
@@ -68,7 +68,7 @@ checks:
     environment:
       # The file's packages, make (GNU) for the port's targets, and
       # go.yaml's go stream for the Go tools.
-      packages: [rust-1.99, build-base, busybox, git, make, go-1.27]
+      packages: [rust-1.100, build-base, busybox, git, make, go-1.27]
     network: *crates
     cmd: [sh, kit/installed-test.sh]
 
@@ -114,5 +114,5 @@ checks:
     timeout: 10m
     environment:
       # The file's packages, and binutils for objdump.
-      packages: [rust-1.99, build-base, busybox, binutils]
+      packages: [rust-1.100, build-base, busybox, binutils]
     cmd: [sh, kit/perf-budget-test.sh]
