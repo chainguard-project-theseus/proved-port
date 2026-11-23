@@ -23,7 +23,10 @@
 //	forbid PATH
 //
 // A call rule holds when the check CHECK exists; it is not advisory,
-// does not run only on request (`when: {requested: true}`), and runs on
+// does not run only on request (`when: {requested: true}`) or only when
+// some paths change (`when: {changed: [...]}`: a list that names no
+// path the ratchets read, `["never/**"]`, would let them pass unrun, and
+// this tool cannot tell which paths a target reads), and runs on
 // presubmit or postsubmit (its trigger or triggers), since otherwise it
 // gates no pull request or push; its environment installs
 // theseus-proved-port (the package name alone or followed by a version
@@ -41,9 +44,8 @@
 // every step before the first that does is a make step read with
 // certainty too (any other could write a GNUmakefile, which make reads
 // before the Makefile, or replace the kit's files; steps after it are
-// free). A check's resources, network, timeout, schedule and
-// when.changed paths are the port's to choose. (No target is named
-// `with`.)
+// free). A check's resources, network, timeout and schedule are the
+// port's to choose. (No target is named `with`.)
 //
 // Variables. Every variable a call check sets reaches make, from the
 // environment or its command line, and may change which kit, counter or
@@ -87,11 +89,12 @@
 // those. Nor may it list the kit's own
 // variables, which choose which kit, counter, ratchet, harness or
 // library a target runs (KANI_EXCLUDE, KANI_SHARD, which at 0 runs no
-// harness and passes, VERUS_COUNT, PROVED_PORT_HOME, CI_SKIP_UPDATE, a
+// harness and passes, VERUS_COUNT, PROVED_PORT_HOME, CI_SKIP_UPDATE,
+// KIT_CALLS_RULES, which names the rules `make kit-calls` holds, a
 // lower-case internal like verus_count_cmd): a name starting, in any
 // case, VERUS_, PROVED_PORT_, KANI_, UNSAFE_, NOALIAS_, CODEGEN_, PERF_,
 // SKIP_, GLIBC_MAX, KNOWN_, HEADER_CHECK_, ABI_ELF_, DEVIATIONS_,
-// CONSUMER, VERIFY, CI_ or LINT_. The port's Makefile sets those, where a
+// CONSUMER, VERIFY, CI_, LINT_ or KIT_. The port's Makefile sets those, where a
 // reviewer reads them; a test holds every name proved-port.mk assigns,
 // and every upper-case variable the kit's scripts read, to this list. A
 // check that splits Kani between instances (a foreach of KANI_SHARD)
@@ -364,11 +367,12 @@ func banned(name string) bool {
 // knobs are among them: KANI_SHARD=0 runs no harness and passes, and a
 // KANI_SHARDS above the instances leaves shards unrun. So are the
 // scripts' environment knobs (CI_SKIP_UPDATE, CI_CELL, CONSUMER,
-// LINT_UNSAFE_*).
+// LINT_UNSAFE_*), and the rules file and checker `make kit-calls` runs
+// (KIT_CALLS_RULES, KIT_CALLS).
 var kitPrefixes = []string{
 	"VERUS_", "PROVED_PORT_", "KANI_", "UNSAFE_", "NOALIAS_", "CODEGEN_", "PERF_",
 	"SKIP_", "GLIBC_MAX", "KNOWN_", "HEADER_CHECK_", "ABI_ELF_", "DEVIATIONS_",
-	"CONSUMER", "VERIFY", "CI_", "LINT_",
+	"CONSUMER", "VERIFY", "CI_", "LINT_", "KIT_",
 }
 
 // kitName reports whether name is one of the kit's variables, which a
@@ -529,6 +533,9 @@ func checkCall(w *workflow, r rule) []string {
 	}
 	if cond.Requested {
 		why = append(why, "the check runs only on request")
+	}
+	if len(cond.Changed) > 0 {
+		why = append(why, "the check runs only when its when.changed paths change")
 	}
 	if !gates(trigger, triggers) {
 		why = append(why, "the check runs on neither presubmit nor postsubmit")

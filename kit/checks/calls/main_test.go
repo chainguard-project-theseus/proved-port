@@ -67,7 +67,8 @@ func TestChalloc(t *testing.T) {
 		"ok call verus verus-headers verus",
 		"ok call verus-main verus-headers verus",
 		"ok call verus-arm64 verus-headers verus",
-		"ok call kani kani with QUANTUM",
+		// challoc's kani runs only when its when.changed paths change.
+		"FAIL call kani kani with QUANTUM: the check runs only when its when.changed paths change",
 		// A Kani split cannot be held to cover every shard.
 		"FAIL call kani-ignoring kani-regular with QUANTUM SHARD SHARDS: " +
 			"no step runs make kani-regular: step 1 (harnesses, regular format) runs make with a variable that sets KANI_SHARD, which the call line does not allow (`with KANI_SHARD`)",
@@ -83,6 +84,93 @@ func TestChalloc(t *testing.T) {
 	}, "\n")
 	if code != 1 || out != want || errs != "" {
 		t.Errorf("got code %d, stdout:\n%s\nstderr: %s\nwant code 1, stdout:\n%s", code, out, errs, want)
+	}
+}
+
+// The templates fixture is `chainctl checks explain --output=json` on the
+// kit's template check files filled with a sample port's values
+// (kit/kit-calls-test.sh writes it with --update). The rules template
+// must hold over it, and must have a call line for each kit target each
+// check's steps name: a check whose step holds the word make and the
+// name of one of proved-port.mk's targets needs a call line naming that
+// check and target. That list comes from the steps, not the rules file,
+// so a call line the template loses, or a template check that gains a
+// kit target with no call line, fails here. KIT_CALLS_TEMPLATES names
+// another file to read in its place: kit/kit-calls-test.sh runs this test
+// over what the real chainctl prints for the templates as they are, so a
+// fixture that lags them does not hide a missing call line.
+func TestTemplateCalls(t *testing.T) {
+	fixture := filepath.Join("testdata", "templates.json")
+	if f := os.Getenv("KIT_CALLS_TEMPLATES"); f != "" {
+		fixture = f
+	}
+	data, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rulesPath := filepath.Join("..", "..", "templates", "ci", "kit-calls.rules")
+	rules, err := readRules(rulesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk, err := os.ReadFile(filepath.Join("..", "..", "make", "proved-port.mk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^proved_port_phony = (.*)$`).FindSubmatch(mk)
+	if m == nil {
+		t.Fatal("proved-port.mk has no proved_port_phony line")
+	}
+	kit := map[string]bool{"verify": true}
+	for _, name := range strings.Fields(string(m[1])) {
+		kit[name] = true
+	}
+	if !kit["kit-calls"] || !kit["verus"] || len(kit) < 20 {
+		t.Fatalf("read %d kit targets from proved_port_phony, want at least 20 with verus and kit-calls", len(kit))
+	}
+	w, err := readWorkflow(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := map[string]bool{}
+	for _, r := range rules {
+		if r.kind == "call" {
+			for _, target := range r.targets {
+				called[r.check+" "+target] = true
+			}
+		}
+	}
+	n := 0
+	for _, name := range w.names {
+		for k, s := range w.jobs[name].steps {
+			words := strings.Fields(strings.Join(s.Cmd, " "))
+			hasMake := false
+			for _, x := range words {
+				hasMake = hasMake || x == "make"
+			}
+			if !hasMake {
+				continue
+			}
+			for _, x := range words {
+				if !kit[x] {
+					continue
+				}
+				n++
+				if !called[name+" "+x] {
+					t.Errorf("check %s step %d runs make %s, and kit-calls.rules has no call line for it (call %s %s)", name, k+1, x, name, x)
+				}
+			}
+		}
+	}
+	// verus and verus-main: verus-headers and verus; kani and kani-main:
+	// kani; source-rules: lint-unsafe and kit-calls.
+	if n < 8 {
+		t.Errorf("found %d kit targets in the template's steps, want at least 8", n)
+	}
+	var out, errb bytes.Buffer
+	code := run([]string{"-rules", rulesPath, fixture}, nil, &out, &errb)
+	if code != 0 || errb.Len() != 0 || strings.Contains(out.String(), "FAIL") {
+		t.Errorf("the rules template over the templates: got code %d, stdout:\n%s\nstderr: %s\nwant 0, every rule ok", code, out.String(), errb.String())
 	}
 }
 
@@ -295,6 +383,8 @@ func TestCallCheckRefused(t *testing.T) {
 	for _, c := range []struct{ job, why string }{
 		{`{` + kit + `,` + steps + `,"advisory":true}`, "the check is advisory"},
 		{`{` + kit + `,` + steps + `,"when":{"requested":true}}`, "the check runs only on request"},
+		{`{` + kit + `,` + steps + `,"when":{"changed":["never/**"]}}`, "the check runs only when its when.changed paths change"},
+		{`{` + kit + `,` + steps + `,"when":{"requested":true,"changed":["src/**"]}}`, "the check runs only on request; the check runs only when its when.changed paths change"},
 		{`{"environment":{"packages":["make"]},` + steps + `}`, "its environment does not install theseus-proved-port"},
 		{`{"environment":{"packages":["theseus-proved-port-x","theseus-proved"]},` + steps + `}`, "its environment does not install theseus-proved-port"},
 		{`{` + steps + `}`, "its environment does not install theseus-proved-port"},
@@ -334,8 +424,8 @@ func TestCallCheckRefused(t *testing.T) {
 		t.Errorf("a missing check: got %d %q, want 1 %q", code, out, want)
 	}
 	// A pinned kit package and the fields a check may have pass; an
-	// advisory false and a when with only changed paths gate.
-	job := `{"environment":{"packages":["theseus-proved-port=0.4.13-r0"],"variables":{"A":"1"}},` + bare + `,"advisory":false,"when":{"changed":["src/**"]},"foreach":{"entries":[{"name":"a","vars":{"Q":"1"},"resources":"large","network":{"egress":["x"]},"timeout":"9s"}]},"variables":{"B":"2"},"egress":[],"identity":"x","network":"NETWORK_MODE_EXTERNAL","resources":"large","schedule":"1 * * * *","timeout":"1s","trigger":"TRIGGER_CRON","triggers":["TRIGGER_CRON","TRIGGER_POSTSUBMIT"]}`
+	// advisory false and a when that is not requested gate.
+	job := `{"environment":{"packages":["theseus-proved-port=0.4.13-r0"],"variables":{"A":"1"}},` + bare + `,"advisory":false,"when":{"requested":false},"foreach":{"entries":[{"name":"a","vars":{"Q":"1"},"resources":"large","network":{"egress":["x"]},"timeout":"9s"}]},"variables":{"B":"2"},"egress":[],"identity":"x","network":"NETWORK_MODE_EXTERNAL","resources":"large","schedule":"1 * * * *","timeout":"1s","trigger":"TRIGGER_CRON","triggers":["TRIGGER_CRON","TRIGGER_POSTSUBMIT"]}`
 	code, out, errs := runCalls(t, "call c t with A B Q\n", `{"jobs":{"c":`+job+`}}`)
 	if code != 0 || out != "ok call c t with A B Q\n" || errs != "" {
 		t.Errorf("a check with every field read: got %d %q %q, want 0, ok", code, out, errs)
@@ -506,6 +596,8 @@ func TestRulesErrors(t *testing.T) {
 		{"call c t with CONSUMER\n", ":1: with CONSUMER: it chooses which kit, counter, ratchet or harness runs"},
 		{"call c t with LINT_UNSAFE_INNER\n", ":1: with LINT_UNSAFE_INNER: it chooses which kit, counter, ratchet or harness runs"},
 		{"call c t with KANI_ONLY\n", ":1: with KANI_ONLY: it chooses which kit, counter, ratchet or harness runs"},
+		{"call c t with KIT_CALLS_RULES\n", ":1: with KIT_CALLS_RULES: it chooses which kit, counter, ratchet or harness runs"},
+		{"call c t with kit_calls\n", ":1: with kit_calls: it chooses which kit, counter, ratchet or harness runs"},
 		{"call c t with verus_count_cmd\n", ":1: with verus_count_cmd: it chooses which kit, counter, ratchet or harness runs"},
 		{"call c t with CG_CPUS\n", ":1: with CG_CPUS: make, the shell, the loader or cargo reads it, or Checks sets it"},
 	} {

@@ -123,6 +123,10 @@
 #                     CONSUMERS_DIR, against the swap directory
 #                     CONSUMERS_LIB, with the fetch and loaded helpers
 #                     (the PCRE2 port's consumer harness).
+#   kit-calls         proved-port-calls over `chainctl checks explain`:
+#                     the port's checks call the kit's targets, and run
+#                     no in-tree copy the kit replaced, as the rules
+#                     file KIT_CALLS_RULES says (PLAN step 8).
 #   verify          every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
@@ -338,7 +342,7 @@ export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_AR
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run kit-calls verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -739,6 +743,33 @@ consumers-run: ## each consumer in CONSUMERS_DIR, run against the swap directory
 	$(if $(strip $(CONSUMERS_WORK)),,$(error $(consumers_work_empty)))
 	CONSUMERS_DIR='$(strip $(CONSUMERS_DIR))' CONSUMERS_WORK='$(strip $(CONSUMERS_WORK))' CONSUMERS_SONAME='$(strip $(CONSUMERS_SONAME))' CONSUMERS_PREFIX='$(strip $(CONSUMERS_PREFIX))' sh $(PROVED_PORT_MAKE)consumers.sh run '$(strip $(CONSUMERS_LIB))'$(foreach n,$(CONSUMERS_NAMES), '$(n)')
 
+# --- kit-calls -------------------------------------------------------------
+# PLAN step 8's lint that the port's checks call the kit's targets. The
+# recipe writes `chainctl checks explain --output=json .` (the resolved
+# configuration Checks plans; no network, login or .git) to a temporary
+# file outside the tree, fails when explain fails (printing what it
+# wrote, its diagnostics), and then runs KIT_CALLS (by default
+# proved-port-calls, which the package installs; its doc comment says
+# what each rule holds) with -rules KIT_CALLS_RULES over the file. Its
+# exit status is the target's. KIT_CALLS_RULES is the port's rules file,
+# by default ci/kit-calls.rules (the kit's template is
+# templates/ci/kit-calls.rules); the target fails while either is empty.
+# The rules file is passed stripped.
+KIT_CALLS ?= proved-port-calls
+KIT_CALLS_RULES ?= ci/kit-calls.rules
+kit_calls_empty = KIT_CALLS is empty: name the checker (by default proved-port-calls)
+kit_calls_rules_empty = KIT_CALLS_RULES is empty: name the port's rules file (by default ci/kit-calls.rules)
+
+kit-calls: ## the port's checks call the kit's targets and run no in-tree copy it replaced, per the rules file KIT_CALLS_RULES (chainctl checks explain, then proved-port-calls)
+	$(proved_port_version_check)
+	$(if $(strip $(KIT_CALLS)),,$(error $(kit_calls_empty)))
+	$(if $(strip $(KIT_CALLS_RULES)),,$(error $(kit_calls_rules_empty)))
+	@f=$$(mktemp) || exit 1; trap 'rm -f "$$f"' EXIT; \
+	if ! chainctl checks explain --output=json . > "$$f"; then \
+	  cat "$$f" >&2; echo "kit-calls: chainctl checks explain --output=json . failed" >&2; exit 1; \
+	fi; \
+	$(KIT_CALLS) -rules '$(strip $(KIT_CALLS_RULES))' "$$f"
+
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
 # order `make verify` runs them, each in its own make. A package build
@@ -762,7 +793,7 @@ consumers-run: ## each consumer in CONSUMERS_DIR, run against the swap directory
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run kit-calls
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

@@ -117,7 +117,9 @@ checks:
       test passes (the script reader's cases and refusals, each make
       option, variable and goal rule, the check-level refusals, forbid's
       path boundaries over steps and services, the rules file's and the
-      workflow's errors, and challoc 7138852's resolved configuration).
+      workflow's errors, challoc 7138852's resolved configuration, and
+      the filled templates', over which the rules template has a call
+      line for each kit target a template check runs).
     trigger: [presubmit, postsubmit]
     timeout: 5m
     cmd:
@@ -128,6 +130,28 @@ checks:
         cd kit/checks/calls;
         f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
         go vet ./... && go test -count=1 ./...
+
+  # The real chainctl and the checker built here, over the kit's own
+  # templates: the rules template holds over the template's checks.
+  # make runs the target; chainctl's explain needs no network or login.
+  # chainctl is unpinned here, unlike in the templates: this check runs
+  # the newest release, so a change to explain's output that the checker
+  # refuses (a field it does not read) fails here before any port's pin
+  # moves to it.
+  kit-calls-template:
+    description: >-
+      kit/kit-calls-test.sh: make kit-calls, with chainctl and
+      kit/checks/calls, over the template's check files filled with a
+      sample port's values and kit/templates/ci/kit-calls.rules:
+      TestTemplateCalls passes over explain's output for them (a call
+      line for each kit target a template check runs), every rule
+      holds, and a forbidden copy, a when.changed list, a first step
+      that is no make step and a refused check file each fail it.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      packages: [go-1.27, busybox, make, chainctl]
+    cmd: [sh, kit/kit-calls-test.sh]
 
   seams-mutants:
     description: >-
