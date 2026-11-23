@@ -1,2 +1,6 @@
 plugins/*/evals/results/
 target/
+# A bare `go build` in a kit Go tool's directory writes its binary there.
+/kit/perf/codegen/fncmp/fncmp
+/kit/perf/stats/stats
+/kit/verus/seams/seams

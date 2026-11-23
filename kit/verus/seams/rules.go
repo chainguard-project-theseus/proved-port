@@ -32,6 +32,7 @@ type Rules struct {
 	CiteFnCfg   map[string][]string // tag -> the `#[cfg(CFG)]` lines its fn may carry
 	CiteAssert  map[string]bool     // tags whose citations are labeled assertions
 	CiteRow     map[string]citeRow  // tag -> the table row each citation needs
+	CiteTest    map[string]citeTest // tag -> the test crate its citations name tests in
 	CiteModule  map[string]string   // a path's first segment -> the directory it reads
 	NotCopyFile string              // the file of the tracked types' not-Copy checks, or ""
 	NotCopyTag  string              // the cite-assert tag a tracked-type seam cites them with
@@ -163,7 +164,7 @@ func readRules(file string) (*Rules, error) {
 
 func parseRules(file, data string) (*Rules, error) {
 	r := &Rules{Ledger: "verus/ledger", Source: "src", SeamsDoc: "verus/SEAMS.md", ToolOf: map[string]string{}, Partial: map[string]bool{},
-		CiteFn: map[string]string{}, CiteFnCfg: map[string][]string{}, CiteAssert: map[string]bool{}, CiteRow: map[string]citeRow{}, CiteModule: map[string]string{}}
+		CiteFn: map[string]string{}, CiteFnCfg: map[string][]string{}, CiteAssert: map[string]bool{}, CiteRow: map[string]citeRow{}, CiteTest: map[string]citeTest{}, CiteModule: map[string]string{}}
 	tools := map[string]bool{}
 	seen := map[string]bool{}
 	var errs []string
@@ -269,9 +270,9 @@ func parseRules(file, data string) (*Rules, error) {
 			if len(f) == 3 {
 				r.Partial[f[1]] = true
 			}
-		case "cite-fn", "cite-assert", "cite-row":
-			forms := map[string]string{"cite-fn": "cite-fn<TAB>TAG<TAB>ATTR[<TAB>CFG...]", "cite-assert": "cite-assert<TAB>TAG", "cite-row": "cite-row<TAB>TAG<TAB>FILE<TAB>HEADING<TAB>PART..."}
-			n := map[string]int{"cite-fn": max(len(f), 3), "cite-assert": 2, "cite-row": max(len(f), 4)}[f[0]]
+		case "cite-fn", "cite-assert", "cite-row", "cite-test":
+			forms := map[string]string{"cite-fn": "cite-fn<TAB>TAG<TAB>ATTR[<TAB>CFG...]", "cite-assert": "cite-assert<TAB>TAG", "cite-row": "cite-row<TAB>TAG<TAB>FILE<TAB>HEADING<TAB>PART...", "cite-test": "cite-test<TAB>TAG<TAB>DIR[<TAB>CFG...]"}
+			n := map[string]int{"cite-fn": max(len(f), 3), "cite-assert": 2, "cite-row": max(len(f), 4), "cite-test": max(len(f), 3)}[f[0]]
 			if !want(n, forms[f[0]]) {
 				continue
 			}
@@ -280,9 +281,33 @@ func parseRules(file, data string) (*Rules, error) {
 				continue
 			}
 			switch f[0] {
-			case "cite-fn", "cite-assert":
-				if _, ok := r.CiteFn[f[1]]; ok || r.CiteAssert[f[1]] {
-					bad("%s %s: the tag already has a cite-fn or cite-assert line", f[0], f[1])
+			case "cite-fn", "cite-assert", "cite-test":
+				_, fn := r.CiteFn[f[1]]
+				_, test := r.CiteTest[f[1]]
+				if fn || test || r.CiteAssert[f[1]] {
+					bad("%s %s: the tag already has a cite-fn, cite-assert or cite-test line", f[0], f[1])
+					continue
+				}
+				if f[0] == "cite-test" {
+					c, ok := inTree(f[2])
+					if !ok {
+						continue
+					}
+					ct := citeTest{dir: c}
+					for _, g := range f[3:] {
+						// The `mod` line's attributes are compared lexed,
+						// which blanks a literal's contents, so a CFG holding
+						// one could stand for another of its length.
+						if strings.ContainsAny(g, "\"'") {
+							bad("cite-test %s: CFG %s holds a literal, which the check cannot compare", f[1], g)
+							ok = false
+							break
+						}
+						ct.cfgs = append(ct.cfgs, "#[cfg("+g+")]")
+					}
+					if ok {
+						r.CiteTest[f[1]] = ct
+					}
 					continue
 				}
 				if f[0] == "cite-assert" {

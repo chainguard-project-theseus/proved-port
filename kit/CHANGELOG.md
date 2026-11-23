@@ -69,6 +69,36 @@ where it reports drift.
   `#[verifier(assume_unsupported_attributes)]`, and the blanks a block
   comment leaves in an export's contract. Nothing is installed; ports
   see no change.
+- The seam ledger generator resolves test-crate citations (#252),
+  seams.sh's `loomtest()`: with a rules line
+  `cite-test<TAB>TAG<TAB>DIR[<TAB>CFG...]`, `-check` resolves each TAG
+  citation `MOD::TEST` to a top-level `fn TEST() {` in DIR/MOD.rs with
+  `#[test]` and no `#[should_panic]` above it, whose `///` lines or body
+  name the seam's function in backquotes, in a file that names the
+  seam's source file in backquotes, with `loomtest()`'s matching. Where
+  `loomtest()` was lax, the check fails closed: the test may carry no
+  cfg, cfg_attr or ignore attribute but `#[cfg(CFG)]` for a CFG field,
+  DIR/lib.rs must declare `mod MOD;` at its top level under no other
+  gate and no `#[path]`, neither file may hold an inner cfg attribute
+  but `#![cfg(CFG)]`, the test crate's manifest (DIR/../Cargo.toml,
+  read as the reach check reads the main crate's) must keep DIR/lib.rs
+  its root and tested (no `[lib] path` elsewhere, `autolib = false`,
+  `test = false` or `harness = false`), the last attribute run after
+  other code or an item's closing delimiter on its line (`}
+  #[should_panic]`, `const C: u8 = 0; #[inline] const D: u8 = 0;
+  #[ignore]`) attaches to the next item, the body ends at the delimiter
+  that closes it (code or a comment after it on its line is not the
+  test's), and lines in block comments or literals are not
+  read. It also reads Rust's attachment where `loomtest()` dropped a
+  test: attributes and doc lines in any order and across blank and
+  comment lines. A CFG holding a literal (`feature = "x"`) is a rules
+  error. The template's `seams.rules` carries challoc's line,
+  commented. In a local run at this commit (#252's pull request has the
+  commands; no check repeats it), challoc 2e71814 passed `-check` with
+  `cite-test	loom	tests/loom/src	test` (25 loom citations, 13
+  tests), and with one cited test made `#[should_panic]` both seams.sh
+  and this check refused it. A port without a `cite-test` line sees no
+  change.
 
 ### Porting notes
 
@@ -83,6 +113,14 @@ where it reports drift.
    path that is not clean, or a `...` row first, last, doubled for its
    file or with a third field now fails and names the row, and a pins
    file with no rows fails. A port that does neither changes nothing.
+3. Optional: a port whose own script resolves loom citations (challoc's
+   `loomtest()` in `verus/seams.sh`) can add
+   `cite-test<TAB>loom<TAB>tests/loom/src<TAB>test` to
+   `verus/seams.rules` and drop that function. A cited test under
+   `#[ignore]` or a cfg other than `#[cfg(test)]`, or in a file
+   `tests/loom/src/lib.rs` does not declare ungated, now fails, as does
+   a `tests/loom/Cargo.toml` that is missing, moves the library root or
+   turns its tests off.
 
 ## 0.4.12
 

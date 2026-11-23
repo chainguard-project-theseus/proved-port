@@ -331,6 +331,8 @@ func TestReachTargets(t *testing.T) {
 		{libTree, "[lib]\npath = \"/src/lib.rs\"\n", "Cargo.toml sets a target path \"/src/lib.rs\""},
 		{libTree, "[package]\nname = \"x\"\n\n[lib]\ncrate-type = [\"cdylib\", \"staticlib\"]\n", ""},
 		{libTree, "[lib]\npath = \"src/lib.rs\"\n", ""},
+		// The library's tests matter only to a cite-test crate.
+		{libTree, "[package]\nname = \"x\"\n\n[lib]\ntest = false\nharness = false\n", ""},
 		{libTree, "[lib]\npath = \"src/ffi.rs\"\n", "Cargo.toml sets a target path \"src/ffi.rs\", so src/lib.rs may not be the crate root it builds"},
 		{libTree, "[package]\nautolib = false\n", "Cargo.toml sets autolib = false, so src/lib.rs may not be built"},
 		{libTree, "[[bin]]\npath = \"src/bin/x.rs\"\n", ""}, // a bin path leaves the library alone
