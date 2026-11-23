@@ -178,10 +178,46 @@ where it reports drift.
   names its check, and a memory-safety row also names the theorem or
   gap for the panic left), a section per class (property, proved, by
   construction, partial or trusted, gap), the `vuln class:` gaps list,
-  and keeping it current. It is a starting point the port reshapes; no
-  kit check reads it, and `make verus-headers` does not hold it. The
-  skill's survey step (references/lifecycle.md) starts the catalog
-  from it.
+  and keeping it current. It is a starting point the port reshapes;
+  only the opt-in check below reads it, and `make verus-headers` does
+  not hold it. The skill's survey step (references/lifecycle.md)
+  starts the catalog from it.
+- The seam ledger generator checks a vulnerability-class catalog in the
+  template's layout (#266): with a rules line `vuln-classes<TAB>FILE`
+  (at most once), `-check` reads the first table under FILE's `##
+  Catalog` (its `class` and `ruled out by` columns found by header
+  name, so other columns and their order are the port's), each `###`
+  section under `## Classes` with its **Proved.** and **Gap.**
+  paragraphs, and the items of `## Gaps`. It fails a theorem cited `ID
+  (#n)` (ID starting with a capital letter and holding a digit) in a
+  row's ruled out by cell or a **Proved.** paragraph with no
+  `theorems/ID.md` beside FILE; a row's class with no section
+  (compared with case folded); a `gap: #n` in a row or a **Gap.**
+  paragraph with no item of Gaps naming `#n` on its first line, and an
+  item no row or section cites so. A paragraph's lines are read joined,
+  so a citation wrapped over two lines reads whole, and a line directly
+  under the rows that starts no other block is a row, leading `|` or
+  not, as GitHub renders it. So that a citation in another form fails
+  rather than go unread, it also fails a ruled out by cell with no `ID
+  (#n)`, no `gap: #n`, no `not shipped` and no `by construction:` (a
+  `by construction:` row's named check, and whether a memory-safety
+  row also names its panic's theorem or gap, stay true by review); a
+  class section without its **Proved.** or **Gap.** paragraph (a
+  misnamed `**Proved**.` included); a **Proved.** paragraph with no `ID
+  (#n)` and a **Gap.** paragraph with no `gap: #n` that does not read
+  "none"; and an id in code font or a link before ` (#n)`. An id
+  written with no ` (#n)` of its own is not read. It fails as well a
+  row whose cell count is not the header's, a row with no class, a
+  second section of a class, a Gaps item naming no issue, a header
+  without either column, a header with no separator row under it
+  (whether a row, a heading, a fence or the end of the file follows; a
+  header and separator with no rows pass), a second table under
+  Catalog, and a FILE with no Catalog table or none at all. Whether a cited issue is still open
+  needs the network and is not checked. The template catalog's row,
+  **Proved.** and **Gap.** forms now say `ID (#n)` and `gap: #<n>` (or
+  "none"), its "Keeping this current"
+  names the check, and the template's `verus/seams.rules` holds the
+  line commented. A port without the line sees no change.
 
 ### Porting notes
 
@@ -232,6 +268,17 @@ where it reports drift.
 7. Nothing to change. A port without a `verus/VULN-CLASSES.md` starts
    one from `templates/verus/VULN-CLASSES.md`; a port that has one may
    keep its own layout.
+8. Optional: a port whose catalog is in the template's layout (the
+   `## Catalog` table with `class` and `ruled out by` columns, `###`
+   class sections under `## Classes`, the `## Gaps` list, theorems
+   cited `ID (#n)`) can add `vuln-classes<TAB>verus/VULN-CLASSES.md` to
+   `verus/seams.rules`; `proved-port-seams -check` then fails each `ID
+   (#n)` and `gap: #n` citation that does not resolve, a ruled out by
+   cell citing neither form that is neither `not shipped` nor `by
+   construction:`, and a class section whose **Proved.** or **Gap.**
+   paragraph is missing or cites neither form (write "none" in a
+   paragraph with nothing to cite). A port with another layout, or
+   without the line, changes nothing.
 
 ## 0.4.12
 

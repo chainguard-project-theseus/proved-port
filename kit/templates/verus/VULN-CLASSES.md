@@ -56,9 +56,12 @@ route in, code outside `verus!`) says so, and is `partial:`.
   it and the exported functions that reach it, or says there is none
   (the port does not ship that tool or feature).
 - **ruled out by** lists the theorem ids that rule the class out for
-  every input of those exported functions, each with the issue that
-  proved it and a clause on what it proves. `partial:` says what is
-  proved and what is not; `gap: #<n>` names the class's open issue;
+  every input of those exported functions, each written `ID (#n)` with
+  the issue that proved it, then a clause on what it proves (a word
+  starting with a capital letter and holding a digit, right before
+  ` (#n)`, reads as a theorem id; each id carries its own ` (#n)`, in
+  plain text, not code font or a link). `partial:` says what is proved and what is not;
+  `gap: #<n>` names the class's open issue;
   `not shipped` marks a row with no counterpart. `by construction:`
   names the fact and the check that holds it (the `unsafe` fence's
   check, a type the counterpart cannot be given). A memory-safety class
@@ -89,7 +92,8 @@ its buffer; every size computation without overflow; recursion depth
 at most a stated function of the input; work at most a stated function
 of its length.}
 
-**Proved.** {The theorem ids, with the exported functions each covers.}
+**Proved.** {The theorem ids, each `ID (#n)`, with the exported
+functions each covers, or "none".}
 
 **By construction.** {The fact and the check that holds it, and for a
 memory-safety class the theorem or gap for the panic that is left;
@@ -98,8 +102,8 @@ delete when nothing.}
 **Partial or trusted.** {What the theorems rest on beyond the trusted
 base: seams, premises, code outside `verus!`; delete when nothing.}
 
-**Gap.** {The `vuln class:` issue that will prove the rest, or
-"none".}
+**Gap.** {`gap: #<n>`, the `vuln class:` issue that will prove the
+rest, or "none".}
 
 ## Gaps
 
@@ -113,7 +117,19 @@ issue when its rows land here.
 
 ## Keeping this current
 
-No kit check reads this file, so it stays true only by review. A new
+With the line `vuln-classes<TAB>verus/VULN-CLASSES.md` in
+`verus/seams.rules`, `proved-port-seams -check` reads this file in the
+layout above: each theorem cited `ID (#n)` in a row or a **Proved.**
+paragraph has its `verus/theorems/<ID>.md`, each row's class has a
+section, each `gap: #<n>` is an item of Gaps, and each item of Gaps is
+cited; a ruled out by cell that cites neither form and is neither `not
+shipped` nor `by construction:`, a class section without its
+**Proved.** or **Gap.** paragraph, such a paragraph that cites none and
+is not "none", and an id in code font or a link before ` (#n)` fail. An
+id written without its own ` (#n)` is not read, and neither is a
+`by construction:` row's check nor whether a memory-safety row also
+names its panic's theorem or gap. Whether a cited issue is still open,
+and everything else here, stays true only by review. A new
 upstream CVE or advisory adds its row in the change that learns of it,
 with the record fetched. A change that proves a class replaces the
 class's issue number with its theorem ids, in the class's section and
