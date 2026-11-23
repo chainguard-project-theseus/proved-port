@@ -198,9 +198,9 @@ func (v *resolver) targets(root string) string {
 	}
 	f := v.file(man)
 	lib := strings.HasSuffix(root, "/lib.rs")
-	// open: the brackets a value left open, over its lines;
+	// open: the brackets and braces a value left open, over its lines;
 	// named: a [lib] path names root.
-	table, pkg, open, named := "", false, 0, false
+	table, pkg, open, named := "", false, "", false
 	for i, l := range f.raw {
 		// A byte-order mark at the start is no text (Cargo's TOML reader
 		// drops it); one anywhere else is refused, as it would hide a
@@ -227,18 +227,19 @@ func (v *resolver) targets(root string) string {
 		if strings.Contains(t, `\`) {
 			return fmt.Sprintf("%s holds an escape (`\\`), which the check does not read, so %s may not be the crate root it builds", man, root)
 		}
-		// A line of a value still open (a multi-line array) is the
-		// value's; one starting with `[` there may look like a header but
-		// is none, so the reader cannot follow it. A bracket in a string
-		// counts too, which fails closed.
-		if open > 0 {
+		// A line of a value still open (a multi-line array, or a TOML 1.1
+		// multi-line inline table) is the value's, so a key on it (`path`
+		// in `x = {` .. `}` under [lib]) is the value's key, not the
+		// table's; one starting with `[` there may look like a header but
+		// is none, so the reader cannot follow it.
+		if open != "" {
 			if t != "" && t[0] == '[' {
 				return fmt.Sprintf("%s has a line starting with `[` inside a multi-line value, which the check does not read, so %s may not be the crate root it builds", man, root)
 			}
 			if msg := brackets(r, man, root); msg != "" {
 				return msg
 			}
-			open = r.depth // what the value still leaves open
+			open = r.open // what the value still leaves open
 			continue
 		}
 		if strings.HasPrefix(t, "[") {
@@ -275,7 +276,7 @@ func (v *resolver) targets(root string) string {
 		if why := brackets(r, man, root); why != "" {
 			return why
 		}
-		open = r.depth // what this value leaves open (from 0)
+		open = r.open // what this value leaves open (from none)
 		// Spellings the check does not read: dotted keys and inline
 		// tables for the targets and their discovery.
 		if strings.HasPrefix(k, "lib.") || strings.HasPrefix(k, "package.auto") ||
@@ -296,7 +297,7 @@ func (v *resolver) targets(root string) string {
 		}
 	}
 	// A value still open at the end is no valid manifest (#241).
-	if open != 0 {
+	if len(open) > 0 {
 		return fmt.Sprintf("%s has a value that does not close before its end, which the check does not read, so %s may not be the crate root it builds", man, root)
 	}
 	if !pkg {
@@ -312,14 +313,15 @@ func (v *resolver) targets(root string) string {
 }
 
 // brackets says why a value's line r is no valid TOML ("" when its
-// brackets are): a `]` along the line, not only at its end, closes more
-// than are open, or a `[` follows the value's close.
+// brackets and braces are): a `]` or `}` along the line, not only at its
+// end, closes none open or one of the other kind, or a `[` or `{`
+// follows the value's close.
 func brackets(r tomlRead, man, root string) string {
 	switch {
 	case r.under:
-		return fmt.Sprintf("%s has a value with an unmatched `]`, which the check does not read, so %s may not be the crate root it builds", man, root)
+		return fmt.Sprintf("%s has a value with an unmatched `]` or `}`, which the check does not read, so %s may not be the crate root it builds", man, root)
 	case r.reopen:
-		return fmt.Sprintf("%s has a `[` after a value closes, which the check does not read, so %s may not be the crate root it builds", man, root)
+		return fmt.Sprintf("%s has a `[` or `{` after a value closes, which the check does not read, so %s may not be the crate root it builds", man, root)
 	}
 	return ""
 }
@@ -329,26 +331,26 @@ type tomlRead struct {
 	text     string // the line before a comment, trimmed
 	key, val string // around its first `=` outside quoted strings
 	eq       bool   // it has such an `=`
-	depth    int    // the brackets open after it
-	under    bool   // a `]` closed more than were open
-	reopen   bool   // a `[` came after the open value closed
+	open     string // the brackets and braces open after it, innermost last
+	under    bool   // a `]` or `}` closed none open, or one of the other kind
+	reopen   bool   // a `[` or `{` came after the open value closed
 	closed   bool   // every string on it closes
 }
 
-// tomlLine reads a manifest line with depth brackets open before it (0
-// outside a value): its text before a comment (a `#` outside a quoted
+// tomlLine reads a manifest line with open delimiters open before it
+// ("" outside a value; `[` for an array, `{` for an inline table,
+// innermost last): its text before a comment (a `#` outside a quoted
 // string), its key and value around the first `=` outside quoted
-// strings, the brackets open after it, counted outside quoted strings
-// (an inline table is one line in TOML 1.0, so its braces never stay
-// open), whether a `]` closes more than are open or a `[` follows the
-// close of the value (`1], [2,`; `x = [1] [2]`), which no valid value
-// does, and whether every string on it closes. An escape is refused by
-// the caller, so a quote always ends its string.
-func tomlLine(l string, depth int) tomlRead {
-	r := tomlRead{depth: depth}
-	// braces: the inline tables open along the line; a value closes
-	// only outside them (`x = { a = [1], b = [2] }`).
-	q, end, at, ended, braces := byte(0), len(l), -1, false, 0
+// strings, the delimiters open after it, read outside quoted strings
+// (an array, and since TOML 1.1 an inline table, may span lines),
+// whether a `]` or `}` closes none open or one of the other kind, or a
+// `[` or `{` follows the close of the value (`1], [2,`; `x = [1] [2]`;
+// `x = {} {}`), which no valid value does, and whether every string on
+// it closes. An escape is refused by the caller, so a quote always ends
+// its string.
+func tomlLine(l string, open string) tomlRead {
+	r := tomlRead{open: open}
+	q, end, at, ended := byte(0), len(l), -1, false
 scan:
 	for i := 0; i < len(l); i++ {
 		switch c := l[i]; {
@@ -365,18 +367,21 @@ scan:
 			if at < 0 {
 				at = i
 			}
-		case c == '[':
+		case c == '[' || c == '{':
 			r.reopen = r.reopen || ended
-			r.depth++
-		case c == ']':
-			r.depth--
-			r.under = r.under || r.depth < 0
-			ended = r.depth == 0 && braces == 0
-		case c == '{':
-			braces++
-		case c == '}':
-			braces--
-			ended = braces == 0 && r.depth == 0
+			r.open += string(c)
+		case c == ']' || c == '}':
+			// The closer must match the innermost open delimiter.
+			want := byte('[')
+			if c == '}' {
+				want = '{'
+			}
+			if n := len(r.open); n == 0 || r.open[n-1] != want {
+				r.under = true
+			} else {
+				r.open = r.open[:n-1]
+			}
+			ended = r.open == ""
 		}
 	}
 	// (A `#` ends the scan only outside a string, so q is 0 there too.)

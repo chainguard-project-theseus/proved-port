@@ -13,6 +13,30 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.13
+
+### Changes
+
+- The reach check's manifest reader (`proved-port-seams -check` with
+  `[reach]`) reads a TOML 1.1 multi-line inline table (#246). Its braces
+  are tracked over its lines with an array's brackets, innermost last,
+  so the lines inside it are the value's: its `}` line no longer fails
+  as "neither a table header nor a key", and a key inside it (`path` in
+  `x = {` .. `}` under `[lib]`, which is `lib.x.path`) is not read as
+  the table's own. A line starting with `[` inside it fails, as inside
+  an array. Three forms, none a valid manifest, now fail too: a `]` or
+  `}` that closes a delimiter of the other kind (`x = [1}`), a `{` after
+  a value closes (`x = { a = 1 } { b = 2 }`), and an inline table left
+  open at the end of its line and the manifest (before, `x = { a = 1`
+  alone passed). The two messages name both kinds ("an unmatched `]` or
+  `}`", "a `[` or `{` after a value closes").
+
+### Porting notes
+
+1. Nothing to change. A manifest that passed 0.4.12's reach check passes
+   this one unless it is one Cargo cannot read; one with a multi-line
+   inline table, which failed, now passes when the rest of it does.
+
 ## 0.4.12
 
 ### Changes
