@@ -41,7 +41,9 @@
 #     compiled through it (left out, or taken as fresh) fails. So does
 #     a member's rustc getting --cap-lints or --force-warn, which
 #     outrank a forbid, from the caller's flags or cargo configuration,
-#     directly or in an @FILE argument file.
+#     directly or in an @FILE argument file (but for the
+#     --force-warn=unused_crate_dependencies cargo 1.100 and later pass
+#     every rustc themselves).
 #
 # With UNSAFE_WORKSPACE_LINTS = yes (the default), it also checks that
 # the root manifest sets unsafe_code to "deny" or "forbid" (or a table
@@ -583,7 +585,9 @@ esac
 # gets either, from RUSTFLAGS, CARGO_ENCODED_RUSTFLAGS or a cargo
 # configuration's rustflags (cargo passes --cap-lints itself only for
 # dependencies outside the workspace, which the wrapper never sees), is
-# refused: the wrapper names the flag and fails that compile.
+# refused: the wrapper names the flag and fails that compile. The one
+# --force-warn let through is of unused_crate_dependencies, which cargo
+# 1.100 and later pass every rustc and which leaves unsafe_code alone.
 wrapper=$plant/rustc-forbid-unsafe
 cat > "$wrapper" <<'WRAPPER'
 #!/bin/sh
@@ -595,10 +599,29 @@ refuse() {
   echo "lint-unsafe: $CARGO_PKG_NAME's rustc gets $1, which outranks -Funsafe_code: take it out of RUSTFLAGS, CARGO_ENCODED_RUSTFLAGS or the cargo configuration's rustflags" >&2
   exit 1
 }
-# check ARG: refuse ARG if it outranks the forbid.
-check() {
+# forcewarn LINT ARG: refuse ARG, a --force-warn of LINT, unless LINT is
+# one cargo passes itself: from cargo 1.100 on it gives every rustc
+# --force-warn=unused_crate_dependencies, which leaves unsafe_code's
+# level alone. Any other lint (unsafe_code, or a group) is refused.
+forcewarn() {
   case $1 in
-    --cap-lints | --cap-lints=* | --force-warn | --force-warn=*) refuse "$1" ;;
+    unused_crate_dependencies | unused-crate-dependencies) ;;
+    *) refuse "$2" ;;
+  esac
+}
+# check ARG: refuse ARG if it outranks the forbid. fw is set after a
+# --force-warn whose lint is the next argument.
+fw=
+check() {
+  if [ -n "$fw" ]; then
+    fw=
+    forcewarn "$1" "--force-warn $1"
+    return
+  fi
+  case $1 in
+    --cap-lints | --cap-lints=*) refuse "$1" ;;
+    --force-warn) fw=1 ;;
+    --force-warn=*) forcewarn "${1#--force-warn=}" "$1" ;;
   esac
 }
 if [ -n "${CARGO_PKG_NAME-}" ] && ! printf '%s\n' "$LINT_UNSAFE_FENCE" | grep -Fqx -- "$CARGO_PKG_NAME"; then
@@ -618,6 +641,9 @@ if [ -n "${CARGO_PKG_NAME-}" ] && ! printf '%s\n' "$LINT_UNSAFE_FENCE" | grep -F
       *) check "$a" ;;
     esac
   done
+  # A --force-warn with no lint after it, which would take the forbid
+  # appended below as its lint.
+  [ -z "$fw" ] || refuse "--force-warn"
   echo "$CARGO_PKG_NAME" >> "$LINT_UNSAFE_LOG"
   # The package, crate name and source file this rustc compiles, as
   # `PACKAGE<tab>CRATE<tab>PATH`, the path absolute: cargo names it

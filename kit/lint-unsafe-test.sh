@@ -175,9 +175,21 @@ verdict "RUSTFLAGS=-Aunsafe_code does not lower the forbid" 1 "a crate other tha
 # on the clean fixture.
 d=$(copy)
 printf 'fn main() {\n    let x = 0u8;\n    let _ = unsafe { *(&raw const x) };\n}\n' > "$d/crates/vpair/examples/ex.rs"
-for f in --cap-lints=allow '--cap-lints warn' '--force-warn unsafe_code' --force-warn=unsafe-code; do
+for f in --cap-lints=allow '--cap-lints warn' '--force-warn unsafe_code' --force-warn=unsafe-code \
+  '--force-warn=unused_crate_dependencies --force-warn unsafe_code' \
+  '--force-warn unused_crate_dependencies --force-warn=unsafe_code'; do
   run "$d" RUSTFLAGS="$f"
   verdict "RUSTFLAGS='$f' is refused" 1 "a member's rustc gets a flag that outranks -Funsafe_code"
+done
+# The --force-warn cargo 1.100 and later pass every rustc themselves,
+# --force-warn=unused_crate_dependencies, leaves unsafe_code alone: the
+# clean fixture passes with it in RUSTFLAGS too, in either form, and the
+# planted example still fails as unsafe code, not as a refused flag.
+for f in '--force-warn unused_crate_dependencies' --force-warn=unused-crate-dependencies; do
+  run "$fx" RUSTFLAGS="$f"
+  verdict "RUSTFLAGS='$f' on the clean fixture passes" 0 "lint-unsafe: PASS"
+  run "$d" RUSTFLAGS="$f"
+  verdict "RUSTFLAGS='$f' does not lower the forbid" 1 "a crate other than capi cmem uses unsafe code"
 done
 # CARGO_ENCODED_RUSTFLAGS separates flags with 0x1f.
 run "$d" CARGO_ENCODED_RUSTFLAGS="$(printf -- '--cap-lints\037allow')"
@@ -201,6 +213,10 @@ verdict "an argument file holding --cap-lints=allow is refused" 1 " --cap-lints=
 printf -- '--cap-lints\r\nallow\r\n' > "$tmp/flags"
 run "$d" RUSTFLAGS="@$tmp/flags"
 verdict "a CRLF argument file holding --cap-lints is refused" 1 " --cap-lints): take it out"
+# A --force-warn on one line and its lint on the next.
+printf -- '--force-warn\nunsafe_code\n' > "$tmp/flags"
+run "$d" RUSTFLAGS="@$tmp/flags"
+verdict "an argument file holding --force-warn, then unsafe_code, is refused" 1 " --force-warn unsafe_code): take it out"
 # A missing one fails rustc itself (cargo's probe of it, before any
 # member), which fails the run.
 run "$d" RUSTFLAGS="@$tmp/no-such-flags"

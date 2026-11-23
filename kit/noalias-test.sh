@@ -31,6 +31,9 @@
 #   - NOALIAS_CARGO_FLAGS reach cargo: from the fixture's parent, with
 #     --manifest-path, the same verdict;
 #   - a library that builds an rlib only (IR named CRATE-HASH.ll);
+#   - a build script that writes CRATE.ll in its OUT_DIR (with cargo
+#     1.100's build directory layout, a sibling of the library's out
+#     directory): the file is neither scanned nor deleted;
 #   - a NOALIAS_TYPE the crate does not have, or one with only `&self`
 #     methods, fails, and a NOALIAS_CRATE that is not the library's fails,
 #     naming no IR;
@@ -174,6 +177,23 @@ names() {
     || { cat "$tmp/$1" >&2; fail "$1: got = another by-value list, want = into_n alone"; }
 }
 
+# ir REL NAME: some file NAME (a glob) of the library's IR is under REL
+# (TARGET_DIR/release or TARGET_DIR/TRIPLE/release): in REL/deps (a
+# cargo before 1.100) or in the library's REL/build/PACKAGE/HASH/out
+# (cargo 1.100's build directory layout).
+ir() {
+  # NAME is left unquoted so that it globs; it holds no blank.
+  # shellcheck disable=SC2231
+  for _f in "$1"/deps/$2 "$1"/build/noalias-fx/*/out/$2; do
+    case $_f in
+      */deps/*) ;;
+      *) [ -e "${_f%/out/*}/fingerprint/lib-noalias_fx" ] || continue ;;
+    esac
+    [ ! -e "$_f" ] || return 0
+  done
+  return 1
+}
+
 flagged='default: FAIL 2 of 4 Heap methods take a noalias &mut self:'
 clean='default: ok, 4 Heap methods take self, no &mut self is noalias'
 
@@ -241,8 +261,8 @@ echo "ok NOALIAS_CARGO_FLAGS reach cargo (--manifest-path from the fixture's par
 host=$(rustc -vV | sed -n 's/^host: //p')
 run triple 1 NOALIAS_CARGO_FLAGS="--target $host"
 has triple "$flagged"
-ls "$fx/target/noalias-default/$host/release/deps/noalias_fx".ll > /dev/null 2>&1 \
-  || fail "triple: no IR under $host/release/deps, so the case tested nothing"
+ir "$fx/target/noalias-default/$host/release" noalias_fx.ll \
+  || fail "triple: no IR under $host/release, so the case tested nothing"
 run triple-again 1 NOALIAS_CARGO_FLAGS="--target $host"
 has triple-again "$flagged"
 echo "ok a build with a target triple ($host), and its rerun"
@@ -263,8 +283,8 @@ run cgus 1 CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4 NOALIAS_BUILDS='plain pin' NOAL
   NOALIAS_TARGET_DIR="$tmp/cgu"
 has cgus "plain: ${flagged#default: }"
 has cgus "pin: ${clean#default: }"
-if [ -e "$tmp/cgu/noalias-plain/release/deps/noalias_fx.ll" ] \
-  || ! ls "$tmp/cgu/noalias-plain/release/deps/noalias_fx".*.rcgu.ll > /dev/null 2>&1; then
+if ir "$tmp/cgu/noalias-plain/release" noalias_fx.ll \
+  || ! ir "$tmp/cgu/noalias-plain/release" 'noalias_fx.*.rcgu.ll'; then
   fail "cgus: got = one .ll file, want = one for each codegen unit"
 fi
 echo "ok several codegen units give the same verdicts"
@@ -275,7 +295,7 @@ echo "ok several codegen units give the same verdicts"
 lib yes
 run stale 0 CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4 NOALIAS_BUILDS='plain pin' NOALIAS_FLAGS_pin='--features pinned'
 has stale "plain: ${clean#default: }"
-[ ! -e "$fx/target/noalias-plain/release/deps/noalias_fx.ll" ] || fail "stale: an earlier run's noalias_fx.ll is still there"
+! ir "$fx/target/noalias-plain/release" noalias_fx.ll || fail "stale: an earlier run's noalias_fx.ll is still there"
 echo "ok an earlier run's IR is not scanned"
 
 # An rlib alone: cargo names the IR noalias_fx-HASH.ll.
@@ -283,12 +303,39 @@ lib no
 manifest '"rlib"'
 run rlib 1
 has rlib "$flagged"
-ls "$fx/target/noalias-default/release/deps/noalias_fx"-*.ll > /dev/null 2>&1 \
+ir "$fx/target/noalias-default/release" 'noalias_fx-*.ll' \
   || fail "rlib: no noalias_fx-HASH.ll, so the case tested nothing"
 run rlib-again 1
 has rlib-again "$flagged"
 echo "ok a library that builds an rlib only (CRATE-HASH.ll), and its rerun"
 manifest '"rlib", "cdylib"'
+
+# A build script that writes CRATE.ll, with a noalias &mut self, in its
+# OUT_DIR (from cargo 1.100 on, release/build/PACKAGE/HASH/out, as the
+# library's outputs are): with the type pinned, the run passes, so that
+# file is not scanned, and the file is still there after a rerun, so it
+# is not deleted either (cargo, which takes the build script's run as
+# fresh, would not write it again).
+lib yes
+cat > "$fx/build.rs" <<'EOF'
+fn main() {
+    let out = std::env::var("OUT_DIR").unwrap();
+    std::fs::write(
+        format!("{out}/noalias_fx.ll"),
+        "; written by the fixture's build script\ndefine void @_RNvMNtCsabc_10noalias_fx4heapNtB2_4Heap4push(ptr noalias noundef align 8 %self) {\n",
+    )
+    .unwrap();
+}
+EOF
+run build-script 0
+has build-script "$clean"
+run build-script-again 0
+has build-script-again "$clean"
+grep -rlF "written by the fixture's build script" "$fx/target/noalias-default" > /dev/null \
+  || fail "build-script: the build script's noalias_fx.ll in its OUT_DIR is gone"
+rm "$fx/build.rs"
+lib no
+echo "ok a build script's CRATE.ll in its OUT_DIR is neither scanned nor deleted"
 
 run other-type 1 NOALIAS_TYPE=heap::Arena
 grep -q '^default: FAIL no Arena method with a self parameter' "$tmp/other-type" \
