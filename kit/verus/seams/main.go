@@ -140,7 +140,9 @@
 // as dotted keys or inline tables; the manifest must be there with a
 // `[package]` table, and one holding a multi-line string, a line starting
 // with `[` that is no whole header, an escape, or an absolute path, which
-// its line reader does not follow, fails) holds an inner
+// its line reader does not follow, fails, as does a `[` line inside a
+// value still open over lines; a root not at Cargo's default src/lib.rs
+// or src/main.rs counts only when a `[lib] path` names it) holds an inner
 // `#![cfg(..)]` or a
 // `#![cfg_attr(..)]` that adds a cfg, or is not declared by a `mod
 // NAME;` line in its parent (the root for a file directly under SOURCE,

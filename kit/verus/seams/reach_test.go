@@ -252,7 +252,26 @@ func TestReachTargets(t *testing.T) {
 		// path.
 		{libTree, "!description = \"\"\"\nC ABI shim.\n[experimental]\n\"\"\"\n[package]\nautolib = false\n", "Cargo.toml holds a multi-line string"},
 		{libTree, "!x = '''\n'''\n[package]\n", "Cargo.toml holds a multi-line string"},
-		{libTree, "[package.metadata]\nm = [\n[1, 2],\n]\n", "Cargo.toml has a line starting with `[` that is not a table header"},
+		{libTree, "[package.metadata]\nm = [\n[1, 2],\n]\n", "Cargo.toml has a line starting with `[` inside a multi-line value"},
+		// A last element with no comma reads as a whole header but is the
+		// value's (#239); a closed multi-line array lets the next header
+		// count.
+		{libTree, "![package]\nname = \"p\"\nmetadata.m = [\n  [\"x\"]\n]\nautolib = false\n", "Cargo.toml has a line starting with `[` inside a multi-line value"},
+		{libTree, "[lib]\nx = [\n[1, 2]\n]\npath = \"src/ffi.rs\"\n", "Cargo.toml has a line starting with `[` inside a multi-line value"},
+		{libTree, "[lib]\ncrate-type = [\n  \"cdylib\",\n  \"staticlib\",\n]\n", ""},
+		{libTree, "[lib]\ncrate-type = [\n  \"cdylib\"\n]\npath = \"src/ffi.rs\"\n", "Cargo.toml sets a target path \"src/ffi.rs\""},
+		{libTree, "[package.metadata]\nm = { a = [1, 2] }\n", ""},
+		// An element that leaves the array open, then a header-like line.
+		{libTree, "![package]\nname = \"p\"\nm = [\n  \"x\",\n  [1]\n]\nautolib = false\n", "Cargo.toml has a line starting with `[` inside a multi-line value"},
+		// Brackets and `#` inside quoted strings are no brackets or
+		// comment: the value's count is read outside them.
+		{libTree, "[package]\ndescription = \"a [b\"\n[lib]\n", ""},
+		{libTree, "[lib]\nx = [\n  \"]\",\n  [\"y\"]\n]\npath = \"src/ffi.rs\"\n", "Cargo.toml has a line starting with `[` inside a multi-line value"},
+		{libTree, "[lib]\nx = [\"#\", [\n  \"a\"],\n  [\"y\"]\n]\npath = \"src/ffi.rs\"\n", "Cargo.toml has a line starting with `[` inside a multi-line value"},
+		{libTree, "[lib]\npath = \"src/lib.rs#x\"\n", "Cargo.toml sets a target path \"src/lib.rs#x\""},
+		{libTree, "[lib]\nx = [\n  ']',\n  [\"y\"]\n]\npath = \"src/ffi.rs\"\n", "Cargo.toml has a line starting with `[` inside a multi-line value"},
+		{libTree, "[lib]\npath = 'src/lib.rs' # the default\n", ""},
+		{libTree, "[package]\ndescription = \"abc\n", "Cargo.toml has a string that does not close on its line"},
 		{libTree, "[lib] x\n", "Cargo.toml has a line starting with `[` that is not a table header"},
 		{libTree, "[lib]\n\"p\\u0061th\" = \"src/ffi.rs\"\n", "Cargo.toml holds an escape"},
 		{libTree, "[lib]\npath = \"/src/lib.rs\"\n", "Cargo.toml sets a target path \"/src/lib.rs\""},
@@ -310,6 +329,44 @@ func TestReachTargets(t *testing.T) {
 		if got := v.reach("src/layout.rs"); (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
 			t.Errorf("manifest %q: got %q, want %q", c.manifest, got, c.want)
 		}
+	}
+}
+
+// Cargo's default roots are src/lib.rs and src/main.rs beside the
+// manifest: another SOURCE's root counts only when a [lib] path names it
+// (#239).
+func TestReachSourceDir(t *testing.T) {
+	r, err := parseRules("r", "command\tc\ntool\tT\nassumption-tool\tT\ncategory\tC\tT\nsource\tlib\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		files map[string]string
+		want  string
+	}{
+		{map[string]string{"Cargo.toml": "[package]\nname = \"p\"\n", "lib/lib.rs": "mod layout;\n", "lib/layout.rs": ""},
+			"lib/lib.rs is not Cargo's default root src/lib.rs, and no [lib] path in Cargo.toml names it"},
+		// A `]` in a string cannot close the array early and let a
+		// header-like line name the root.
+		{map[string]string{"Cargo.toml": "[package]\nname = \"p\"\n\n[package.metadata]\nm = [\n\"]\",\n[\"lib\"]\n]\npath = \"lib/lib.rs\"\n", "lib/lib.rs": "mod layout;\n", "lib/layout.rs": ""},
+			"Cargo.toml has a line starting with `[` inside a multi-line value"},
+		{map[string]string{"Cargo.toml": "[package]\nname = \"p\"\n\n[lib]\npath = \"lib/lib.rs\"\n", "lib/lib.rs": "mod layout;\n", "lib/layout.rs": ""}, ""},
+		{map[string]string{"Cargo.toml": "[package]\nname = \"p\"\n", "lib/main.rs": "mod layout;\n", "lib/layout.rs": ""},
+			"lib/main.rs is not Cargo's default root src/main.rs"},
+	} {
+		v := &resolver{root: tree(t, c.files), r: r, files: map[string]*srcFile{}}
+		if got := v.reach("lib/layout.rs"); (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("%v: got %q, want %q", c.files["Cargo.toml"], got, c.want)
+		}
+	}
+	// A crate whose SOURCE is a package's src below the root.
+	r, err = parseRules("r", "command\tc\ntool\tT\nassumption-tool\tT\ncategory\tC\tT\nsource\tcrates/a/src\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := &resolver{root: tree(t, map[string]string{"crates/a/Cargo.toml": "[package]\nname = \"a\"\n", "crates/a/src/lib.rs": "mod layout;\n", "crates/a/src/layout.rs": ""}), r: r, files: map[string]*srcFile{}}
+	if got := v.reach("crates/a/src/layout.rs"); got != "" {
+		t.Errorf("crates/a/src: %q", got)
 	}
 }
 
