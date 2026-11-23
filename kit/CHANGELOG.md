@@ -791,6 +791,19 @@ where it reports drift.
   FILE alone. On challoc
   7d10fca every cited file is reached and `-check` passes. Nothing is
   installed; ports see no change.
+- The reach check's manifest reader, two more fail-closed rules (#239).
+  - A value's brackets are tracked over its lines. A line starting with
+    `[` while an array is still open belongs to the value, even one that
+    reads as a whole header (`["x"]`, a last element with no comma), and
+    it fails rather than change the table. Brackets, and the `#` that
+    starts a comment, are read outside quoted strings, so a `"]"` or
+    `"#"` in a string cannot close the count early. A string that does
+    not close on its line fails.
+  - Cargo's default roots are `src/lib.rs` and `src/main.rs` beside the
+    manifest. A SOURCE root elsewhere (`source lib`) counts only when a
+    `[lib] path` names it exactly.
+
+  challoc passes unchanged. Nothing is installed; ports see no change.
 
 ### Porting notes
 

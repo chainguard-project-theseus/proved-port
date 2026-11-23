@@ -383,7 +383,6 @@ reach.go	(lib && k == "autolib" || !lib && k == "autobins")	(k == "autolib" || k
 reach.go	case table == "[lib]" && k == "path":	case false:
 reach.go	if !lib && table == "[[bin]]" {	if false {
 reach.go	if !lib && table == "[[bin]]" {	if table == "[[bin]]" {
-reach.go	t, _, _ := strings.Cut(l, "#")	t := l
 reach.go	if !lib && table == "[lib]" {	if false {
 reach.go	strings.HasPrefix(k, "lib.") || 	false ||
 reach.go	strings.HasPrefix(k, "package.auto") ||	false ||
@@ -401,3 +400,21 @@ reach.go	pkg = pkg || table == "[package]"	pkg = true
 reach.go	if !pkg {	if false {
 reach.go	strings.HasPrefix(p, "/") || path.Join(dir, p) != root	path.Join(dir, p) != root
 reach.go	regexp.MustCompile(`^\[\[?[^\[\]]+\]\]?$`)	regexp.MustCompile(`^\[\[?[^\[\]]+\]\]?`)
+#
+# #239: the manifest reader: open multi-line values, SOURCE not src.
+reach.go	if open > 0 {	if false {
+reach.go	if t != "" && t[0] == '[' {	if false {
+reach.go	open += n	open = 0
+reach.go	open = n	open = 0
+reach.go	named = true	named = false
+reach.go	root != def && !named	!named
+reach.go	root != def && !named	root != def && (!named || named)
+reach.go	path.Join(dir, "src", path.Base(root))	path.Join(dir, path.Base(root))
+reach.go	if !closed {	if !closed && false {
+reach.go	case q != 0:	case false:
+reach.go	if c == q {	if c == '\x00' {
+reach.go	case c == '"' || c == '\'':	case c == '\'':
+reach.go	case c == '"' || c == '\'':	case c == '"':
+reach.go	case c == '#':	case false:
+reach.go	nest--	nest -= 0
+reach.go	return strings.TrimSpace(l), nest, q == 0	return strings.TrimSpace(l), nest, true

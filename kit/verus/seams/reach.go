@@ -195,19 +195,35 @@ func (v *resolver) targets(root string) string {
 	}
 	f := v.file(man)
 	lib := strings.HasSuffix(root, "/lib.rs")
-	table, pkg := "", false
+	// open: the brackets a value left open, over its lines;
+	// named: a [lib] path names root.
+	table, pkg, open, named := "", false, 0, false
 	for _, l := range f.raw {
 		// The reader is line by line: a multi-line string, which may hold
 		// a line like a header, is not read.
 		if strings.Contains(l, `"""`) || strings.Contains(l, `'''`) {
 			return fmt.Sprintf("%s holds a multi-line string, which the check does not read, so %s may not be the crate root it builds", man, root)
 		}
-		// A comment runs from `#` (a `#` in a quoted path cuts it short,
-		// which fails closed).
-		t, _, _ := strings.Cut(l, "#")
-		t = strings.TrimSpace(t)
+		// The line's text before a comment and its brackets, both read
+		// outside quoted strings; a string that does not close on its
+		// line is not read.
+		t, n, closed := tomlLine(l)
+		if !closed {
+			return fmt.Sprintf("%s has a string that does not close on its line, which the check does not read, so %s may not be the crate root it builds", man, root)
+		}
 		if strings.Contains(t, `\`) {
 			return fmt.Sprintf("%s holds an escape (`\\`), which the check does not read, so %s may not be the crate root it builds", man, root)
+		}
+		// A line of a value still open (a multi-line array) is the
+		// value's; one starting with `[` there may look like a header but
+		// is none, so the reader cannot follow it. A bracket in a string
+		// counts too, which fails closed.
+		if open > 0 {
+			if t != "" && t[0] == '[' {
+				return fmt.Sprintf("%s has a line starting with `[` inside a multi-line value, which the check does not read, so %s may not be the crate root it builds", man, root)
+			}
+			open += n
+			continue
 		}
 		if strings.HasPrefix(t, "[") {
 			table = tomlKey.Replace(t)
@@ -232,6 +248,7 @@ func (v *resolver) targets(root string) string {
 		}
 		k, val, _ := strings.Cut(t, "=")
 		k, val = tomlKey.Replace(k), strings.TrimSpace(val)
+		open = n
 		// Spellings the check does not read: dotted keys and inline
 		// tables for the targets and their discovery.
 		if strings.HasPrefix(k, "lib.") || strings.HasPrefix(k, "package.auto") ||
@@ -246,6 +263,7 @@ func (v *resolver) targets(root string) string {
 			if p := strings.Trim(val, `"'`); strings.HasPrefix(p, "/") || path.Join(dir, p) != root {
 				return fmt.Sprintf("%s sets a target path %s, so %s may not be the crate root it builds (the check reads only the default roots)", man, val, root)
 			}
+			named = true
 		case table == "[package]" && (lib && k == "autolib" || !lib && k == "autobins") && strings.HasPrefix(val, "false"):
 			return fmt.Sprintf("%s sets %s = false, so %s may not be built (the check reads only the default roots)", man, k, root)
 		}
@@ -253,7 +271,39 @@ func (v *resolver) targets(root string) string {
 	if !pkg {
 		return fmt.Sprintf("%s has no [package] table (a workspace's virtual manifest, or one the check cannot read), so no package builds %s", man, root)
 	}
+	// Cargo's default roots are src/lib.rs and src/main.rs beside the
+	// manifest: another SOURCE's root counts only when a [lib] path names
+	// it.
+	if def := path.Join(dir, "src", path.Base(root)); root != def && !named {
+		return fmt.Sprintf("%s is not Cargo's default root %s, and no [lib] path in %s names it", root, def, man)
+	}
 	return ""
+}
+
+// tomlLine reads a manifest line: its text before a comment (a `#`
+// outside a quoted string), the brackets it opens less those it closes
+// outside quoted strings (an inline table is one line in TOML 1.0, so its
+// braces never stay open), and whether every string on it closes. An
+// escape is refused by the caller, so a quote always ends its string.
+func tomlLine(l string) (text string, nest int, closed bool) {
+	q := byte(0)
+	for i := 0; i < len(l); i++ {
+		switch c := l[i]; {
+		case q != 0:
+			if c == q {
+				q = 0
+			}
+		case c == '"' || c == '\'':
+			q = c
+		case c == '#':
+			return strings.TrimSpace(l[:i]), nest, true
+		case c == '[':
+			nest++
+		case c == ']':
+			nest--
+		}
+	}
+	return strings.TrimSpace(l), nest, q == 0
 }
 
 // reTomlHeader is a whole table header, normalised by tomlKey: `[name]`
