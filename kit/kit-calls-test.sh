@@ -11,7 +11,10 @@
 #     output for the filled templates (with --update, that output is
 #     written to its fixture, kit/checks/calls/testdata/templates.json,
 #     first; a fixture that differs is a note, not a failure, since
-#     another chainctl may print the same configuration differently);
+#     another chainctl may print the same configuration differently;
+#     the note carries a diff of the two split at JSON value
+#     boundaries, at most 60 lines, and a changed copy of the fixture
+#     checks that the diff names the changed value);
 #   - make kit-calls passes, printing `ok` for every rule in the
 #     template's rules file and nothing else;
 #   - a source-rules that runs a forbidden copy (sh ci/heap-noalias.sh),
@@ -104,9 +107,51 @@ fi
 grep -qx -- '--- PASS: TestTemplateCalls.*' "$tmp/gotest" \
   || { cat "$tmp/gotest" >&2; fail "TestTemplateCalls did not run"; }
 echo "ok every kit target a template check runs has a call line (TestTemplateCalls over this chainctl's output)"
-if ! cmp -s "$tmp/explain.json" "$fixture"; then
-  echo "note: $fixture differs from this chainctl's output for the templates (another chainctl, or a template change); sh kit/kit-calls-test.sh --update rewrites it"
-fi
+
+# splitjson FILE: FILE with a line break after each `,` and around each
+# `{`, `}`, `[` and `]`, so a diff of two one-line explain outputs shows
+# the keys and values that differ. A `,` or bracket inside a string
+# splits it too; this is a diagnostic only.
+splitjson() {
+  awk '{ gsub(/,/, ",\n"); gsub(/[[{]/, "&\n"); gsub(/[]}]/, "\n&"); print }' "$1"
+}
+# fixturenote GOT WANT: nothing when GOT and WANT are equal; otherwise a
+# note line, then at most 60 lines of the unified split diff (- is WANT,
+# the fixture; + is GOT, this chainctl's output), then a line counting
+# the diff lines left out.
+fixturenote() {
+  cmp -s "$1" "$2" && return 0
+  echo "note: $2 differs from this chainctl's output for the templates (another chainctl, or a template change); sh kit/kit-calls-test.sh --update rewrites it. Split diff (- fixture, + this chainctl):"
+  splitjson "$2" > "$tmp/split-want"
+  splitjson "$1" > "$tmp/split-got"
+  diff -u "$tmp/split-want" "$tmp/split-got" > "$tmp/split-diff" || true
+  head -n 60 "$tmp/split-diff" | awk '{ print "  " $0 }'
+  more=$(($(wc -l < "$tmp/split-diff") - 60))
+  [ "$more" -le 0 ] || echo "  ... $more more diff lines"
+}
+# The note names a value that differs: one changed value in a copy.
+awk '{ sub(/"make"/, "\"kit-calls-test-changed\""); print }' "$fixture" > "$tmp/changed.json"
+cmp -s "$tmp/changed.json" "$fixture" && fail "the fixture has no \"make\" value to change"
+fixturenote "$tmp/changed.json" "$fixture" > "$tmp/note"
+grep -q '^note: ' "$tmp/note" || { cat "$tmp/note" >&2; fail "a changed fixture: no note line"; }
+grep -qx '  +"kit-calls-test-changed",\{0,1\}' "$tmp/note" \
+  || { cat "$tmp/note" >&2; fail "a changed fixture: the note's diff does not show the changed value"; }
+grep -qx '  -"make",\{0,1\}' "$tmp/note" \
+  || { cat "$tmp/note" >&2; fail "a changed fixture: the note's diff does not show the fixture's value"; }
+[ "$(wc -l < "$tmp/note")" -le 62 ] || { cat "$tmp/note" >&2; fail "a changed fixture: the note is longer than 62 lines"; }
+# A large difference (every `"` changed) is cut to 60 diff lines and a count.
+awk '{ gsub(/"/, "x"); print }' "$fixture" > "$tmp/large.json"
+fixturenote "$tmp/large.json" "$fixture" > "$tmp/note"
+splitjson "$fixture" > "$tmp/split-want"
+splitjson "$tmp/large.json" > "$tmp/split-got"
+total=$(diff -u "$tmp/split-want" "$tmp/split-got" | wc -l)
+[ "$total" -gt 61 ] || fail "a large change: its split diff has $total lines, want more than 61"
+[ "$(wc -l < "$tmp/note")" -eq 62 ] || { cat "$tmp/note" >&2; fail "a large change: the note is not 62 lines"; }
+tail -n 1 "$tmp/note" | grep -qx "  \.\.\. $((total - 60)) more diff lines" \
+  || { tail -n 3 "$tmp/note" >&2; fail "a large change: the last line does not count the $((total - 60)) diff lines left out"; }
+[ -z "$(fixturenote "$fixture" "$fixture")" ] || fail "an equal fixture: fixturenote printed something"
+echo "ok a fixture that differs prints a split diff naming the value, cut to 60 lines and a count"
+fixturenote "$tmp/explain.json" "$fixture"
 
 # --- the template passes ----------------------------------------------------
 kitcalls || { cat "$tmp/out" >&2; fail "make kit-calls over the templates: got = failure, want = success"; }
