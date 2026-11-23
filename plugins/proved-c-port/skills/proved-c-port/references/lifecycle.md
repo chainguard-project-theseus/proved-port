@@ -80,6 +80,9 @@ check.
   research; the catalog maps each CVE to the theorem that rules its
   class out for every input, or to the `vuln class: <class> (<ids>)`
   issue that will. A class with only a pinning test is a gap there.
+  Keep the template's layout and add its `vuln-classes` line to
+  `verus/seams.rules`, so `proved-port-seams -check` fails a citation
+  that no longer resolves.
 - Pick the oracle's source. A port that tracks the distro compares with
   its `-dev` package; a port pinned to one upstream release builds the
   oracle from upstream's release tarball, checked by SHA-256, so the

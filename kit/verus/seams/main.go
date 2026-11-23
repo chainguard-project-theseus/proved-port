@@ -221,6 +221,32 @@
 // gone or has no rows, a SRC that is gone, and an overrides file whose text names FILE
 // with no row in FILE for its source file.
 //
+// With a vuln-classes line, -check also reads the vulnerability-class
+// catalog FILE in kit/templates/verus/VULN-CLASSES.md's layout: the
+// first table under `## Catalog` (its `class` and `ruled out by` columns
+// found by header name), each `###` section under `## Classes` with its
+// **Proved.** and **Gap.** paragraphs, and the items of `## Gaps` (lines
+// starting `N. `, `- ` or `* `); lines inside ``` fences are skipped. A
+// theorem is cited `ID (#n)`, ID starting with a capital letter and
+// holding a digit. -check fails a theorem a row's ruled out by cell or a
+// **Proved.** paragraph cites with no theorems/ID.md beside FILE; a
+// row's class with no section (case folded); a `gap: #n` in a row or a
+// **Gap.** paragraph that no item of Gaps names first on its first line,
+// and an item that none cites (a paragraph's lines read joined, so a
+// wrapped citation reads whole); a ruled out by cell with no `ID (#n)`,
+// no `gap: #n`, no `not shipped` and no `by construction:`, a class
+// section without a **Proved.** or a **Gap.** paragraph, and a **Proved.**
+// (no `ID (#n)`) or **Gap.** (no `gap: #n`) paragraph that does not read
+// "none", so a citation in another form fails rather than go unread; an
+// id in code font or a link before ` (#n)`; a row whose cell count is
+// not the header's (a line directly under the rows that starts no other
+// block is a row, leading `|` or not), a row with no class, a second
+// section of a class, a Gaps item naming no issue, a header lacking
+// either column, a header whose next line is no separator row (or that
+// a heading, fence or the end of the file follows), a second table
+// under Catalog, and a FILE that is gone or has no Catalog table.
+// Whether a cited issue is open needs the network and is not checked.
+//
 // -entries prints, per seam: source file, line, kind, id (the name, with
 // #N when shared in its file), category, tool, status, overrides file (or
 // -), and the contract normalized as its hash reads it. Each seam is
@@ -284,6 +310,8 @@
 //	pins<TAB>FILE              FILE lists source lines a check runs a copy
 //	                           of, which -check holds in place (each FILE
 //	                           once)
+//	vuln-classes<TAB>FILE      the vulnerability-class catalog whose
+//	                           citations -check resolves (once)
 //	guess<TAB>CAT|-<TAB>COND.. a category heuristic: the first guess whose
 //	                           conditions all hold names the category (-
 //	                           for none); COND is FIELD=RE or FIELD!RE,
@@ -324,8 +352,8 @@
 //	unsupported-doc<TAB>TEXT   the note on each unsupported-attribute entry
 //
 // Each rule that holds one value (ledger, source, command, seams-doc,
-// unsupported-doc, assumption-tool, and export-macro or pair, which
-// name the one export macro) is given at most once, and
+// unsupported-doc, assumption-tool, vuln-classes, and export-macro or
+// pair, which name the one export macro) is given at most once, and
 // each path is relative to the root and inside it, not the root itself.
 //
 // Exit status: 0 done, 1 a check failed, 2 usage, rules or input errors.
@@ -409,6 +437,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		res.drift = append(res.drift, notCopyChecks(*root, r, res.entries, files)...)
 		res.drift = append(res.drift, pinChecks(*root, r, in.overrides)...)
+		res.drift = append(res.drift, vulnClassChecks(*root, r)...)
 		return checkLedger(*root, r, in, res, stdout, stderr)
 	case *cites:
 		x := entryField.Replace
