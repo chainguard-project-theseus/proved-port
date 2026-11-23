@@ -109,6 +109,26 @@ checks:
         f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
         go vet ./... && go test -count=1 ./...
 
+  calls-test:
+    description: >-
+      kit/checks/calls, the checker that a port's checks call the kit's
+      targets (PLAN step 8), over the resolved configuration chainctl
+      checks explain prints: gofmt lists no file, go vet passes, and go
+      test passes (the script reader's cases and refusals, each make
+      option, variable and goal rule, the check-level refusals, forbid's
+      path boundaries over steps and services, the rules file's and the
+      workflow's errors, and challoc 7138852's resolved configuration).
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd:
+      - sh
+      - -c
+      - >-
+        export GOTOOLCHAIN=local GOFLAGS=-mod=mod;
+        cd kit/checks/calls;
+        f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
+        go vet ./... && go test -count=1 ./...
+
   seams-mutants:
     description: >-
       kit/verus/seams/mutants.sh: every hand mutant in
