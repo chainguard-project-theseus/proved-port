@@ -596,6 +596,7 @@ func TestRulesErrors(t *testing.T) {
 		{"call c t with CONSUMER\n", ":1: with CONSUMER: it chooses which kit, counter, ratchet or harness runs"},
 		{"call c t with LINT_UNSAFE_INNER\n", ":1: with LINT_UNSAFE_INNER: it chooses which kit, counter, ratchet or harness runs"},
 		{"call c t with KANI_ONLY\n", ":1: with KANI_ONLY: it chooses which kit, counter, ratchet or harness runs"},
+		{"call c t with BENCH_FLAGS\n", ":1: with BENCH_FLAGS: it chooses which kit, counter, ratchet or harness runs"},
 		{"call c t with KIT_CALLS_RULES\n", ":1: with KIT_CALLS_RULES: it chooses which kit, counter, ratchet or harness runs"},
 		{"call c t with kit_calls\n", ":1: with kit_calls: it chooses which kit, counter, ratchet or harness runs"},
 		{"call c t with verus_count_cmd\n", ":1: with verus_count_cmd: it chooses which kit, counter, ratchet or harness runs"},

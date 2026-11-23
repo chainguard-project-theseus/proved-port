@@ -440,6 +440,20 @@ if [ "$rc" -ne 0 ] || ! grep -qxF "SKIP one: $home/make/consumers.sh" "$tmp/out"
   fail "make consumers-run with the installed consumers.sh, a skipping consumer: got = exit $rc, want = exit 0 with its SKIP line"
 fi
 echo "ok make consumers-run with the installed consumers.sh skips a consumer that skips"
+# The bench runner: make -n shows the package's bench.sh, and the
+# installed script refuses an unknown suite before it builds anything
+# (kit/bench-test.sh tests the rest).
+expect "make -n bench-run: the package's bench.sh" \
+  "$(shows "$installed" bench-run BENCH_SRC=b.c BENCH_PACKAGE=foo-capi BENCH_REF=foo BENCH_PORT=cg-foo BENCH_SO=libfoo.so.1)" \
+  "BENCH_SRC='b.c' BENCH_PACKAGE='foo-capi' BENCH_REF='foo' BENCH_PORT='cg-foo' BENCH_SO='libfoo.so.1' BENCH_SUITES='bench' BENCH_OUT='target/remote-out/bench' BENCH_WORK='target/bench' BENCH_CRATE='' BENCH_FLAGS='' BENCH_LINK='' BENCH_CC='' BENCH_CFLAGS='' BENCH_LDLIBS='' BENCH_MODES='' BENCH_REF_ARGS='' BENCH_PORT_ARGS='' BENCH_NEEDS='' BENCH_REF_FILE='' BENCH_PREFIX='' sh $home/make/bench.sh"
+[ -f "$home/make/bench.sh" ] || fail "the installed bench.sh: got = missing, want = installed"
+mkdir -p "$tmp/bn/bench"
+if (cd "$tmp/bn" && make -s -f "$installed/Makefile" bench-run BENCH_SRC=b.c BENCH_PACKAGE=foo-capi BENCH_REF=foo BENCH_PORT=cg-foo BENCH_SO=libfoo.so.1 BENCH_SUITE=nope PROVED_PORT_VERSION="$version") > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -eq 0 ] || ! grep -qxF "bench: unknown suite 'nope': no $tmp/bn/bench/nope/run.sh (suites: none)" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "make bench-run with the installed bench.sh, an unknown suite: got = exit $rc, want = a failure naming the suite"
+fi
+echo "ok make bench-run with the installed bench.sh refuses an unknown suite"
 # The differential fuzzer's driver shell: a driver built from the
 # installed fuzz-diff.c with -I the installed make/ refuses a relative
 # library path (kit/fuzz-diff-test.sh tests the rest).

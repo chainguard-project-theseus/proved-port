@@ -13,6 +13,50 @@ it as `tag vX.Y.Z`. The deps agent's kit entry
 notes say, it ends with `make verus-headers`, taking the kit's text
 where it reports drift.
 
+## 0.4.14
+
+### Changes
+
+- `make bench-run` (#262, `bench.sh`, installed beside the other
+  scripts): the generic parts of the PCRE2 port's `ci/bench.sh` (PLAN
+  steps 6 and 8). It rebuilds the cargo package `BENCH_PACKAGE` with
+  `-v` and requires each of its crate's rustc commands to carry every
+  `BENCH_FLAGS` word as a whole `-C` option (the pinned code layout,
+  whatever source of rustflags cargo took), copies the `BENCH_SO` files
+  into a directory that holds nothing else, builds the C program
+  `BENCH_SRC` against the system's reference library, and runs it on
+  the reference side `BENCH_REF` and the port side `BENCH_PORT` (on
+  that directory) in each of `BENCH_MODES`. The program prints
+  `SIDE MODE WORKLOAD VALUE UNIT COUNT` lines; a line of another shape
+  or arm fails the run, and a workload whose counts differ, that mixes
+  counts with `rc=N` return codes, or that one side lacks in a mode,
+  prints `MISMATCH` and exits 1. It prints the environment and a table
+  (the port's first mode over each reference arm) and writes
+  `BENCH_OUT/BENCH_PORT-bench-ARCH.tsv` and `.txt`. `BENCH_SUITE` runs
+  `BENCH_SUITES/SUITE/run.sh` instead, with the library directory,
+  root, program and output directory in its environment under
+  `BENCH_PREFIX`. Where it differs from the port's script: a flag
+  matches as a whole option (`=6` no longer matches `=60`) on each of
+  the crate's commands (the script passed a flag found on any of them),
+  and a run with no lines, a repeated workload or a value that is no
+  number fails. Unvalidated: no box run has compared it with the
+  port's own runner yet. make.yaml's `bench-test` runs it with
+  cc-built libraries and a stub cargo. `proved-port-calls` refuses
+  every `BENCH_` name in a `with` list, as it refuses the kit's other
+  variables.
+
+### Porting notes
+
+1. Optional: a port with a C bench program can call `make bench-run`
+   from its own `bench` target, setting `BENCH_SRC`, `BENCH_PACKAGE`,
+   `BENCH_REF`, `BENCH_PORT` and `BENCH_SO` (and `BENCH_FLAGS`,
+   `BENCH_MODES`, `BENCH_LINK` and the rest as it needs), once its
+   program follows the protocol in `bench.sh`'s header; suites keep
+   their variable names with `BENCH_PREFIX`. A port that copied the
+   no-kit guard in `kit/count/README.md` adds `bench-run` to its
+   `PROVED_PORT_TARGETS` when it starts to use it. A port that does
+   neither changes nothing.
+
 ## 0.4.13
 
 ### Changes

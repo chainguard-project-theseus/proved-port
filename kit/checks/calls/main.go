@@ -367,12 +367,12 @@ func banned(name string) bool {
 // knobs are among them: KANI_SHARD=0 runs no harness and passes, and a
 // KANI_SHARDS above the instances leaves shards unrun. So are the
 // scripts' environment knobs (CI_SKIP_UPDATE, CI_CELL, CONSUMER,
-// LINT_UNSAFE_*), and the rules file and checker `make kit-calls` runs
-// (KIT_CALLS_RULES, KIT_CALLS).
+// LINT_UNSAFE_*), the bench runner's settings (BENCH_*), and the rules
+// file and checker `make kit-calls` runs (KIT_CALLS_RULES, KIT_CALLS).
 var kitPrefixes = []string{
 	"VERUS_", "PROVED_PORT_", "KANI_", "UNSAFE_", "NOALIAS_", "CODEGEN_", "PERF_",
 	"SKIP_", "GLIBC_MAX", "KNOWN_", "HEADER_CHECK_", "ABI_ELF_", "DEVIATIONS_",
-	"CONSUMER", "VERIFY", "CI_", "LINT_", "KIT_",
+	"CONSUMER", "BENCH_", "VERIFY", "CI_", "LINT_", "KIT_",
 }
 
 // kitName reports whether name is one of the kit's variables, which a

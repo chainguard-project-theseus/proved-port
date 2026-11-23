@@ -10,7 +10,8 @@
 # skip-summary.sh, known-failures.sh, header-check.sh, kani-quotes.sh
 # and deviations.sh on their own, kit/known-cites-test.sh runs
 # known-cites.sh and ledger-active.sh (with git), kit/consumers-test.sh
-# runs consumers.sh (with cc and curl), kit/fuzz-diff-test.sh builds
+# runs consumers.sh (with cc and curl), kit/bench-test.sh runs bench.sh
+# (with cc and a stub cargo), kit/fuzz-diff-test.sh builds
 # fuzz-diff.c into a test driver (with cc),
 # and kit/glibc-max-test.sh and kit/abi-elf-test.sh run glibc-max.sh
 # and abi-elf.sh on their own, in their own environments. No Verus or Kani
@@ -195,6 +196,26 @@ checks:
       # fetch.
       packages: [busybox, build-base, curl]
     cmd: [sh, kit/consumers-test.sh]
+
+  bench-test:
+    description: >-
+      kit/bench-test.sh: kit/make/bench.sh (make bench-run) with a
+      reference and a port library built with cc, a stub cargo and a
+      bench program, each output spelled out: a clean run (the swap,
+      each side's arguments, the table with rates, times and return
+      codes, the result files, the work lib, BENCH_LINK); MISMATCH on
+      counts that differ, a count beside a return code, a workload one
+      side lacks; the program's bad lines and failure; the rustc flag
+      check (a missing flag, the -CFLAG form, a longer flag, another
+      crate's command, no command, a failed build); suites under a
+      prefix; usage and set-up refusals.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      # BusyBox's tools as a port's checks have, and a C compiler with
+      # glibc for the libraries and the program.
+      packages: [busybox, build-base]
+    cmd: [sh, kit/bench-test.sh]
 
   fuzz-diff-test:
     description: >-
