@@ -7,7 +7,8 @@
 # Makefile pins that release and includes
 # $(PROVED_PORT_HOME)/make/proved-port.mk. Then:
 #   - `make -n` shows the commands each target runs, for the defaults
-#     and for the settings pcre3, expat-rs, chainz and challoc need, and
+#     and for the settings the PCRE2, Expat and zlib ports and challoc
+#     need, and
 #     that nothing builds the counter, even for a port that still has a
 #     verus/count or includes a verus/make copy of proved-port.mk, and
 #     that verify runs VERIFY_TARGETS in order and stops at a failure;
@@ -152,12 +153,12 @@ cargo clean --locked -p alpha -p beta --target-dir target/verus-partial
 cargo verus focus --locked -p alpha -p beta -j 1 -- --time-expanded --output-json > target/verus-stats.json
 verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --no-base ."
 
-expect "make -n verus, expat-rs (--features verus)" \
-  "$(shows verus VERUS_CRATES=expat-rs VERUS_CARGO_FLAGS='--features verus' VERUS_THREADS=4 VERUS_BASE=HEAD^)" \
+expect "make -n verus, the Expat port (--features verus)" \
+  "$(shows verus VERUS_CRATES=xmlport VERUS_CARGO_FLAGS='--features verus' VERUS_THREADS=4 VERUS_BASE=HEAD^)" \
   "$(tag target)
 mkdir -p target/
-cargo clean --locked -p expat-rs --target-dir target/verus-partial
-cargo verus focus --locked -p expat-rs --features verus -j 1 -- --time-expanded --output-json --num-threads 4 > target/verus-stats.json
+cargo clean --locked -p xmlport --target-dir target/verus-partial
+cargo verus focus --locked -p xmlport --features verus -j 1 -- --time-expanded --output-json --num-threads 4 > target/verus-stats.json
 verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --base-rev HEAD^ ."
 
 expect "make -n verus, another name (verus/SHARES)" \
@@ -189,7 +190,7 @@ mkdir -p target/q8/
 $members_clean --target-dir target
 cargo verus verify --locked --no-default-features --features quantum8 -j 1 -- --time-expanded --output-json > target/q8/stats.json"
 
-expect "make -n verus-proofs, focus mode over a virtual workspace (cg-libxml2)" \
+expect "make -n verus-proofs, focus mode over a virtual workspace (the libxml2 port)" \
   "$(shows verus-proofs VERUS_CRATES=)" \
   "$(tag target)
 mkdir -p target/
@@ -398,7 +399,7 @@ expect "make -n verus-headers, another name (verus/SHARES)" "$(shows verus-heade
   "VERUS_FLOOR=verus/SHARES sh $home/make/headers.sh ."
 expect "make -n kani" "$(shows kani)" "sh $home/make/kani.sh"
 expect "make -n kani-list" "$(shows kani-list)" "sh $home/make/kani.sh --list"
-# A workspace below the root (#71, cg-uutils): VERUS_CARGO_FLAGS'
+# A workspace below the root (#71, the uutils port): VERUS_CARGO_FLAGS'
 # --manifest-path, in either form, is kani.sh's KANI_MANIFEST too, and a
 # KANI_MANIFEST of its own wins.
 expect "make -n kani takes VERUS_CARGO_FLAGS' --manifest-path" \
@@ -1000,9 +1001,9 @@ runs "KANI_ONLY" "$la
 kani -p=alpha" KANI_CRATES="alpha beta" KANI_ONLY=alpha sh "$k"
 runs "KANI_EXCLUDE" "$lb
 kani -p=beta" KANI_CRATES="alpha beta" KANI_EXCLUDE=alpha sh "$k"
-runs "KANI_HARNESS (chainz's foreach), with no listing" "kani -p=beta --harness b_one" \
+runs "KANI_HARNESS (the zlib port's foreach), with no listing" "kani -p=beta --harness b_one" \
   KANI_CRATES="alpha beta" KANI_ONLY=beta KANI_HARNESS=b_one sh "$k"
-runs "KANI_JOBS (pcre3)" "$la
+runs "KANI_JOBS (the PCRE2 port)" "$la
 kani -p=alpha -j 4 --output-format terse" \
   KANI_CRATES=alpha KANI_JOBS=4 sh "$k"
 runs "flags, ARGS and CBMC arguments (challoc)" \
@@ -1298,7 +1299,7 @@ grep -qx 'alpha kani::a_q8 src/lib.rs' "$tmp/out" ||
   { cat "$tmp/out" >&2; fail "make kani-list KANI_ARGS: got = no kani::a_q8, want = the harness quantum8 gates"; }
 echo "ok make kani-list passes KANI_ARGS to the listing"
 
-# A workspace below the root (#71, cg-uutils): KANI_MANIFEST goes to
+# A workspace below the root (#71, the uutils port): KANI_MANIFEST goes to
 # cargo fetch and, after -p, to each cargo kani call; make kani takes it
 # from VERUS_CARGO_FLAGS. One that names no file, or has a space, exits 2.
 mkdir -p "$port/ws"
