@@ -652,3 +652,63 @@ citecase.go	if !t.ok {	if !v.exists(tmpl) {
 citecase.go	if why := v.namesSrc(t, tmpl, e); why != "" {	if why := v.namesSrc(t, tmpl, e); false {
 citecase.go	if namesFn(l, fn) {	if namesFn(l, fn) || l != "" {
 citecase.go	fn := seamFn(e)	fn := e.name
+#
+# #266 (vuln-classes: the vulnerability-class catalog's citations).
+vulnclasses.go	if !reVCSep.MatchString(c) {	if false && !reVCSep.MatchString(c) {
+vulnclasses.go	case "ruled out by":	case "ruled out":
+vulnclasses.go	if len(cs) != ncol {	if false {
+vulnclasses.go	if cs[classCol] == "" {	if false {
+vulnclasses.go	case !isRow && table == 2:	case false:
+vulnclasses.go	case isRow && table == 3:	case false:
+vulnclasses.go	fence = !fence	fence = false
+vulnclasses.go	case level == 3 && h2 == "Classes":	case level == 3:
+vulnclasses.go	if level < len(l) && l[level] == ' ' {	if level < len(l) {
+vulnclasses.go	case t == "":	case false:
+vulnclasses.go	case reVCPara.MatchString(t):	case false:
+vulnclasses.go	case strings.HasPrefix(t, "**Gap.**"):	case false:
+vulnclasses.go	k := vcFold(name)	k := name
+vulnclasses.go	func vcFold(s string) string { return strings.ToLower(strings.TrimSpace(s)) }	func vcFold(s string) string { return strings.TrimSpace(s) }
+vulnclasses.go	if !reVCItem.MatchString(l) {	if false {
+vulnclasses.go	reVCItem    = regexp.MustCompile(`^([0-9]+\.|[-*]) `)	reVCItem    = regexp.MustCompile(`^\s*([0-9]+\.|[-*]) `)
+vulnclasses.go	reVCGap     = regexp.MustCompile(`gap: #([0-9]+)`)	reVCGap     = regexp.MustCompile(`#([0-9]+)`)
+vulnclasses.go	if strings.ContainsAny(m[1], "0123456789") {	if true {
+vulnclasses.go	(?:^|[^A-Za-z0-9_-])([A-Z]	(?:^|[^A-Za-z0-9_])([A-Z]
+vulnclasses.go	strings.HasSuffix(l, "|") && !strings.HasSuffix(l, `\|`)	strings.HasSuffix(l, "|")
+vulnclasses.go	case l[i] == '\\' && i+1 < len(l) && l[i+1] == '|':	case false:
+vulnclasses.go	if f == "" {	if false {
+vulnclasses.go	if d.tableLine == 0 {	if false {
+vulnclasses.go	thdir := path.Join(path.Dir(f), "theorems")	thdir := "verus/theorems"
+vulnclasses.go	if seen[id] {	if false {
+vulnclasses.go	err != nil || !st.Mode().IsRegular()	err != nil || st == nil
+vulnclasses.go	if listed[g.issue] == g.line && !cited[g.issue] {	if !cited[g.issue] {
+vulnclasses.go	if vcTheorems(c.text) == nil && !reVCNone.MatchString(c.text) {	if false {
+vulnclasses.go	if !reVCGap.MatchString(c.text) && !reVCNone.MatchString(c.text) {	if false {
+vulnclasses.go	if !reVCGap.MatchString(c.text) && !reVCNone.MatchString(c.text) {	if !reVCNone.MatchString(c.text) {
+vulnclasses.go	*(?i:none)\.?$`)	*none\.?$`)
+vulnclasses.go	first := strings.HasPrefix(t, "**Proved.**") || strings.HasPrefix(t, "**Gap.**")	first := true
+vulnclasses.go	ps[len(ps)-1].text += " " + t	ps[len(ps)-1].text = t
+vulnclasses.go	for _, m := range reVCNear.FindAllString(c.text, -1) {	for _, m := range reVCNear.FindAllString("", -1) {
+vulnclasses.go	|\\[[^]]*\\]\\([^)]*\\)) \\(#	) \\(#
+vulnclasses.go	cur.proved = true	cur.proved = false
+vulnclasses.go	cur.gap = true	cur.gap = false
+vulnclasses.go	case 1:	case 99:
+vulnclasses.go	case 2:	case 99:
+vulnclasses.go#1/3	endTable()	func() {}()
+vulnclasses.go#2/3	endTable()	func() {}()
+vulnclasses.go#3/3	endTable()	func() {}()
+vulnclasses.go	if !fence {	if false {
+vulnclasses.go	bad(d.tableLine+1, 	bad(d.tableLine+2,
+vulnclasses.go	!reVCGap.MatchString(c.text) && !strings.Contains(c.text, "not shipped") && !strings.Contains(c.text, "by construction:") {	!strings.Contains(c.text, "not shipped") && !strings.Contains(c.text, "by construction:") {
+vulnclasses.go	&& !strings.Contains(c.text, "not shipped") && !strings.Contains(c.text, "by construction:") {	&& !strings.Contains(c.text, "by construction:") {
+vulnclasses.go	 && !strings.Contains(c.text, "by construction:") {	 {
+vulnclasses.go	if vcTheorems(c.text) == nil && !reVCGap.MatchString(c.text) && !strings.Contains	if false && vcTheorems(c.text) == nil && !reVCGap.MatchString(c.text) && !strings.Contains
+vulnclasses.go	table == 2 && t != "" && !strings.HasPrefix(t, ">") && !reVCItem.MatchString(t)	false
+vulnclasses.go	table == 2 && t != "" && 	table == 2 &&
+vulnclasses.go	 && !strings.HasPrefix(t, ">") && 	 &&
+vulnclasses.go	 && !reVCItem.MatchString(t)	 && true
+vulnclasses.go	if !s.proved {	if false {
+vulnclasses.go	if !s.gap {	if false {
+vulnclasses.go	append(append([]vcText{}, d.ruledOut...), d.provedAll...)	d.ruledOut
+vulnclasses.go	append(append([]vcText{}, d.ruledOut...), d.gapAll...)	d.ruledOut
+rules.go	"export-macro", "vuln-classes":	"export-macro":
+main.go	res.drift = append(res.drift, vulnClassChecks(*root, r)...)	_ = vulnClassChecks(*root, r)

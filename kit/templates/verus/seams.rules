@@ -118,6 +118,17 @@ cite-assert	const assert
 # place (and the copy equal to the original but for its `-only` rows):
 # pins	verus/kani/pins.txt
 #
+# The vulnerability-class catalog, once it is filled in from
+# verus/VULN-CLASSES.md's template and keeps its layout: -check fails a
+# theorem cited `ID (#n)` with no verus/theorems/ID.md, a row's class
+# with no `###` section, and a `gap: #n` that is not an item of Gaps (or
+# an item no row or section cites), a ruled out by cell that cites
+# neither form and is neither `not shipped` nor `by construction:`, and
+# a class section whose **Proved.** or **Gap.** paragraph is missing or
+# cites neither form (a paragraph with nothing to cite says "none"). A
+# catalog in another layout leaves the line out:
+# vuln-classes	verus/VULN-CLASSES.md
+#
 # The heuristics: the first guess whose conditions all hold proposes its
 # category (- for none, which -check reports until an overrides line
 # names one). FIELD=RE matches, FIELD!RE does not; kind, name, file and

@@ -39,6 +39,7 @@ type Rules struct {
 	NotCopyTag  string              // the cite-assert tag a tracked-type seam cites them with
 	Pins        []string            // the pins files (source lines a copy runs), in rules order
 	Assumption  string              // the tool of a seam no check applies to
+	VulnClasses string              // the vulnerability-class catalog -check reads, or ""
 	testRes     []*regexp.Regexp
 	testOnPath  []bool
 }
@@ -197,7 +198,7 @@ func parseRules(file, data string) (*Rules, error) {
 		// A rule that holds one value may be given once: a second
 		// would silently replace the first.
 		switch f[0] {
-		case "ledger", "source", "command", "seams-doc", "unsupported-doc", "assumption-tool", "pair", "export-macro":
+		case "ledger", "source", "command", "seams-doc", "unsupported-doc", "assumption-tool", "pair", "export-macro", "vuln-classes":
 			// pair is the slash form of export-macro: the two name
 			// the one macro the scan reads, so either is given once.
 			k := f[0]
@@ -355,6 +356,13 @@ func parseRules(file, data string) (*Rules, error) {
 			}
 			if c, ok := inTree(f[1]); ok {
 				r.NotCopyFile, r.NotCopyTag = c, f[2]
+			}
+		case "vuln-classes":
+			if !want(2, "vuln-classes<TAB>FILE") {
+				continue
+			}
+			if c, ok := inTree(f[1]); ok {
+				r.VulnClasses = c
 			}
 		case "pins":
 			if !want(2, "pins<TAB>FILE") {
