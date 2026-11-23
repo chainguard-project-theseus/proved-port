@@ -94,8 +94,8 @@ checks:
       self-tests, scanner cases, the ledger file written whole, -check's
       stale, leftover and drift cases, -entries, -cites and the citation
       rules (challoc's golden cites too), the Kani, callers, const
-      assert and loom (cite-test) citation checks on fixture trees, the
-      rules file's errors,
+      assert, loom (cite-test) and GenMC (cite-case) citation checks on
+      fixture trees, the rules file's errors,
       the template rules file, and the cksum CRC against the system's
       cksum).
     trigger: [presubmit, postsubmit]

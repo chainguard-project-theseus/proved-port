@@ -125,20 +125,8 @@ func (v *resolver) test(ct citeTest, e *entry, target string) string {
 			return fmt.Sprintf("%s:%d holds an inner cfg attribute, which may leave the file out", p, ln)
 		}
 	}
-	src := "`" + e.file + "`"
-	short := src
-	if rel, ok := strings.CutPrefix(e.file, v.r.Source+"/"); ok && strings.Contains(rel, "/") {
-		short = "`" + rel + "`"
-	}
-	named := false
-	for _, l := range f.raw {
-		named = named || strings.Contains(l, src) || strings.Contains(l, short)
-	}
-	if !named {
-		if short != src {
-			return fmt.Sprintf("%s names neither %s nor %s", file, src, short)
-		}
-		return fmt.Sprintf("%s does not name %s", file, src)
+	if why := v.namesSrc(f, file, e); why != "" {
+		return why
 	}
 	ln, why := v.testFn(f, t, ct.cfgs, seamFn(e))
 	if ln == 0 {
@@ -203,6 +191,26 @@ func tailBlock(t string) attrBlock {
 		at = s + end
 	}
 	return b
+}
+
+// namesSrc says why the file f (at file) does not name e's source file
+// in backquotes on some line, "" when it does: `SOURCE/a/b.rs`, or
+// `a/b.rs` for a file in a directory under SOURCE.
+func (v *resolver) namesSrc(f *srcFile, file string, e *entry) string {
+	src := "`" + e.file + "`"
+	short := src
+	if rel, ok := strings.CutPrefix(e.file, v.r.Source+"/"); ok && strings.Contains(rel, "/") {
+		short = "`" + rel + "`"
+	}
+	for _, l := range f.raw {
+		if strings.Contains(l, src) || strings.Contains(l, short) {
+			return ""
+		}
+	}
+	if short != src {
+		return fmt.Sprintf("%s names neither %s nor %s", file, src, short)
+	}
+	return fmt.Sprintf("%s does not name %s", file, src)
 }
 
 // testFn finds the first top-level line `fn TEST() {` of f: its line (0
