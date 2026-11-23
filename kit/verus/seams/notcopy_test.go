@@ -75,7 +75,11 @@ func TestNotCopy(t *testing.T) {
 		// The second impls under a cfg the build may not meet, directly
 		// or across a comment and a blank line, are none.
 		"src/gated.rs":  "#[cfg(any())]\n" + one,
-		"src/gated2.rs": strings.Replace(one, impls[1]+"\n", "#[cfg(any())]\n// note\n\n"+impls[1]+"\n", 1)})
+		"src/gated2.rs": strings.Replace(one, impls[1]+"\n", "#[cfg(any())]\n// note\n\n"+impls[1]+"\n", 1),
+		// The check, or the impls, in a block (at column 0) are not the
+		// file's top level.
+		"src/blk.rs":     lines(impls[0], impls[1], "mod blk {", "// `F` checked.", "const _: () = assert!(<F as NotCopy<_>>::HOLDS && <F as NotClone<_>>::HOLDS);", "}"),
+		"src/blkimpl.rs": "mod m {\n" + impls[0] + "\n" + impls[1] + "\n}\n" + strings.Join(strings.Split(one, "\n")[2:], "\n")})
 	v := &resolver{root: d, r: r, files: map[string]*srcFile{}}
 	for _, c := range []struct {
 		ty, cite string
@@ -100,12 +104,14 @@ func TestNotCopy(t *testing.T) {
 		{"F", "`mixed` in src/nc.rs", false},    // NotCopy of FF
 		{"F", "`cloneonly` in src/nc.rs", false},
 		{"F", "`F` in src/one.rs", true},
-		{"F", " in src/one.rs", false},       // a blank label, though one assertion is labeled
-		{"F", "`F` in src/open.rs", false},   // the file ends inside a comment
-		{"F", "`F` in src/clone.rs", false},  // only the NotClone impl
-		{"F", "`F` in src/copy.rs", false},   // only the NotCopy impl
-		{"F", "`F` in src/gated.rs", false},  // the NotCopy impl gated
-		{"F", "`F` in src/gated2.rs", false}, // the NotClone impl gated across a comment and a blank line
+		{"F", " in src/one.rs", false},        // a blank label, though one assertion is labeled
+		{"F", "`F` in src/open.rs", false},    // the file ends inside a comment
+		{"F", "`F` in src/clone.rs", false},   // only the NotClone impl
+		{"F", "`F` in src/copy.rs", false},    // only the NotCopy impl
+		{"F", "`F` in src/gated.rs", false},   // the NotCopy impl gated
+		{"F", "`F` in src/gated2.rs", false},  // the NotClone impl gated across a comment and a blank line
+		{"F", "`F` in src/blk.rs", false},     // the check in a block
+		{"F", "`F` in src/blkimpl.rs", false}, // the impls in a block
 	} {
 		if got := v.notCopy(c.ty, c.cite); got != c.want {
 			t.Errorf("notCopy(%s, %s) = %v, want %v", c.ty, c.cite, got, c.want)
@@ -123,7 +129,9 @@ func TestTrackedCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"src/nc.rs": ncFile,
+		"src/nc.rs":  ncFile,
+		"src/lib.rs": "mod nc;\n",
+		"Cargo.toml": "[package]\nname = \"t\"\n",
 		"src/a.rs": lines("pub tracked struct F { x: () }", "    tracked struct K<T> { x: T }",
 			"pub(crate) tracked enum E { A }", "    pub(in crate::m) tracked struct P { x: () }",
 			"tracked struct M { x: () }", "tracked struct Q { x: () }", "tracked struct W { x: () }",
@@ -176,7 +184,7 @@ func TestNotCopyCite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := tree(t, map[string]string{"src/nc.rs": ncFile})
+	d := tree(t, map[string]string{"src/nc.rs": ncFile, "src/lib.rs": "mod nc;\n", "Cargo.toml": "[package]\nname = \"t\"\n"})
 	tracked := "#[verifier::external_body] pub tracked struct F { _no_copy: () }"
 	untracked := "#[verifier::external_body] pub struct F { _no_copy: () }"
 	for _, c := range []struct {
@@ -215,7 +223,7 @@ func TestNotCopyCite(t *testing.T) {
 
 // -check runs the checks over the source and test files.
 func TestNotCopyEndToEnd(t *testing.T) {
-	d := tree(t, map[string]string{"verus/seams.rules": ncRules + "guess\tC\tkind=.\n", "src/nc.rs": ncFile,
+	d := tree(t, map[string]string{"verus/seams.rules": ncRules + "guess\tC\tkind=.\n", "src/nc.rs": ncFile, "src/lib.rs": "mod a;\nmod nc;\n", "Cargo.toml": "[package]\nname = \"t\"\n",
 		"src/a.rs":     lines("verus! {", "#[verifier::external_body]", "pub tracked struct F { x: () }", "}"),
 		"src/tests.rs": lines("tracked struct N { x: () }")})
 	if code, _, e := runIn(t, d, "-write"); code != 0 {

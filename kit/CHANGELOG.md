@@ -656,8 +656,8 @@ where it reports drift.
     so a comment between the attribute and the label hid it.
   - An assertion's FILE must be a `.rs` file under SOURCE or a
     cite-module DIR, and not a test file, so that a build compiles it.
-    seams.sh read any file. Whether a `mod` line reaches FILE is not
-    read.
+    seams.sh read any file. Since #237 FILE must also be reached
+    ungated from the crate root (see that bullet).
   - `cite-module` applies to every cite-fn tag (seams.sh read
     `kani_proofs::` only for Kani).
   - Each failure names the seam.
@@ -715,8 +715,8 @@ where it reports drift.
 
   A const assertion checks a generic type only at the arguments it
   names. The doc and the template comment tell a port to write it at
-  Copy arguments (`K<u8>`). Whether a `mod` line reaches FILE, and under
-  what cfg, is not read (as for cite-assert, #232; follow-up #237).
+  Copy arguments (`K<u8>`). Since #237 FILE must also be reached
+  ungated from the crate root.
 
   The template carries challoc's line as a comment.
 
@@ -725,6 +725,72 @@ where it reports drift.
   failing types equal `trackedcheck()`'s every time, and the two
   tracked-type seams it fails equal `seams.sh --check`'s
   `notcopycheck` lines. Nothing is installed; ports see no change.
+- A cited assertion's FILE and the notcopy FILE must be compiled in
+  every build (#237). `-check` fails a const assert citation, or the
+  notcopy line once, when any file from FILE up to the crate root
+  (SOURCE/lib.rs or SOURCE/main.rs) holds an inner cfg attribute:
+  `#![cfg(..)]`, or a `#![cfg_attr(..)]` that adds a cfg. One that adds
+  a lint level is harmless. It also fails when one of those files is
+  not declared by a `mod NAME;` line in its parent (lib.rs or main.rs
+  for a file directly under SOURCE, else `DIR.rs` or `DIR/mod.rs`, a
+  `mod.rs` standing for its directory), or is declared under a cfg,
+  cfg_attr or ignore attribute (wrapped, on the line, or across comment
+  and blank lines) or under `#[path]`, which the check does not follow.
+  Only a `mod NAME;` at the parent's top level counts. One inside any
+  delimiters is reported as not reached: a `cfg_if!`, a `macro_rules!`
+  body, a macro's arguments in `(..)` or `[..]`, or an inline
+  `mod outer { .. }`, which declares `DIR/outer/NAME.rs`. An attribute
+  after other code on the line before (`mod a; #[cfg(..)]`) attaches to
+  the `mod` line, as in Rust. An inner attribute counts only at the
+  file's top level; one inside a block (`mod tests { #![cfg(test)] }`)
+  belongs to that block. A `#` that ends a line, with its `[` on the
+  next line of code, is read as one attribute with it, as Rust reads
+  it.
+
+  The crate root is SOURCE/lib.rs, or SOURCE/main.rs when there is no
+  lib.rs. With both present, a library build compiles lib.rs's tree
+  alone, so a file reached only from main.rs fails, and so does main.rs
+  itself. The check reads only those default roots. When the package's
+  Cargo.toml (beside SOURCE) moves the library (`[lib] path` other than
+  lib.rs) or turns discovery off (`autolib = false`, `autobins =
+  false`), the walk fails rather than credit a leftover default root
+  that Cargo does not build. With main.rs as the root, any `[lib]` table
+  fails too, since a library elsewhere never compiles main.rs's tree.
+  So does any `[[bin]]` table, which may move the binary, gate it on
+  `required-features`, or (edition 2015) turn discovery off. Comments are stripped. The target
+  settings in a form the check does not read, a dotted key (`lib.path`,
+  `package.autolib`) or a top-level inline table (`lib = {..}`,
+  `bin = [..]`, `package = {..}`), fail as well. Keys and headers are
+  compared with blanks, tabs and quotes removed, as TOML allows them
+  (`path\t=`, `"path" =`, `["lib"]`). The manifest is read line by line,
+  so it fails closed on what such a reader cannot follow:
+  - a missing Cargo.toml beside SOURCE, or one with no `[package]`
+    table (a workspace's virtual manifest);
+  - a multi-line string (`"""`, `'''`);
+  - a line starting with `[` that is not a whole header (a line of a
+    multi-line value);
+  - an escape in a key or header;
+  - an absolute `[lib] path`.
+  `DIR.rs` is no parent when it is a crate root or a `mod.rs`:
+  lib.rs's `mod x;` declares `src/x.rs`, never `src/lib/x.rs`. An
+  item's head split over lines (`pub` / `mod x;`, `mod` / `x;`) is read
+  as one item, so the attributes above it still apply.
+
+  A file under a cite-module DIR is held to a weaker rule: it is
+  compiled when the tool's build runs (challoc's `src/kani` under
+  `cfg(kani)`), and neither its inner attributes nor the `#[path]` line
+  that reaches the DIR are read. `DIR.rs` gets the same exemption only
+  outside SOURCE; under SOURCE it is an ordinary module file. A
+  cite-module DIR that is SOURCE or holds it is a rules error, since it
+  would exempt every file.
+
+  The cited assertion itself (cite-assert, and the not-Copy checks and
+  their second impls) must also stand at the file's top level, at depth
+  0 of braces, brackets and parentheses. An unindented assertion inside
+  a gated inline `mod inner { .. }` no longer counts. seams.sh read
+  FILE alone. On challoc
+  7d10fca every cited file is reached and `-check` passes. Nothing is
+  installed; ports see no change.
 
 ### Porting notes
 

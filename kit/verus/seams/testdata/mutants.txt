@@ -306,7 +306,7 @@ notcopy.go	if len(cited) == 0 {	if false {
 notcopy.go	ok = ok || v.notCopy(ty, t)	ok = v.notCopy(ty, t)
 notcopy.go	ic = ic || ungated && reNotCopyImpl.MatchString(c)	ic = true
 notcopy.go	il = il || ungated && reNotCloneImpl.MatchString(c)	il = true
-notcopy.go	ungated := !reAttrAbove.MatchString(prev)	ungated := prev == prev
+notcopy.go	ungated := d0 == 0 && !reAttrAbove.MatchString(prev)	ungated := d0 == 0 && prev == prev
 notcopy.go	if c != "" {	if true {
 notcopy.go	`(^|[^A-Za-z0-9_])tracked	`^[ \t]*(pub(\([^)]*\))?[ \t]+)?tracked
 rules.go	if r.NotCopyFile != "" {	if false {
@@ -316,3 +316,88 @@ main.go	append(append([]namedText{}, in.sources...), in.tests...)	in.sources
 notcopy.go	reTrackedDecl.FindAllStringIndex(c, -1)	reTrackedDecl.FindAllStringIndex(c, 1)
 notcopy.go	if ty == "" {	if false {
 notcopy.go	regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*`)	regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+#
+# #237: a cited FILE reached ungated from the crate root.
+reach.go	b.open += strings.Count(t, "[") - strings.Count(t, "]")	b.open = 0
+reach.go	if b.text += " " + t; b.open <= 0 {	if b.text += " " + t; false {
+reach.go	if !reOuterAttr.MatchString(at) {	if false {
+reach.go	b.open, b.text = strings.Count(at, "[")-strings.Count(at, "]"), at	b.open, b.text = 0, at
+reach.go	b.attrs = append(b.attrs, at)	b.attrs = append(b.attrs[:0:0], b.attrs...)
+reach.go	ia += strings.Count(t, "[") - strings.Count(t, "]")	ia = 0
+reach.go	} else if l0 == 0 && reInnerAttr.MatchString(t) {	} else if l0 == 0 && false {
+reach.go	} else if l0 == 0 && reInnerAttr.MatchString(t) {	} else if l0 == l0 && reInnerAttr.MatchString(t) {
+reach.go	level += nest(c)	level = 0
+reach.go	if strings.HasPrefix(p, d+"/") || p == d+".rs" && !strings.HasPrefix(p, v.r.Source+"/") {	if d == "\x00" {
+reach.go	if strings.HasPrefix(p, d+"/") || p == d+".rs" && !strings.HasPrefix(p, v.r.Source+"/") {	if strings.HasPrefix(p, d+"/") || p == d+".rs" {
+reach.go	if strings.HasPrefix(p, d+"/") || p == d+".rs" && !strings.HasPrefix(p, v.r.Source+"/") {	if strings.HasPrefix(p, d+"/") {
+reach.go	return p + " cannot be read whole"	return ""
+reach.go	if ln := innerGate(f); ln > 0 {	if ln := innerGate(f); false {
+reach.go	if v.exists(lib) {	if false {
+reach.go	} else if !v.exists(main) {	} else if false {
+reach.go	if p == root {	if false {
+reach.go	if p == main {	if false {
+reach.go	if base == "mod.rs" {	if false {
+reach.go	c != lib && c != main && path.Base(pd) != "mod"	c != main && path.Base(pd) != "mod"
+reach.go	c != lib && c != main && path.Base(pd) != "mod"	c != lib && path.Base(pd) != "mod"
+reach.go	c != lib && c != main && path.Base(pd) != "mod"	c != lib && c != main
+reach.go	parents = append(parents, pd+"/mod.rs")	_ = pd
+reach.go	parents = []string{root}	parents = []string{lib}
+reach.go	if pd == src {	if false {
+reach.go	if hashEnd(c) {	if false {
+reach.go	if hashEnd(c) {	if !reAttrAny.MatchString(c) && hashEnd(c) {
+reach.go	c, hash = "#"+strings.TrimLeft(c, " \t"), false	c, hash = strings.TrimLeft(c, " \t"), false
+reach.go	if ln == 0 {	if false {
+reach.go	if why != "" {	if false {
+reach.go	`[ \t]*;`)	`[ \t]*`)
+reach.go	if b.open == 0 && reOuterAttr.MatchString(strings.TrimLeft(c, " \t")) {	if false {
+reach.go	if reGateAttr.MatchString(a) {	if false {
+reach.go	if rePathAttr.MatchString(a) {	if false {
+reach.go	b = attrBlock{}	_ = b
+reach.go	if re.MatchString(c) && d0 != 0 {	if re.MatchString(c) && d0 != d0 {
+reach.go	depth += nest(c)	depth = 0
+reach.go	strings.Count(c, "{") + strings.Count(c, "[") + strings.Count(c, "(")	strings.Count(c, "{") + strings.Count(c, "[")
+reach.go	strings.Count(c, "{") + strings.Count(c, "[") + strings.Count(c, "(")	strings.Count(c, "{") + strings.Count(c, "(")
+reach.go	strings.Count(c, "}") - strings.Count(c, "]") - strings.Count(c, ")")	strings.Count(c, "}")
+reach.go	if loc := reAttrAny.FindStringIndex(c); loc != nil {	if loc := reAttrAny.FindStringIndex(c); false {
+reach.go	if nested != 0 {	if false {
+resolve.go	if why := v.reach(file); why != "" {	if why := v.reach(file); false {
+notcopy.go	if why := v.reach(nc); why != "" {	if why := v.reach(nc); false {
+reach.go	if reModHead.MatchString(c) {	if false {
+reach.go	c, pre = pre+" "+strings.TrimLeft(c, " \t"), ""	c, pre = strings.TrimLeft(c, " \t"), ""
+rules.go	if d := r.CiteModule[name]; strings.HasPrefix(r.Source+"/", d+"/") {	if d := r.CiteModule[name]; d == r.Source {
+resolve.go	if h && d0 == 0 && reAssertLine.MatchString(l) {	if h && d0 == d0 && reAssertLine.MatchString(l) {
+resolve.go	depth += nest(af.code[i])	depth = 0
+notcopy.go	if h && d0 == 0 && reAssertOpen.MatchString(l) {	if h && reAssertOpen.MatchString(l) {
+notcopy.go	ungated := d0 == 0 && !reAttrAbove.MatchString(prev)	ungated := !reAttrAbove.MatchString(prev)
+notcopy.go	depth += nest(c)	depth = 0
+reach.go	if why := v.targets(root); why != "" {	if why := v.targets(root); false {
+reach.go	lib := strings.HasSuffix(root, "/lib.rs")	lib := root != ""
+reach.go	table = tomlKey.Replace(t)	table = t
+reach.go	strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "")	strings.NewReplacer(" ", "", `"`, "", "'", "")
+reach.go	strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "")	strings.NewReplacer(" ", "", "\t", "", "'", "")
+reach.go	strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "")	strings.NewReplacer(" ", "", "\t", "", `"`, "")
+reach.go	if p := strings.Trim(val, `"'`); strings.HasPrefix(p, "/") || path.Join(dir, p) != root {	if p := strings.Trim(val, `"'`); p == "\x00" {
+reach.go	if p := strings.Trim(val, `"'`); strings.HasPrefix(p, "/")	if p := val; strings.HasPrefix(p, "/")
+reach.go	strings.HasPrefix(val, "false")	val != ""
+reach.go	(lib && k == "autolib" || !lib && k == "autobins")	(k == "autolib" || k == "autobins")
+reach.go	case table == "[lib]" && k == "path":	case false:
+reach.go	if !lib && table == "[[bin]]" {	if false {
+reach.go	if !lib && table == "[[bin]]" {	if table == "[[bin]]" {
+reach.go	t, _, _ := strings.Cut(l, "#")	t := l
+reach.go	if !lib && table == "[lib]" {	if false {
+reach.go	strings.HasPrefix(k, "lib.") || 	false ||
+reach.go	strings.HasPrefix(k, "package.auto") ||	false ||
+reach.go	table == "" && (k == "lib" || k == "bin" || k == "package")	(k == "lib" || k == "bin" || k == "package")
+reach.go	table == "" && (k == "lib" || k == "bin" || k == "package")	table == "" && (k == "bin" || k == "package")
+reach.go	table == "" && (k == "lib" || k == "bin" || k == "package")	table == "" && (k == "lib" || k == "package")
+reach.go	table == "" && (k == "lib" || k == "bin" || k == "package")	table == "" && (k == "lib" || k == "bin")
+reach.go	k, val = tomlKey.Replace(k), strings.TrimSpace(val)	k, val = strings.TrimSpace(k), strings.TrimSpace(val)
+reach.go	if !v.exists(man) {	if false {
+reach.go	if strings.Contains(l, `"""`) || strings.Contains(l, `'''`) {	if strings.Contains(l, `'''`) {
+reach.go	if strings.Contains(l, `"""`) || strings.Contains(l, `'''`) {	if strings.Contains(l, `"""`) {
+reach.go	if strings.Contains(t, `\`) {	if false {
+reach.go	if !reTomlHeader.MatchString(table) {	if false {
+reach.go	pkg = pkg || table == "[package]"	pkg = true
+reach.go	if !pkg {	if false {
+reach.go	strings.HasPrefix(p, "/") || path.Join(dir, p) != root	path.Join(dir, p) != root
+reach.go	regexp.MustCompile(`^\[\[?[^\[\]]+\]\]?$`)	regexp.MustCompile(`^\[\[?[^\[\]]+\]\]?`)

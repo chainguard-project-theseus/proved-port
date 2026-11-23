@@ -68,7 +68,7 @@ func (v *resolver) exists(p string) bool {
 // crateFile says whether p (cleaned) is a .rs file of the crate: under
 // SOURCE or a cite-module DIR, and not one of the rules' test files
 // (built only for tests). Whether a `mod` line reaches it, and under
-// what cfg, is not read.
+// what cfg, is reach's (reach.go).
 func (v *resolver) crateFile(p string) bool {
 	if !strings.HasSuffix(p, ".rs") || v.r.isTest(p) {
 		return false
@@ -272,8 +272,12 @@ func (v *resolver) assertion(target string) bool {
 	if !af.ok {
 		return false
 	}
-	n, inBlock, h, g, prev := 0, false, false, false, ""
+	// depth: the delimiters open before the line. A top-level assertion
+	// is at depth 0, not in a (perhaps gated) inline mod or other block.
+	n, inBlock, h, g, prev, depth := 0, false, false, false, "", 0
 	for i, l := range af.raw {
+		d0 := depth
+		depth += nest(af.code[i])
 		if af.clean[i] && strings.HasPrefix(l, "//") {
 			if !inBlock {
 				g = reAttrAbove.MatchString(prev)
@@ -284,7 +288,7 @@ func (v *resolver) assertion(target string) bool {
 		}
 		// The line after a comment line starts outside every literal
 		// and comment.
-		if h && reAssertLine.MatchString(l) {
+		if h && d0 == 0 && reAssertLine.MatchString(l) {
 			n++
 			if g {
 				n++
@@ -361,6 +365,14 @@ func resolveCites(root string, r *Rules, es []*entry) []string {
 			if r.CiteAssert[c.tag] && !v.assertion(c.target) {
 				add(fmt.Sprintf("%s%s: %s names no one labeled assertion (a top-level `const _: () = assert!(` right under a `// LABEL` comment, no attribute above it, in FILE)", at, c.tag, c.target))
 				continue
+			}
+			// The assertion holds only if every build compiles its file.
+			if r.CiteAssert[c.tag] {
+				file := path.Clean(c.target[strings.LastIndex(c.target, " in ")+4:])
+				if why := v.reach(file); why != "" {
+					add(fmt.Sprintf("%s%s: %s: %s may be left out of a build: %s", at, c.tag, c.target, file, why))
+					continue
+				}
 			}
 			if rw, ok := r.CiteRow[c.tag]; ok && !v.row(rw, c.target) {
 				m := fmt.Sprintf("%s%s: %s has no row in the `## %s` table of %s that names it in backquotes in its first cell", at, c.tag, c.target, rw.heading, rw.file)

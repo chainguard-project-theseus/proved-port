@@ -95,7 +95,8 @@
 // the file's `mod` line is not read. A cite-assert citation is `LABEL
 // in FILE` (FILE after the last ` in `, a .rs file under SOURCE or a
 // cite-module DIR and not a test file; LABEL not blank): exactly one
-// top-level `const _: () = assert!(`, alone on its line or the whole
+// top-level (at depth 0 of braces, brackets and parentheses, so not in
+// an inline mod) `const _: () = assert!(`, alone on its line or the whole
 // assertion on it, right under a block of `//` lines whose first starts
 // `// LABEL`, where the last line of code above the block (across
 // blank lines, comment lines and block comments) is no attribute (a
@@ -128,6 +129,35 @@
 // already seen (one check cannot stand for both), and each tracked-type
 // seam whose status cites TAG with none of those citations a not-Copy
 // check of its type.
+//
+// A cited assertion's FILE, and the notcopy FILE, must be compiled in
+// every build: -check fails a const assert citation (or the notcopy line,
+// once) when a file from FILE up to the crate root (SOURCE/lib.rs, or
+// SOURCE/main.rs when there is no lib.rs: with both, a library build
+// compiles lib.rs's tree alone; a Cargo.toml beside SOURCE that moves
+// that target or turns off its discovery fails it, as do a `[lib]` or
+// any `[[bin]]` table with main.rs as the root and the target settings
+// as dotted keys or inline tables; the manifest must be there with a
+// `[package]` table, and one holding a multi-line string, a line starting
+// with `[` that is no whole header, an escape, or an absolute path, which
+// its line reader does not follow, fails) holds an inner
+// `#![cfg(..)]` or a
+// `#![cfg_attr(..)]` that adds a cfg, or is not declared by a `mod
+// NAME;` line in its parent (the root for a file directly under SOURCE,
+// else DIR.rs, unless that is a root or a mod.rs, or DIR/mod.rs; a
+// mod.rs stands for its directory; a line-ending `#` joins the next
+// line's `[`), or is
+// declared under a cfg, cfg_attr or ignore attribute or a `#[path]`
+// (not followed); only a `mod NAME;` at the parent's top level counts,
+// not one inside any delimiters (a macro's body or arguments, `cfg_if!`,
+// an inline mod); an attribute after other code on the line before
+// attaches to it; and an inner attribute counts only at a file's top
+// level. A
+// file under a cite-module DIR (or DIR.rs outside SOURCE) is held to a
+// weaker rule: it is compiled when the tool's build runs, and neither
+// its inner attributes nor the `#[path]` line reaching the DIR are read;
+// a cite-module DIR may not be SOURCE or hold it. An item's head split
+// over lines (`pub` / `mod NAME;`) is one item.
 //
 // -entries prints, per seam: source file, line, kind, id (the name, with
 // #N when shared in its file), category, tool, status, overrides file (or

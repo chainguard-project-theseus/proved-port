@@ -15,7 +15,10 @@ const resolveRules = "command\tseams -write\ntool\tT\nassumption-tool\tT\ncatego
 	"cite-row\tcallers\tverus/README.md\tGuard tests\tMutants killed:\tKnown escapes:\n"
 
 var resolveFiles = map[string]string{
-	"src/a.rs": lines("verus! {", "#[verifier::external_body]", "fn f() {}", "}"),
+	// The crate root, reaching the files the assertions cite (#237).
+	"src/lib.rs": lines("mod a;", "mod layout;"),
+	"Cargo.toml": lines("[package]", "name = \"t\""),
+	"src/a.rs":   lines("verus! {", "#[verifier::external_body]", "fn f() {}", "}"),
 	"src/kani/ptr.rs": lines(
 		"#[kani::proof]",
 		"fn ptr_add() {}",
@@ -243,7 +246,13 @@ var resolveFiles = map[string]string{
 		"    unix,",
 		"))]",
 		"// `L11`",
-		"const _: () = assert!(false);"),
+		"const _: () = assert!(false);",
+		// At column 0 but inside a gated inline mod: not top-level.
+		"#[cfg(any())]",
+		"mod inner {",
+		"// `L12`",
+		"const _: () = assert!(false);",
+		"}"),
 	"verus/README.md": lines(
 		"## Guard tests",
 		"",
@@ -367,7 +376,7 @@ func TestResolveAssertion(t *testing.T) {
 	bad := []string{"`L2` gated in src/layout.rs", "`L3` in src/layout.rs", "`L4` in src/layout.rs", "`L5` in src/layout.rs",
 		"`L6` in src/layout.rs", "`L7` in src/layout.rs", "`L1` in src/a.rs", "`L1` in ../layout.rs", "`L1` in /src/layout.rs", "`L1`", "`L1` in src/none.rs", "`O` in proofs/open.rs",
 		"`N` in docs/notes.md", "`N` in src/notes.txt", "`N` in src/tests.rs",
-		"`L9` in src/layout.rs", "`L10` in src/layout.rs", "`L11` in src/layout.rs"}
+		"`L9` in src/layout.rs", "`L10` in src/layout.rs", "`L11` in src/layout.rs", "`L12` in src/layout.rs"}
 	got := resolveRun(t, "trusted (const assert: `L1` in src/layout.rs, `L1` the layout in src/layout.rs, `L8` in src/layout.rs, `P` in proofs/shut.rs, `Q` in proofs.rs,"+strings.Join(bad, ", ")+")")
 	var want []string
 	for _, b := range bad {
