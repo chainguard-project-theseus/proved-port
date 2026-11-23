@@ -1,0 +1,46 @@
+# ci/kit-calls.rules: the rules `make kit-calls` holds the port's checks
+# to (the source-rules check in .chainguard/ci/lint.yaml runs it).
+# proved-port-calls reads the configuration `chainctl checks explain
+# --output=json .` resolves, not the check files; its doc comment says
+# what each rule holds. One rule a line:
+#
+#   call CHECK TARGET... [with NAME...]
+#     CHECK gates a pull request or push, installs theseus-proved-port,
+#     sets no variable but VERUS_THREADS, VERUS_BASE and the NAMEs, and
+#     runs `make TARGET` for each TARGET in a step read with certainty.
+#   forbid PATH
+#     no check runs or names PATH, an in-tree copy the kit replaced.
+#
+# A call check runs on every change: one with a `when: {changed: [...]}`
+# list fails its rule, since a list that names none of the paths the
+# target reads would let it pass unrun. A check that splits Kani between
+# instances (a foreach of KANI_SHARD, KANI_ONLY or KANI_HARNESS, as
+# verus.yaml's header describes) cannot be a call check either: the
+# tool refuses every KANI_ variable, since it cannot tell that the
+# instances cover every harness. List only the unsplit kani and
+# kani-main here; a port that splits them deletes their lines and says
+# why below.
+#
+# The lines below are the template's checks. A port adds a call line for
+# each check of its own that runs a kit target (verus-amd64, if it
+# uncomments it), and deletes the kani lines if it leaves Kani out.
+call verus verus-headers verus
+call verus-main verus-headers verus
+call kani kani
+call kani-main kani
+call source-rules lint-unsafe kit-calls
+
+# The in-tree copies the kit's targets replaced. A forbid line holds a
+# path the port no longer has: a port that keeps a script of its own at
+# one of these paths (a rule the kit's target does not cover) drops that
+# line, or renames its script. ci/lint-unsafe.sh is not listed: ports
+# keep their own SAFETY: comment check there, which `make lint-unsafe`
+# does not replace.
+forbid verus/count
+forbid verus/make
+forbid verus/kani/run.sh
+forbid ci/kani-regular.sh
+forbid ci/heap-noalias.sh
+forbid ci/glibc-max.sh
+forbid ci/skip-summary.sh
+forbid ci/known-failures.sh

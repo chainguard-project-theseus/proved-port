@@ -37,22 +37,35 @@ checks:
   # SAFETY: comments: the clippy check does, once {CAPI_CRATE}'s lints
   # set clippy's undocumented_unsafe_blocks to deny (the templates
   # README says where). A rule of the port's own (its own SAFETY: check,
-  # a budget of unsafe blocks) is a step after `make lint-unsafe`, in a
+  # a budget of unsafe blocks) is a step after `make kit-calls`, in a
   # script under ci/.
+  # `make kit-calls` (PLAN step 8) holds every check to the rules in
+  # ci/kit-calls.rules: each check listed there calls the kit's targets,
+  # and no check runs an in-tree copy the kit replaced. It reads what
+  # `chainctl checks explain` resolves (chainctl, offline), and it lists
+  # this check too, so both make steps stay first. chainctl is pinned
+  # (env/dev.yaml pins the same; the deps agent's tools entry moves
+  # both): the checker refuses a field of explain's output it does not
+  # read, so a chainctl that prints a new one fails `make kit-calls`, and
+  # it should fail on the bump's pull request, which waits for a kit
+  # release that reads it, not on an unrelated one.
   source-rules:
     description: >-
       Every crate but {CAPI_CRATE} forbids unsafe code (make lint-unsafe);
-      the vendored headers define every macro exactly as {LIBRARY}
-      {UPSTREAM_VERSION} does (ci/header-check.sh).
+      the checks call the kit's targets (make kit-calls); the vendored
+      headers define every macro exactly as {LIBRARY} {UPSTREAM_VERSION}
+      does (ci/header-check.sh).
     trigger: [presubmit, postsubmit]
     resources: medium
     timeout: 15m
     environment:
-      packages: [{RUST_STREAM}, build-base, busybox, make, theseus-proved-port~{KIT_VERSION}, {REFERENCE_PACKAGES}]
+      packages: [{RUST_STREAM}, build-base, busybox, make, chainctl~{CHAINCTL_RELEASE}, theseus-proved-port~{KIT_VERSION}, {REFERENCE_PACKAGES}]
     network: *crates
     steps:
       - name: unsafe confinement
         cmd: [make, lint-unsafe]
+      - name: kit calls
+        cmd: [make, kit-calls]
       - name: header constants
         cmd: [sh, ci/header-check.sh]
 
