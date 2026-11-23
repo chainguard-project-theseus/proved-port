@@ -21,7 +21,11 @@
 #     both passing with UNSAFE_WORKSPACE_LINTS=no;
 #   - a workspace below the root (UNSAFE_MANIFEST), the caller's
 #     RUSTC_WORKSPACE_WRAPPER (still run), the caller's RUSTFLAGS
-#     allowing unsafe_code (the forbid still wins), UNSAFE_CHECK_FLAGS.
+#     allowing unsafe_code (the forbid still wins), UNSAFE_CHECK_FLAGS;
+#   - --cap-lints and --force-warn in the caller's flags or an argument
+#     file, refused (but cargo 1.100's
+#     --force-warn=unused_crate_dependencies), and a member's arguments
+#     ending with a bare --force-warn, refused by the wrapper.
 # Run it from the repository root. It needs cargo and no network.
 set -eu
 
@@ -217,6 +221,31 @@ verdict "a CRLF argument file holding --cap-lints is refused" 1 " --cap-lints): 
 printf -- '--force-warn\nunsafe_code\n' > "$tmp/flags"
 run "$d" RUSTFLAGS="@$tmp/flags"
 verdict "an argument file holding --force-warn, then unsafe_code, is refused" 1 " --force-warn unsafe_code): take it out"
+# A --force-warn that ends the caller's flags (here an argument file's
+# last line) fails the run before any member compiles: cargo's probe of
+# the target passes the flags before its own --crate-type, which
+# --force-warn takes as its lint, and rustc refuses the rest.
+printf -- '--force-warn\n' > "$tmp/flags"
+run "$d" RUSTFLAGS="@$tmp/flags"
+verdict "an argument file ending with --force-warn fails the run" 1 "does not build (cargo check above)"
+# A member's rustc whose arguments still end with a bare --force-warn
+# (here added by the caller's RUSTC_WRAPPER, which cargo runs before the
+# workspace wrapper, for safe and vpair alone, so the probe never sees
+# it) is refused by the wrapper itself, on the clean fixture: rustc
+# would take the -Funsafe_code appended after it as --force-warn's lint,
+# and no forbid would apply.
+cat > "$tmp/trail" << 'EOF'
+#!/bin/sh
+w=$1
+shift
+case ${CARGO_PKG_NAME-} in
+  safe | vpair) exec "$w" "$@" --force-warn ;;
+esac
+exec "$w" "$@"
+EOF
+chmod +x "$tmp/trail"
+run "$fx" RUSTC_WRAPPER="$tmp/trail"
+verdict "a member's rustc whose arguments end with --force-warn is refused" 1 " --force-warn): take it out"
 # A missing one fails rustc itself (cargo's probe of it, before any
 # member), which fails the run.
 run "$d" RUSTFLAGS="@$tmp/no-such-flags"
