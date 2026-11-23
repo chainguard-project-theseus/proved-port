@@ -139,8 +139,34 @@ where it reports drift.
   names an in-tree copy the kit replaced). `kit/install.sh` builds it with the other
   three, and `count-installed` checks it as it checks them; go.yaml's
   `calls-test` runs its tests, with challoc 7138852's resolved
-  configuration (two values made neutral) as a fixture. Nothing runs it yet: the make target,
-  the rules template and the template check are a later change.
+  configuration (two values made neutral) as a fixture. The next item
+  runs it in a port.
+- `make kit-calls` (#258), the second half of PLAN step 8: the target
+  writes `chainctl checks explain --output=json .` to a temporary file
+  outside the tree (a failed explain fails the target, printing its
+  diagnostics) and runs `proved-port-calls -rules $(KIT_CALLS_RULES)`
+  over it (`KIT_CALLS_RULES ?= ci/kit-calls.rules`, `KIT_CALLS ?=
+  proved-port-calls`; the target fails while either is empty). The
+  templates gain `ci/kit-calls.rules` (call lines for verus,
+  verus-main, kani, kani-main and source-rules, and forbid lines for
+  the in-tree copies the kit's targets replaced), and lint.yaml's
+  source-rules check runs `make kit-calls` after `make lint-unsafe`,
+  with `chainctl~{CHAINCTL_RELEASE}` in its packages and in
+  env/dev.yaml's (the deps template's tools entry moves the pin and
+  runs `make kit-calls`). Two rules
+  change in the checker: a call check with a `when.changed` list now
+  fails its rule (a list that names none of the paths the target reads
+  lets it pass unrun), and `with` refuses every name starting `KIT_`
+  (KIT_CALLS_RULES chooses the rules). A check that splits Kani between
+  instances stays no call check (the checker refuses every KANI_ name);
+  the rules template says so and lists only the unsplit kani and
+  kani-main. make-test covers the target with a stub chainctl and
+  checker; go.yaml's `kit-calls-template` runs it with the real
+  chainctl over the template's check files filled with sample values.
+  calls-test's TestTemplateCalls requires a call line for each kit
+  target each template check's steps name, over a fixture of explain's
+  output (`kit/checks/calls/testdata/templates.json`), and
+  `kit-calls-template` runs it over the real chainctl's output too.
 
 ### Porting notes
 
@@ -170,11 +196,24 @@ where it reports drift.
    cited case line with an empty field, or a template that ends inside
    a block comment or literal now fails, as does a citation with two
    blanks between its words.
-5. Nothing to change for `proved-port-calls`: no target or template
-   runs it in this release. The package's recipe builds it beside the
-   other three Go tools (one more `go/build` of `kit/checks/calls` as
+5. The package's recipe builds `proved-port-calls` beside the other
+   three Go tools (one more `go/build` of `kit/checks/calls` as
    `proved-port-calls`, or nothing more where the recipe runs
    `kit/install.sh`).
+6. Optional: to run the lint, copy `templates/ci/kit-calls.rules` to
+   `ci/kit-calls.rules` (a call line for each check of the port's that
+   runs a kit target; drop the kani lines for a port without Kani, and
+   the lines of a check that splits Kani), add the step `make
+   kit-calls` after `make lint-unsafe` in lint.yaml's source-rules, and
+   add `chainctl~{CHAINCTL_RELEASE}` to that check's packages and
+   env/dev.yaml's, and the chainctl pin to the tools entry of
+   .chainguard/deps.yaml. A check
+   listed with a `when.changed` list fails its rule: drop the list or
+   the line. A forbid line for a path where the port keeps a script of
+   its own fails too: drop the line or rename the script. The template
+   does not forbid `ci/lint-unsafe.sh`, where ports keep their own
+   SAFETY: comment check. A port that does none of this changes
+   nothing.
 
 ## 0.4.12
 

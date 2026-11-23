@@ -655,6 +655,65 @@ refuses_make "make -n known-cites with KNOWN_CITES_OFFLINE=0" "KNOWN_CITES_OFFLI
 refuses_make "make -n consumers-run with no CONSUMERS_LIB" "CONSUMERS_LIB is empty" consumers-run
 refuses_make "make -n consumers-run with a blank CONSUMERS_DIR" "CONSUMERS_DIR is empty" consumers-run CONSUMERS_LIB=swap CONSUMERS_DIR=' '
 refuses_make "make -n consumers-run with no CONSUMERS_WORK" "CONSUMERS_WORK is empty" consumers-run CONSUMERS_LIB=swap CONSUMERS_WORK=
+refuses_make "make -n kit-calls with no KIT_CALLS" "KIT_CALLS is empty" kit-calls KIT_CALLS=
+refuses_make "make -n kit-calls with a blank KIT_CALLS_RULES" "KIT_CALLS_RULES is empty" kit-calls KIT_CALLS_RULES=' '
+
+# --- kit-calls ---------------------------------------------------------------
+# kit-calls writes chainctl's resolved configuration to a temporary file,
+# runs the checker over it with the rules file, and removes it. A stub
+# chainctl logs its arguments and directory and prints a workflow (or
+# fails, under STUB_EXPLAIN_FAIL); a stub checker logs its arguments and
+# the file's contents and exits STUB_CALLS_RC. kit/kit-calls-test.sh
+# runs the real ones over the templates.
+kc=$tmp/kitcalls
+mkdir "$kc"
+cat > "$kc/chainctl" <<EOF
+#!/bin/sh
+echo "chainctl \$* in \$(pwd)" > "$kc/explain.log"
+echo '{"jobs":{"c":{}}}'
+[ -z "\${STUB_EXPLAIN_FAIL-}" ] || { echo 'explain: refused' >&2; exit 1; }
+EOF
+cat > "$kc/calls" <<EOF
+#!/bin/sh
+echo "calls \$1 \$2" > "$kc/calls.log"
+cat "\$3" >> "$kc/calls.log"
+echo "\$3" > "$kc/file"
+echo "ok checked"
+exit "\${STUB_CALLS_RC:-0}"
+EOF
+chmod +x "$kc/chainctl" "$kc/calls"
+# kitcalls ARG...: make kit-calls in the port with the stubs; its output
+# in $tmp/out.
+kitcalls() {
+  rm -f "$kc/explain.log" "$kc/calls.log" "$kc/file"
+  PATH=$kc:$PATH make -s -C "$port" kit-calls KIT_CALLS="$kc/calls" "$@" > "$tmp/out" 2>&1
+}
+kitcalls || { cat "$tmp/out" >&2; fail "make kit-calls, stubs: got = failure, want = success"; }
+expect "make kit-calls runs chainctl checks explain --output=json in the port" "$(cat "$kc/explain.log")" \
+  "chainctl checks explain --output=json . in $(cd "$port" && pwd)"
+expect "make kit-calls passes the rules file and explain's output to the checker" "$(cat "$kc/calls.log")" \
+  'calls -rules ci/kit-calls.rules
+{"jobs":{"c":{}}}'
+expect "make kit-calls prints the checker's lines" "$(cat "$tmp/out")" "ok checked"
+case $(cat "$kc/file") in
+  "$port"/*) fail "make kit-calls wrote the configuration in the port: $(cat "$kc/file")" ;;
+esac
+[ ! -e "$(cat "$kc/file")" ] || fail "make kit-calls left its temporary file $(cat "$kc/file")"
+echo "ok make kit-calls removes its temporary file, outside the port"
+kitcalls KIT_CALLS_RULES=' r/x.rules ' || { cat "$tmp/out" >&2; fail "make kit-calls KIT_CALLS_RULES: got = failure"; }
+expect "make kit-calls passes KIT_CALLS_RULES stripped" "$(head -1 "$kc/calls.log")" "calls -rules r/x.rules"
+for rc in 1 2; do
+  if STUB_CALLS_RC=$rc kitcalls; then fail "make kit-calls, checker exit $rc: got = success, want = failure"; fi
+  [ ! -e "$(cat "$kc/file")" ] || fail "make kit-calls, checker exit $rc: left its temporary file"
+  echo "ok make kit-calls fails when the checker exits $rc"
+done
+if STUB_EXPLAIN_FAIL=1 kitcalls; then fail "make kit-calls, explain fails: got = success, want = failure"; fi
+[ ! -e "$kc/calls.log" ] || fail "make kit-calls, explain fails: got = the checker ran, want = it does not"
+for line in 'explain: refused' '{"jobs":{"c":{}}}' 'kit-calls: chainctl checks explain --output=json . failed'; do
+  grep -qxF "$line" "$tmp/out" \
+    || { cat "$tmp/out" >&2; fail "make kit-calls, explain fails: no line $line"; }
+done
+echo "ok make kit-calls fails when explain fails, printing what it wrote, and runs no checker"
 # The no-kit guard kit/count/README.md gives ports lists every kit
 # target, so each fails with the kit's message where the package is
 # missing: proved_port_phony and verify, in that order.
@@ -785,7 +844,7 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run kit-calls verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;

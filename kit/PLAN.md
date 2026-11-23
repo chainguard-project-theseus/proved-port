@@ -559,6 +559,9 @@ is deleted in that PR.
    the package, sets only the variables the rule allows, and runs `make
    TARGET` in a step it reads with certainty) and `forbid
    PATH` rules (no check runs an in-tree copy the kit replaced), with
-   go.yaml's `calls-test`. Still to come: the `bench` and `remote`
-   targets above, and the make target, rules template and template
-   check that run the checker in a port.
+   go.yaml's `calls-test`. `make kit-calls` (#258) runs it over
+   explain's output with the port's `ci/kit-calls.rules`; the template
+   of that file lists the template's checks, lint.yaml's source-rules
+   runs the target, and go.yaml's `kit-calls-template` runs it with the
+   real chainctl over the filled templates. Still to come: the `bench`
+   and `remote` targets above.

@@ -129,7 +129,7 @@ developed in private repositories.
 
 | template | what it holds | shaped on |
 |---|---|---|
-| `.chainguard/ci/lint.yaml` | rustfmt, clippy, the source rules (`make lint-unsafe`, `ci/header-check.sh`), shellcheck from the packaged `shellcheck~` | pcre3, expat-rs; shellcheck as chainz |
+| `.chainguard/ci/lint.yaml` | rustfmt, clippy, the source rules (`make lint-unsafe`, `make kit-calls` over `ci/kit-calls.rules`, `ci/header-check.sh`), shellcheck from the packaged `shellcheck~` | pcre3, expat-rs; shellcheck as chainz |
 | `.chainguard/ci/test.yaml` | cargo test and `ci/abi.sh` on amd64 and arm64; msrv on the `rust-version` toolchain | pcre3, expat-rs, chainz |
 | `.chainguard/ci/verus.yaml` | `verus` and `kani` against the pull request's base; `verus-main` and `kani-main` on main, `verus-main` against the start of the push; one architecture (large-arm64, 60 and 30 minutes) by default, with a commented `verus-amd64` for proved code that differs by target | pcre3, challoc, expat-rs; `verus-amd64` as challoc's `verus-arm64` |
 | `.chainguard/ci/fuzz.yaml` | `fuzz`, `fuzz-diff` and `fuzz-abi` on request, each fuzzer after its self-test; `known-citations` on every pull request | pcre3, expat-rs |
@@ -238,7 +238,24 @@ true`, possible with `unsafe_code = "deny"`), or under its own
 which `lint-unsafe.sh`'s header covers). A port that keeps its own
 `SAFETY:` check, or any other rule of its own (a budget of unsafe
 blocks), adds it as a script under `ci/` and a step of `source-rules`
-after `make lint-unsafe`.
+after `make kit-calls`.
+
+`source-rules` then runs `make kit-calls`, which holds the port's
+checks to `ci/kit-calls.rules` (copied from `templates/ci/kit-calls.rules`):
+each check a `call` line names gates a merge, installs the kit, sets
+no variable the line does not allow, has no `when.changed` list, and
+runs the named kit targets in its first steps; and no check names a
+path a `forbid` line names, an in-tree copy the kit replaced. The
+target reads what `chainctl checks explain --output=json .` resolves,
+so the check installs `chainctl`, pinned (`chainctl~{CHAINCTL_RELEASE}`)
+because the checker refuses a field of explain's output it does not
+read: a chainctl that prints a new one fails on the deps agent's tools
+pull request that moves the pin, which waits for a kit release, and
+not on an unrelated one. The kit's own `kit-calls-template` check runs
+the newest chainctl, so it sees such a change first. A port adds a call line for each
+check of its own that runs a kit target, and drops the kani lines if it
+leaves Kani out; a check that splits Kani between instances cannot be
+a call check (the rules file's header says why).
 
 Where the ports differ, a template takes the shape most of them share,
 and its comments say what a port may change: a second architecture for
@@ -307,7 +324,7 @@ reach crates.io. deps.yaml's header says the same, since the kit ships
 no identities.yaml template.
 
 Apply them as above: copy, fill the placeholders (also `{MSRV}`,
-`{SHELLCHECK_RELEASE}`, `{CLANG_STREAM}`, `{REFERENCE_PACKAGES}`, the
+`{SHELLCHECK_RELEASE}`, `{CHAINCTL_RELEASE}`, `{CLANG_STREAM}`, `{REFERENCE_PACKAGES}`, the
 reference library's Wolfi packages as a comma-separated list such as
 `zlib~1.3.2.1, zlib-dev~1.3.2.1`, `{REFERENCE_NAME}`, `{VERUS_CRATES}`,
 `{PORT_ENV}`, `{DEPS_HOUR}`, `{CONSUMER_NAME}`, `{MAINTAINERS}` and

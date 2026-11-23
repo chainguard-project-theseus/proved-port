@@ -257,10 +257,15 @@ updates:
   environment: dev
   merge: manual
   prompt: >-
-    Two tool pins. First, the `shellcheck~` package in
+    Three tool pins. First, the `shellcheck~` package in
     .chainguard/ci/lint.yaml and .chainguard/ci/env/dev.yaml: move both to
     the newest release packaged, then run `sh ci/shellcheck.sh` and fix new
-    findings in the scripts it lists. Second, the clang-NN and
+    findings in the scripts it lists. Second, the `chainctl~` package in
+    the same two files: move both to the newest release packaged, then
+    run `make kit-calls`. If it fails because the checker refuses a field
+    of `chainctl checks explain`'s output, the kit's checker does not read
+    that chainctl yet: leave the update out and say so, and change
+    nothing else for it. Third, the clang-NN and
     compiler-rt-NN Wolfi packages in .chainguard/ci/fuzz.yaml and
     env/dev.yaml: move them together to the newest stream Wolfi ships, and
     run `make fuzz-diff` and `make fuzz-abi` briefly. Keep every mention of
