@@ -89,12 +89,14 @@ not get wrong.
   kit ships (`kit/count/`, `kit/make/`, `kit/templates/` but its
   README.md) names no internal repository or organization, internal
   tool or URL, person, or private issue or pull request number;
-  `kit/internal-test.sh` scans for the markers it lists. Its one
+  `kit/internal-test.sh` scans for the markers it lists and for the
+  private names it holds as sha256 digests (a digest cannot be checked
+  by reading; a dropped or changed digest needs a stated reason). Its one
   exemption is the kit's own repository,
   `chainguard-project-theseus/proved-port`, by that exact name. Such a
   reference the test misses (an issue number in a private repository,
   say) is Blocking, as is a change that narrows what the test scans,
-  widens the exemption, or drops a marker without saying why.
+  widens the exemption, or drops a marker or digest without saying why.
 - Nothing private anywhere (CONTRIBUTING.md). Beyond the shipped files,
   no file in this repository, no commit message and no pull request
   title or body names a private repository (current or former name),

@@ -21,6 +21,37 @@ in general terms only: what the check or tool does and why, never where
 it was first written or which private issue asked for it.
 
 `kit/internal-test.sh` scans the files the kit ships for internal
-names. Its markers do not spell private repository names (that would
-break this rule too), so review is what holds the rest of the tree to
-it.
+names, and every file git tracks for private repository names. It
+does not spell those names (that would break this rule too): it holds
+them as sha256 digests and reports a match by file, line and the
+column of the word, never by name. The digests keep the names from
+being written here; they are not a secret. A short name can be
+recovered from its digest by trying candidates, and that trade-off is
+accepted: the alternative, a private list, would leave the public
+check blind.
+
+If the check flags a word you meant in another sense, reword it; there
+is no exemption. A private name that is also an everyday word or the
+name of another public project has no digest, because it would flag
+ordinary text; review holds those.
+
+To add a name (for instance when a private repository is created whose
+name lacks the `cg-` prefix the markers already catch; whoever creates
+it, or the next review that meets it, adds it):
+
+1. Write it in lower case with each `.` and `_` as `-`. The scan
+   hashes only one to three parts joined by single `-`, so the name
+   must have at most three parts, with no `--` and no leading or
+   trailing separator; any other name needs the scan widened first, or
+   its digest never matches and nothing reports that.
+2. Add the output of `printf %s NAME | sha256sum` (no trailing newline:
+   `printf %s`, not `echo`) to the script's `digests` list, in sorted
+   order.
+3. Check it outside the tree: copy `kit/` to a scratch directory, add a
+   line holding the name to a shipped file there (for example
+   `kit/make/headers.sh`), run the copy's `kit/internal-test.sh`, see it
+   fail with that file and line, and delete the copy.
+4. Give the name nowhere else: not in the commit message, the pull
+   request or a review reply.
+
+Review holds commit messages and pull requests to this rule.
