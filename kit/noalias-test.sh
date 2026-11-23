@@ -331,7 +331,11 @@ run build-script 0
 has build-script "$clean"
 run build-script-again 0
 has build-script-again "$clean"
-grep -rlF "written by the fixture's build script" "$fx/target/noalias-default" > /dev/null \
+# Only the out directories' files are read (the old layout's
+# build/PACKAGE-HASH/out and cargo 1.100's build/PACKAGE/HASH/out): the
+# build script's binary, which holds the string too, must not count.
+cat "$fx/target/noalias-default"/release/build/*/out/noalias_fx.ll "$fx/target/noalias-default"/release/build/*/*/out/noalias_fx.ll 2> /dev/null \
+  | grep -qF "written by the fixture's build script" \
   || fail "build-script: the build script's noalias_fx.ll in its OUT_DIR is gone"
 rm "$fx/build.rs"
 lib no
