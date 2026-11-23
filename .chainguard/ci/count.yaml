@@ -8,14 +8,19 @@
 # repository to read a base revision from. apk-tools and wolfi-keys let
 # the deps agent's guest, which runs in this environment, install a new
 # stream and read Wolfi's index. count-installed tests kit/make as the
-# package installs it, against the counter built here. lint-unsafe-test
+# package installs it, against the counter built here. make (GNU) and
+# go.yaml's go-1.NN stream (for the Go tools kit/install.sh builds) are
+# in the file's environment, not only count-installed's, because the
+# deps entries that run in it (toolchain, crates, verus_syn) run
+# kit/installed-test.sh too; the go-toolchain entry of
+# .chainguard/deps.yaml moves both go pins with go.yaml's. lint-unsafe-test
 # and noalias-test run kit/make/lint-unsafe.sh and kit/make/noalias.sh
 # with this toolchain's cargo, and perf-budget-test runs
 # kit/make/perf-budget.sh with it and binutils' objdump.
 version: 1
 
 environment:
-  packages: [rust-1.99, build-base, busybox, git, apk-tools, wolfi-keys]
+  packages: [rust-1.99, build-base, busybox, git, apk-tools, wolfi-keys, make, go-1.27]
 
 checks:
   count-test:
@@ -53,15 +58,17 @@ checks:
   count-installed:
     description: >-
       kit/installed-test.sh: the kit installed into a scratch root as the
-      theseus-proved-port package installs it, then a fixture port
+      theseus-proved-port package installs it (the proved-port-fncmp,
+      -stats and -seams Go tools too), then a fixture port
       (verus-count from PATH, no build, the PROVED_PORT_VERSION and
       counter-version guards, make verus-headers against the installed
       templates).
     trigger: [presubmit, postsubmit]
     timeout: 15m
     environment:
-      # The file's packages, and make (GNU) for the port's targets.
-      packages: [rust-1.99, build-base, busybox, git, make]
+      # The file's packages, make (GNU) for the port's targets, and
+      # go.yaml's go stream for the Go tools.
+      packages: [rust-1.99, build-base, busybox, git, make, go-1.27]
     network: *crates
     cmd: [sh, kit/installed-test.sh]
 

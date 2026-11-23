@@ -2,8 +2,9 @@
 # kit/installed-test.sh: tests of kit/make as the theseus-proved-port
 # package installs it (the count-installed check). It installs the kit
 # into a scratch root with kit/install.sh, the way the package's build
-# does: the counter built from kit/count as usr/bin/verus-count,
-# kit/make/* (mode 0644) in usr/share/proved-port/make/, all of
+# does: the counter built from kit/count as usr/bin/verus-count, the Go
+# tools as usr/bin/proved-port-fncmp, -stats and -seams (each checked to
+# be its tool), kit/make/* (mode 0644) in usr/share/proved-port/make/, all of
 # kit/templates in usr/share/proved-port/templates/, kit/CHANGELOG.md as
 # usr/share/proved-port/CHANGELOG.md with porting notes for the release,
 # and usr/share/proved-port/KIT with the commit and tag. It holds the script's
@@ -22,7 +23,8 @@
 #   - make verus-headers holds the port's Verus files to the installed
 #     templates, reads no verus/make or verus/count the port still has,
 #     and needs no `# kit:` line.
-# Run it from the repository root. It builds the counter (cargo).
+# Run it from the repository root. It builds the counter (cargo) and the
+# Go tools (go, with no network: they use only the standard library).
 set -eu
 
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
@@ -55,6 +57,10 @@ mkdir "$kitrepo/kit/count"
 for f in Cargo.toml Cargo.lock src; do
   cp -R "kit/count/$f" "$kitrepo/kit/count/"
 done
+mkdir -p "$kitrepo/kit/perf/codegen" "$kitrepo/kit/verus"
+cp -R kit/perf/stats "$kitrepo/kit/perf/"
+cp -R kit/perf/codegen/fncmp "$kitrepo/kit/perf/codegen/"
+cp -R kit/verus/seams "$kitrepo/kit/verus/"
 git -C "$kitrepo" init -q
 git -C "$kitrepo" add .
 git -C "$kitrepo" -c user.name=installed-test -c user.email=installed-test@example.com \
@@ -109,6 +115,23 @@ grep -q "kit/ has changes not in tag v" "$tmp/install.err" \
 rm "$kitrepo/kit/stray"
 echo "ok kit/install.sh installs the release's tag, and refuses another commit or a changed kit/ but with --dev"
 
+# The Go tools, as the package installs them: proved-port-fncmp,
+# proved-port-stats and proved-port-seams in bin/, mode 0755, each the
+# tool its module builds (its usage on a bad flag, exit 2).
+# gotool NAME WANT: bin/proved-port-NAME's first line of usage is WANT.
+gotool() {
+  _b=$root/usr/bin/proved-port-$1
+  expect "kit/install.sh installs proved-port-$1 mode 0755" "$(find "$_b" -perm 755)" "$_b"
+  _rc=0
+  "$_b" -no-such-flag > "$tmp/gotool.out" 2>&1 || _rc=$?
+  expect "proved-port-$1 on a bad flag exits 2" "$_rc" 2
+  expect "proved-port-$1 is $1" "$(grep -m1 '^usage:' "$tmp/gotool.out")" "$2"
+}
+gotool fncmp "usage: fncmp OLD NEW"
+gotool stats "usage:"
+grep -qx '  stats md5 LOG\.\.\.' "$tmp/gotool.out" || { cat "$tmp/gotool.out" >&2; fail "proved-port-stats: its usage names no stats md5"; }
+gotool seams "usage: seams [-C DIR] [-rules FILE] [-write | -check | -entries | -cites]"
+
 # Over the --dev install, at the tag. An install that fails part way (here
 # at its bin/, a file) leaves no KIT, which every kit target refuses, not
 # the --dev install's KIT over a mix of files.
@@ -133,6 +156,34 @@ expect "kit/install.sh over the --dev install records the tag in KIT" \
   "$(sed 1d "$devhome/KIT")" "commit $sha
 tag v$version"
 echo "ok kit/install.sh over an earlier install drops its KIT first and replaces its files whole"
+# A Go tool that does not build fails the install before it touches
+# PREFIX: the earlier install's KIT and binaries stay as they were.
+cp "$devhome/KIT" "$tmp/kit.before"
+cp "$tmp/dev/bin/proved-port-seams" "$tmp/seams.before"
+printf 'package main\n\nfunc broken( {\n' > "$kitrepo/kit/verus/seams/broken.go"
+# --dev, so the changed kit/ is no refusal of its own before the build.
+if install "$tmp/dev" --dev; then
+  fail "kit/install.sh with a Go tool that does not build: got = success, want = failure"
+fi
+rm "$kitrepo/kit/verus/seams/broken.go"
+cmp -s "$tmp/kit.before" "$devhome/KIT" \
+  || fail "kit/install.sh, a Go build that fails: got = the earlier KIT removed or changed, want = it as it was"
+cmp -s "$tmp/seams.before" "$tmp/dev/bin/proved-port-seams" \
+  || fail "kit/install.sh, a Go build that fails: got = the earlier proved-port-seams removed or changed, want = it as it was"
+[ -f "$devhome/make/proved-port.mk" ] \
+  || fail "kit/install.sh, a Go build that fails: got = the earlier make/ removed, want = it as it was"
+echo "ok kit/install.sh with a Go tool that does not build fails and leaves the earlier install as it was"
+# A relative CARGO_TARGET_DIR is read from the caller's directory, by
+# the Go builds too, which run from each module's directory.
+rm -rf "$target/go"
+(cd "$(dirname "$target")" && CARGO_TARGET_DIR=$(basename "$target") sh "$kitrepo/kit/install.sh" "$tmp/rel" 2> "$tmp/install.err") \
+  || { cat "$tmp/install.err" >&2; fail "kit/install.sh with a relative CARGO_TARGET_DIR failed"; }
+for t in fncmp stats seams; do
+  [ -x "$tmp/rel/bin/proved-port-$t" ] || fail "kit/install.sh with a relative CARGO_TARGET_DIR: got = no proved-port-$t, want = installed"
+  [ ! -e "$kitrepo/kit/verus/seams/$(basename "$target")" ] && [ ! -e "$kitrepo/kit/perf/stats/$(basename "$target")" ] \
+    || fail "kit/install.sh with a relative CARGO_TARGET_DIR: got = a target directory under a Go module, want = the caller's"
+done
+echo "ok kit/install.sh with a relative CARGO_TARGET_DIR builds and installs from the caller's target directory"
 PATH=$root/usr/bin:$PATH
 export PATH
 
@@ -222,7 +273,7 @@ fi
 echo "ok the installed noalias.sh passes its self-test"
 expect "make -n codegen: the package's codegen.sh" \
   "$(shows "$installed" codegen CODEGEN_LIB=libc.so)" \
-  "CODEGEN_LIB='libc.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='fncmp' CODEGEN_BASE='' sh $home/make/codegen.sh base"
+  "CODEGEN_LIB='libc.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='proved-port-fncmp' CODEGEN_BASE='' sh $home/make/codegen.sh base"
 # codegen.sh refuses a run with no CODEGEN_LIB before it builds anything.
 if [ ! -f "$home/make/codegen.sh" ]; then
   fail "the installed codegen.sh: got = missing, want = installed"

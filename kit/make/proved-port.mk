@@ -443,14 +443,20 @@ noalias: ## no method of NOALIAS_TYPE takes a noalias &mut self in the release l
 #   CODEGEN_BUILDS = q16 q8
 #   CODEGEN_FLAGS_q8 = --no-default-features --features quantum8
 # CODEGEN_CARGO_FLAGS go to every build. CODEGEN_FNCMP is the comparer,
-# the kit's kit/perf/codegen/fncmp built with go (by default fncmp, from
-# PATH): the package does not install it. codegen compares with
+# the kit's kit/perf/codegen/fncmp, which the package (and a checkout's
+# kit/install.sh) installs as proved-port-fncmp (by default that, from
+# PATH). Unlike verus-count, the comparer is not held to KIT's release:
+# the package installs one copy beside its KIT, and the codegen targets'
+# verdicts are advisory notices that hold no FLOOR. A host with several
+# kit/install.sh prefixes (ports on different pins) puts the pinned
+# prefix's bin/ first on PATH, or names its comparer in CODEGEN_FNCMP.
+# codegen compares with
 # CHAINGUARD_BASE_REVISION (a check's base), else CODEGEN_BASE;
 # codegen-capture and codegen-compare keep their capture in CODEGEN_DIR.
 CODEGEN_LIB ?=
 CODEGEN_BUILDS ?= default
 CODEGEN_CARGO_FLAGS ?=
-CODEGEN_FNCMP ?= fncmp
+CODEGEN_FNCMP ?= proved-port-fncmp
 CODEGEN_BASE ?=
 CODEGEN_DIR ?= target/codegen-baseline
 codegen_lib_empty = CODEGEN_LIB is empty: the port's Makefile names its release library's file (libchalloc.so)

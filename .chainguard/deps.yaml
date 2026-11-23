@@ -104,12 +104,15 @@ updates:
   schedule: "15 17 * * 2" # Tuesdays
   paths:
     - ".chainguard/ci/go.yaml"
+    - ".chainguard/ci/count.yaml"
     - ".chainguard/develop.yaml"
   environment: .chainguard/ci/go.yaml
   merge: manual
   prompt: >-
     Move the Wolfi go-1.NN stream .chainguard/ci/go.yaml installs, first
-    in its environment's packages and in its codegen-test check's, and
+    in its environment's packages and in its codegen-test check's, the
+    ones .chainguard/ci/count.yaml installs (in its environment's
+    packages and in its count-installed check's), and
     the one .chainguard/develop.yaml installs, together, to the newest
     stream Wolfi ships. If it is
     already that stream, change nothing. Install the new stream with apk

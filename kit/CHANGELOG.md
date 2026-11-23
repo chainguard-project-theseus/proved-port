@@ -804,6 +804,29 @@ where it reports drift.
     `[lib] path` names it exactly.
 
   challoc passes unchanged. Nothing is installed; ports see no change.
+- The package installs the kit's Go tools (#243): `proved-port-fncmp`
+  (the codegen comparer, `kit/perf/codegen/fncmp`), `proved-port-stats`
+  (the bench summaries, `kit/perf/stats`) and `proved-port-seams` (the
+  seam ledger generator, `kit/verus/seams`), in `/usr/bin` beside
+  `verus-count`. The names carry the kit's prefix because `fncmp`,
+  `stats` and `seams` are too generic for `/usr/bin`. `kit/install.sh`
+  builds and installs them the same way under `PREFIX/bin` (it now needs
+  go, with `GOTOOLCHAIN=local`; it builds every tool before it touches
+  PREFIX, and reads a relative `CARGO_TARGET_DIR` from the caller's
+  directory for the Go builds too). `CODEGEN_FNCMP` is not held to KIT's
+  release as `verus-count` is: a host with several `kit/install.sh`
+  prefixes puts the pinned one's `bin/` first on PATH. `CODEGEN_FNCMP` (`make codegen`, `codegen-capture`,
+  `codegen-compare`) defaults to `proved-port-fncmp` (it was `fncmp`),
+  and the missing-comparer message says to install the kit. The seams
+  rules template's `command` is `proved-port-seams -write` (it was
+  `seams -write`). Each tool prints what it printed before; only the
+  names change. `count-installed` installs `go-1.27` and checks that each
+  binary is installed with mode 0755 and is its tool, and that a tool
+  that does not build fails the install with an earlier one left as it
+  was. The package's recipe is outside this repository: the 0.4.12
+  package is the first that builds the three tools, so a port relying
+  on them moves its pin to 0.4.12 once that package is out, as for any
+  release.
 
 ### Porting notes
 
@@ -1010,6 +1033,21 @@ where it reports drift.
     were, but for the cases the 0.4.12 change lists. Before it switches
     it checks that each library it loads exports its symbols itself.
     A port without a differential fuzzer changes nothing.
+16. A port that runs `make codegen` (or `codegen-capture`,
+    `codegen-compare`) with a comparer it built from the kit's tree
+    drops that build and its `CODEGEN_FNCMP` setting: the default,
+    `proved-port-fncmp`, is the package's (on a host without the
+    package, `kit/install.sh` puts it in `PREFIX/bin`; put that on
+    PATH). A port that set `CODEGEN_FNCMP` to another comparer keeps
+    it. A port that relied on the old default `fncmp` on PATH either
+    drops that binary or sets `CODEGEN_FNCMP = fncmp`. A port that
+    builds stats or the seams generator from the kit's tree may run
+    `proved-port-stats` and `proved-port-seams` instead; a port with a
+    `verus/seams.rules` whose `command` is `seams -write` sets it to
+    how it now runs the generator (`proved-port-seams -write`), which
+    changes the command each ledger file's header names, so it
+    rewrites its ledger (`proved-port-seams -write`) in the same
+    commit. A port that uses none of these changes nothing.
 
 ## 0.4.11
 

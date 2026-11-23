@@ -1285,7 +1285,8 @@ Where the package is not installed (a Mac, a development host), install
 the kit from a clone of this repository checked out at the pinned tag,
 with one command, `kit/install.sh PREFIX`. It lays the kit out under
 PREFIX as the package does under `/usr`: the counter as
-`PREFIX/bin/verus-count`, and `make/`, `templates/`, `CHANGELOG.md` and
+`PREFIX/bin/verus-count`, the Go tools as `PREFIX/bin/proved-port-fncmp`,
+`proved-port-stats` and `proved-port-seams` (it needs go), and `make/`, `templates/`, `CHANGELOG.md` and
 a `KIT` that records the commit and release in
 `PREFIX/share/proved-port`. Then run
 the port's kit targets with that root and counter:

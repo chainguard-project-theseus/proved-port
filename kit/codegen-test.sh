@@ -207,6 +207,15 @@ run nofncmp 1 CODEGEN_FNCMP="$tmp/no-such-fncmp"
 grep -qF "the comparer $tmp/no-such-fncmp (CODEGEN_FNCMP) is not a command" "$tmp/nofncmp.out" || { cat "$tmp/nofncmp.out"; fail "nofncmp: no message"; }
 if grep -q '^captured at \|^== \|^::notice' "$tmp/nofncmp.out"; then cat "$tmp/nofncmp.out"; fail "nofncmp: it built or gave a verdict first"; fi
 ok "a missing comparer: exit 1 before any build"
+# An empty CODEGEN_FNCMP (a port's `CODEGEN_FNCMP =`) is the script's
+# default, the installed proved-port-fncmp from PATH.
+if command -v proved-port-fncmp > /dev/null; then
+  echo "skip: proved-port-fncmp is on PATH, so the default comparer's absence cannot be checked here"
+else
+  run nodefault 1 CODEGEN_FNCMP=
+  grep -qF "the comparer proved-port-fncmp (CODEGEN_FNCMP) is not a command" "$tmp/nodefault.out" || { cat "$tmp/nodefault.out"; fail "nodefault: the default comparer is not proved-port-fncmp"; }
+  ok "an empty CODEGEN_FNCMP: the default comparer, proved-port-fncmp"
+fi
 
 # A comparer that fails after writing a report that says `changed 0`
 # (a failed write, say): the run says so and exits 2.

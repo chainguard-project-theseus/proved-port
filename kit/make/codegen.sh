@@ -70,9 +70,11 @@
 #   CODEGEN_TARGET_DIR   by default target, from the port's root; base's
 #                        capture builds in a target directory of its own,
 #                        removed after the run
-#   CODEGEN_FNCMP        the comparer: fncmp built from the kit's
-#                        kit/perf/codegen/fncmp (by default `fncmp`,
-#                        from PATH); compare and base look it up before
+#   CODEGEN_FNCMP        the comparer: the kit's kit/perf/codegen/fncmp,
+#                        which the package installs as proved-port-fncmp
+#                        (by default `proved-port-fncmp`, from PATH; a
+#                        checkout's kit/install.sh installs it too);
+#                        compare and base look it up before
 #                        any build, and fail (exit 1) without it
 #   CODEGEN_DIFF         base only: the script base runs for its capture
 #                        and compare in place of this one (a test's
@@ -168,7 +170,7 @@ settings() {
   lib=${CODEGEN_LIB-}
   builds=${CODEGEN_BUILDS:-default}
   tdir=${CODEGEN_TARGET_DIR:-target}
-  fncmp=${CODEGEN_FNCMP:-fncmp}
+  fncmp=${CODEGEN_FNCMP:-proved-port-fncmp}
   case $lib in
     '') echo "codegen.sh: CODEGEN_LIB is empty: name the library's file (libchalloc.so)" >&2; exit 2 ;;
     */*) echo "codegen.sh: CODEGEN_LIB is $lib: a file name, with no directory" >&2; exit 2 ;;
@@ -186,9 +188,9 @@ settings() {
 # looked up before any build, so a missing one fails every run, not only
 # the first whose machine code changed.
 need_fncmp() {
-  fncmp=${CODEGEN_FNCMP:-fncmp}
+  fncmp=${CODEGEN_FNCMP:-proved-port-fncmp}
   command -v "$fncmp" >/dev/null || {
-    echo "codegen.sh: the comparer $fncmp (CODEGEN_FNCMP) is not a command: build the kit's kit/perf/codegen/fncmp and name it" >&2
+    echo "codegen.sh: the comparer $fncmp (CODEGEN_FNCMP) is not a command: install the kit (the theseus-proved-port package, or kit/install.sh from a checkout), or build the kit's kit/perf/codegen/fncmp and name it" >&2
     exit 1
   }
 }

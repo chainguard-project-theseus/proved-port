@@ -445,16 +445,16 @@ expect "make -n noalias, challoc's two quanta" \
 # comparer, and CARGO_TARGET_DIR's target directory.
 expect "make -n codegen, one build" \
   "$(shows codegen CODEGEN_LIB=libalpha.so)" \
-  "CODEGEN_LIB='libalpha.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='fncmp' CODEGEN_BASE='' sh $home/make/codegen.sh base"
+  "CODEGEN_LIB='libalpha.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='proved-port-fncmp' CODEGEN_BASE='' sh $home/make/codegen.sh base"
 expect "make -n codegen, challoc's two quanta" \
   "$(shows codegen CODEGEN_LIB=libchalloc.so CODEGEN_BUILDS='q16  q8' CODEGEN_FLAGS_q8='--no-default-features --features quantum8' CARGO_TARGET_DIR=/t CODEGEN_FNCMP=/bin/fncmp CODEGEN_BASE=main)" \
   "CODEGEN_LIB='libchalloc.so' CODEGEN_BUILDS='q16 q8' CODEGEN_FLAGS_q16='' CODEGEN_FLAGS_q8='--no-default-features --features quantum8' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='/t' CODEGEN_FNCMP='/bin/fncmp' CODEGEN_BASE='main' sh $home/make/codegen.sh base"
 expect "make -n codegen-capture" \
   "$(shows codegen-capture CODEGEN_LIB=libalpha.so)" \
-  "CODEGEN_LIB='libalpha.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='fncmp' sh $home/make/codegen.sh capture 'target/codegen-baseline'"
+  "CODEGEN_LIB='libalpha.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='proved-port-fncmp' sh $home/make/codegen.sh capture 'target/codegen-baseline'"
 expect "make -n codegen-compare, another directory" \
   "$(shows codegen-compare CODEGEN_LIB=libalpha.so CODEGEN_DIR=/tmp/base)" \
-  "CODEGEN_LIB='libalpha.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='fncmp' sh $home/make/codegen.sh compare '/tmp/base'"
+  "CODEGEN_LIB='libalpha.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='proved-port-fncmp' sh $home/make/codegen.sh compare '/tmp/base'"
 # perf-budget and perf-budget-print pass the port's settings to
 # perf-budget.sh: one build by default, each build's table and flags.
 expect "make -n perf-budget, one build" \
