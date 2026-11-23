@@ -9,7 +9,7 @@
 #
 # The four figure names are the ones the kit's counter reads.
 # `functions` and `lines` are the verified share: Verus checks them.
-# `checked-functions` and `checked-lines` add the trusted functions Kani
+# `checked-functions` and `checked-lines` add the functions Kani
 # discharges ({DISCHARGED_BY: the `discharged_by = "kani"` marker,
 # verus/README.md, "Kani"; or, with the generated-ledger back end, the
 # seams the ledger marks discharged, verus/SEAMS.md, "Status"}), which
@@ -46,7 +46,11 @@
 # A `lowered` line is the last resort: close the gap by verifying more
 # code first. Its REASON names exactly what became trusted or outside, and
 # the counts before and after (`N of M shipped functions verified, P%,
-# against main's SHA at N' of M'`).
+# against main's SHA at N' of M'`). Deleting verified code, whole
+# functions or lines of one, takes it from both the verified count and
+# the total, and can lower a share with nothing becoming trusted or
+# outside; then the REASON names the functions removed or shortened,
+# says that nothing became trusted or outside, and gives the same counts.
 functions 0.0
 lines 0.0
 checked-functions 0.0

@@ -1,0 +1,442 @@
+# Hand mutants of kit/verus/seams that its tests must kill; run by
+# kit/verus/seams/mutants.sh (the seams-mutants check). One a line,
+# tab-separated: FILE, FROM (text that occurs once in FILE), TO, and
+# optionally `equivalent: REASON`. When the code moves and a FROM no
+# longer occurs once, update the line (the runner names it).
+#
+# Drawn from #218's hand mutants (remapped to text), #220's, #224's and
+# later PRs' (each section names its issue).
+awk.go	 && !strings.Contains(s, "/*")	
+awk.go	 && b.Len() > 0	
+awk.go	 || digits > 6	
+awk.go	 || s[i-1] == 'c'	
+awk.go	 || s[k] == '_'	
+awk.go	!dropping	!dropping && false
+awk.go	&& s[j] == '"'	
+awk.go	= 2, 	= 0, 
+awk.go	_, sz := utf8.DecodeRuneInString(s[j:])	_, sz := utf8.RuneError, 1
+awk.go	c[i] == ' ' && 	false && 
+awk.go	case s[j] == '\'':	case false:	equivalent: an empty char literal '' does not compile
+awk.go	digits == 0 || 	
+awk.go	if i > 0 && identByte(s[i-1])	if false && identByte(s[i-1])
+awk.go	lx.depth = 1	lx.depth = 0
+awk.go	lx.depth == 0 && lx.str == 0	true
+awk.go	lx.depth++	lx.depth += 0
+awk.go	lx.depth--	lx.depth -= 2
+awk.go	lx.str = 1	lx.str = 0
+awk.go	s[i+1:j]	""
+awk.go	s[k] != '_'	true
+awk.go	ws = true	ws = false
+awk.go	|| !isHex(s[j+2]) || !isHex(s[j+3])		equivalent: a \x escape without two hex digits does not compile
+main.go	in.unreadable = append(in.unreadable, f)	_ = f
+main.go	len(src) == 0	false
+main.go	os.Remove(filepath.Join(root, f))	func() error { _ = f; return nil }()
+main.go	"%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", x(e.file)	"%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", e.file
+main.go	x(norm(e.hc))	norm(e.hc)
+main.go	|| n > 1	
+render.go	!catok[e.cat]	false
+render.go	!chk && rec != ""	false
+render.go	!ov[k].seen	false
+render.go	!reClaimsReason	false && !reClaimsReason
+render.go	!reExtBodyAttr	false && !reExtBodyAttr
+render.go	!toolok[e.tool]	false
+render.go	; dup {	; dup && false {
+render.go	< 3	< 2
+render.go	> 1	> 2
+render.go	> 5	> 6
+render.go	chk && !cn && !r.citesCheck(e.stat)	false
+render.go	chk && rec == ""	false
+render.go	d != ""	false
+render.go	e.fmtKey != "" &&	e.fmtKey == "" ||
+render.go	e.kind != "ext_type_spec" &&	
+render.go	e.stat == ""	e.stat != ""
+render.go	e.tool != r.Assumption	false
+render.go	for _, v := range r.PairVars {	for _, v := range r.PairVars[:1] {
+render.go	hb != ""	true
+render.go	len(from)-i	len(from)-i+1
+render.go	ok && own != ""	ok && false && own != ""
+render.go	ov[keyn]	ov[key]
+render.go	rc != nc	false
+render.go	reClaimingClause.MatchString(e.hc)	false
+render.go	reTrackedType.MatchString(e.hc)	false
+render.go	rec != e.hash	false
+render.go	s.lex = lexer{}	_ = 0
+render.go	s.pairCollect(before, beforeDef, c)	_, _ = before, beforeDef
+render.go	tp.dup != 0	false
+render.go	tp.split != 0	false
+rules.go	!reIdent.MatchString(f[1])	false
+rules.go	!reIdent.MatchString(v)	false
+rules.go	== c.Negate	!= c.Negate
+rules.go	c == "." ||	
+rules.go	k == "pair"	k == "x"
+rules.go	len(f) > 6	len(f) > 7
+rules.go	path.IsAbs(c) ||	
+rules.go	t+": "	t
+rules.go	|| strings.HasPrefix(c, "../")	
+scan.go	 && at(k+1) == "!"		equivalent: macro_rules followed by the name without its ! is not Rust
+scan.go	 && at(k+2) != "="	
+scan.go	 && rest != ";"	
+scan.go	 && tp.found == 0	
+scan.go	 \t{([	 \t{(é
+scan.go	 || ch == '#'	
+scan.go	 || k+1 < len(t) && t[k+1] == '='	
+scan.go	 || s.pairUse[x.ln]	
+scan.go	!open &&	!open && false &&
+scan.go	!rePathPrefix.MatchString(p)	false
+scan.go	!s.clauses ||	
+scan.go	!source	true
+scan.go	!strings.HasPrefix(rest, "{") || 	
+scan.go	&& !strings.Contains(t, "]")	
+scan.go	&& s.depth != 0	&& false
+scan.go	,?	
+scan.go	^(::)?	^
+scan.go	_: 	_ 
+scan.go	at(k+1) == "as"	false
+scan.go	beforeDef || s.pairdef	beforeDef
+scan.go	beforeDef || s.pairdef	s.pairdef
+scan.go	case invUnread:	case 99:
+scan.go	case s.cap:	case false:
+scan.go	case s.skip:	case false:
+scan.go	cut > 0 &&	false &&
+scan.go	d <= s.pairdefd	d < s.pairdefd
+scan.go	d == 0 && x == "}"	d == 0
+scan.go	depth--	depth -= 0
+scan.go	external_body|external_fn_specification|	external_body|
+scan.go	form = 	_ = 
+scan.go	if d == 0 {	if false {
+scan.go	if is("!") {	if false {
+scan.go	if is(";") {	if false {
+scan.go	if s.pairln != 0 {	if false {
+scan.go	if trim(c) != "" {	if trim(l) != "" {
+scan.go	its names on that line	x
+scan.go	j > 0 && isIdentByte(t[j-1])	false
+scan.go	len(ms) >= 2	len(ms) > 2
+scan.go	len(r.PairVars) != 1 && 	
+scan.go	len(r.PairVars) > 1	false
+scan.go	len(s.errs) == n && 	len(s.errs) >= n && 
+scan.go	macroDef(trim(c), macro)	macroDef(c, macro)
+scan.go	opens > 0 &&	
+scan.go	opens > 0 && opens == closes	false
+scan.go	rePairAttr.MatchString(c)	rePairAttr.MatchString(l)
+scan.go	rest != "" && 	
+scan.go	s.depth == s.paird+1	true
+scan.go	s.file != s.rules.PairFile	false
+scan.go	s.fileToks, s.pairUse = nil, map[int]bool{}	s.pairUse = map[int]bool{}
+scan.go	s.lex = lexer{}	_ = 0
+scan.go	s.lex.str == 1	false
+scan.go	s.lex.str == 2	false
+scan.go	s.pairAccAttrs = t, s.ln, s.uattrs	s.pairAccAttrs = t, s.ln, ""
+scan.go	s.pairDefs > 0	false
+scan.go	s.pairDefs++	s.pairDefs += 0
+scan.go	s.pairGot = append(s.pairGot, n)	_ = n
+scan.go	s.pairToks, s.pairGot = nil, nil	
+scan.go	s.pairUse[s.ln] = true	_ = 0
+scan.go	s.pairdef = true	s.pairdef = false
+scan.go	s.pd++	s.pd += 0
+scan.go	s.pendtest == 1 &&	false &&
+scan.go	started && 	(started || true) && 	equivalent: it differs only for a definition whose { is on the line after its name, which the line reader refuses (its template lines are unread items), so the template search result is never used
+scan.go	strings.Contains(c, "{") && 		equivalent: a definition whose { is on the next line is refused by the line reader (its template lines are unread items), so the template search result is never used
+scan.go	strings.Contains(c, "{") && depth <= 0	false
+scan.go	strings.IndexByte(" \t{([", t[len(p)]) >= 0	!identByte(t[len(p)])
+scan.go	strings.Join(names, " ") != strings.Join(s.pairGot, " ")	false
+scan.go	strip(substr(raw, 1, cut-1), substr(c, 1, cut-1))	substr(r, 1, cut-1)
+scan.go	strip(substrFrom(raw, cut), substrFrom(c, cut))	substrFrom(r, cut)
+scan.go	t[k] == ' ' || 	
+scan.go	t[len(p)]) >= 0	t[len(p)]) >= -1
+scan.go	tp.attrs == ""	false
+scan.go	tp.found != 0	false	equivalent: reading on past the first template changes the result only when a second exists, which is an input error either way
+scan.go	tp.found, tp.dup = defLn[ms[0][4]], defLn[ms[1][4]]	tp.dup = defLn[ms[1][4]]
+scan.go	tp.item == ""	true
+scan.go	tp.split = defLn[ms[0][4]]	_ = ms
+scan.go	trim(c) != ""	true
+scan.go	trim(strip(l, c))	trim(l)
+scan.go	x == ";" && d == 0	x == ";"
+scan.go	x.def || 	
+scan.go	|| trim(rest[1:]) != ""	
+scan.go	} else if !is("]") {	} else if false {
+#
+# checkLedger, the function that decides -check's exit 1.
+main.go	!stale && len(res.drift) == 0	!stale
+main.go	if _, ok := res.ledger[md]; !ok {	if _, ok := res.ledger[md]; false && !ok {
+main.go	if stale {	if false {
+main.go	err != nil || string(b) != text	err != nil || string(b) != text && false
+main.go	strings.Join(want, "\n") != strings.Join(have, "\n")	strings.Join(want, "\n") != strings.Join(have, "\n") && false
+#
+# #227: a #[cfg(test)] item whose body opens on a later line.
+scan.go	s.pendtest == 1 && !reSemiEnd.MatchString(t) && head {	s.pendtest == 1 && !reSemiEnd.MatchString(t) && (head || !strings.HasSuffix(t, ",")) {
+scan.go	s.pendtest == 1 && !reSemiEnd.MatchString(t) && head {	s.pendtest == 1 && head {
+scan.go	head := reFnLine.MatchString(t) || reImplLine.MatchString(t) || reItemHead.MatchString(t)	head := reImplLine.MatchString(t) || reItemHead.MatchString(t)
+scan.go	head := reFnLine.MatchString(t) || reImplLine.MatchString(t) || reItemHead.MatchString(t)	head := reFnLine.MatchString(t) || reItemHead.MatchString(t)
+scan.go	head := reFnLine.MatchString(t) || reImplLine.MatchString(t) || reItemHead.MatchString(t)	head := reFnLine.MatchString(t) || reImplLine.MatchString(t)
+scan.go	if closes > opens {	if false {
+scan.go	(mod|trait|struct|enum|union)	(mod|trait|struct|union)
+scan.go	(mod|trait|struct|enum|union)	(mod|trait|struct|enum)
+scan.go	((unsafe|auto)[ \t]+)*	((unsafe)[ \t]+)*
+scan.go	|^macro_rules![ \t]*[A-Za-z_]")	")
+#
+# #229: the citations (-cites, empty lists, partial tags, cite-tag rules).
+cites.go	strings.IndexAny(l, ";)")	strings.IndexAny(l, ";")
+cites.go	if strings.Contains(h, ": ") {	if false {
+cites.go	if h != "" {	if true {
+cites.go	return occs[a].at < occs[b].at	return false
+cites.go	from = at + len(key)	from = at + 1
+cites.go	if len(o.parts) == 0 {	if false {
+cites.go	cites = append(cites, cite{o.tag, p})	cites = append(cites, cite{o.tag, p}, cite{o.tag, p})
+render.go	if o != nil {	if false {
+render.go	reDischarged.MatchString(e.stat) && r.Partial	r.Partial
+render.go	r.Partial[c.tag] && !done[c.tag] {	r.Partial[c.tag] {
+render.go	r.Partial[c.tag] && !done[c.tag] {	!done[c.tag] {
+rules.go	f[2] != "partial"	false
+rules.go	min(max(len(f), 2), 3)	min(len(f), 3)
+rules.go	strings.ContainsAny(f[1], ";):")	strings.ContainsAny(f[1], ";)")
+rules.go	if slices.Contains(r.CiteTags, f[1]) {	if slices.Contains(r.CiteTags[:0], f[1]) {
+rules.go	r.Partial[f[1]] = true	r.Partial[f[1]] = false
+main.go	strings.TrimPrefix(e.okey, e.file+":")	e.okey
+main.go	*write, *check, *entries, *cites}	*write, *check, *entries}
+main.go	x(c.tag), x(c.target)	c.tag, c.target
+#
+# #231: resolving Kani, callers and const assert citations.
+resolve.go	!reIdent.MatchString(s)	s == "\x00"
+resolve.go	path.Join(append([]string{dir}, segs[1:n]...)...)	path.Join(append([]string{dir}, segs[:n]...)...)
+resolve.go	v.exists(p + ".rs")	v.exists(p + ".rsx")
+resolve.go	v.exists(p + "/mod.rs")	false
+resolve.go	file == d+".rs" || 	false ||
+resolve.go	strings.HasPrefix(file, d+"/")	false
+resolve.go	f.ok = lx.depth == 0 && lx.str == 0	f.ok = true
+resolve.go	if !af.ok {	if false {
+resolve.go	d, ind, p, gate = d+1, ind+"    ", false, false	d, ind, gate = d+1, ind+"    ", false
+resolve.go	d, ind, p, gate = d+1, ind+"    ", false, false	d, ind, p = d+1, ind+"    ", false
+resolve.go	return p, gate	return p, false
+resolve.go	hash = true	hash = false
+resolve.go	hash, at, raw = false, "#"+at, ""	hash, at, raw = false, at, ""
+resolve.go	!slices.Contains(allow, strings.TrimSpace(raw))	!slices.Contains(allow[:0], strings.TrimSpace(raw))
+resolve.go	!slices.Contains(allow, strings.TrimSpace(raw))	!slices.Contains(allow, raw)
+resolve.go	isGate(text, raw)	isGate(text, raw[:0]+text)
+resolve.go	if !reOuterAttr.MatchString(at) {	if !reOuterAttr.MatchString(t) {
+resolve.go	if !reOuterAttr.MatchString(at) {	if !strings.HasPrefix(at, "#[") {
+resolve.go	regexp.MustCompile(`^#[ \t]*\[`)	regexp.MustCompile(`^#\[`)
+resolve.go	if strings.TrimSpace(target[:i]) == "" {	if false {
+resolve.go	if gated {	if gated && false {
+rules.go	"cite-fn": max(len(f), 3)	"cite-fn": 3
+rules.go	"#[cfg("+c+")]"	c
+resolve.go	p, gate = false, false	p = false
+resolve.go	if open <= 0 {	if false {
+resolve.go	if text += " " + t; open <= 0 {	if text += " " + t; false {
+resolve.go	if text += " " + t; open <= 0 {	if text = t; open <= 0 {
+resolve.go	open += strings.Count(t, "[") - strings.Count(t, "]")	open = 0
+resolve.go	open, text = strings.Count(at, "[")-strings.Count(at, "]"), at	open, text = 0, at
+resolve.go	regexp.MustCompile(`#[ \t]*\[[ \t]*(cfg	regexp.MustCompile(`^#[ \t]*\[[ \t]*(cfg
+resolve.go	regexp.MustCompile(`#[ \t]*\[[ \t]*(cfg	regexp.MustCompile(`#[ \t]*\[(cfg
+resolve.go	regexp.MustCompile(`#[ \t]*\[[ \t]*(cfg	regexp.MustCompile(`#\[[ \t]*(cfg
+resolve.go	(cfg|cfg_attr)[ \t]*	(cfg)[ \t]*
+resolve.go	|#[ \t]*\[[ \t]*ignore[ \t]*(\]|=)`)	`)
+resolve.go	ignore[ \t]*(\]|=)	ignore[ \t]*(\])
+resolve.go	if !v.crateFile(file) {	if false {
+resolve.go	!strings.HasSuffix(p, ".rs") || v.r.isTest(p)	v.r.isTest(p)
+resolve.go	!strings.HasSuffix(p, ".rs") || v.r.isTest(p)	!strings.HasSuffix(p, ".rs")
+resolve.go	strings.HasPrefix(p, v.r.Source+"/")	false
+resolve.go	p == d+".rs" || strings.HasPrefix(p, d+"/")	strings.HasPrefix(p, d+"/")
+resolve.go	p == d+".rs" || strings.HasPrefix(p, d+"/")	p == d+".rs"
+resolve.go	t == ind[4:]+"}"	false
+resolve.go	"[(<]"	"[(]"
+resolve.go	reVis + "fn "	"fn "
+resolve.go	reVis + "mod "	"mod "
+resolve.go	p = true	p = false
+resolve.go	if t == "" {	if t == "\x00" {
+resolve.go	if strings.TrimSpace(f.raw[i]) == "" {	if strings.TrimSpace(f.raw[i]) == "\x00" {
+resolve.go	if strings.TrimSpace(f.raw[i]) == "" {	if strings.TrimSpace(f.raw[i]) != "\x00" {
+resolve.go	if !strings.HasPrefix(t, ind+"#[") {	if true {
+resolve.go	af.clean[i] && strings.HasPrefix(l, "//")	(af.clean[i] || true) && strings.HasPrefix(l, "//")
+resolve.go	g = reAttrAbove.MatchString(prev)	g = reAttrAbove.MatchString(prev) && false
+resolve.go	h = strings.HasPrefix(l, label)	h = strings.HasPrefix(l, label) || true
+resolve.go	if g {	if g && false {
+resolve.go	inBlock, h = false, false	inBlock = false
+resolve.go	if af.code[i] != "" {	if true {
+resolve.go	($|.*\);$)	(.*)
+resolve.go	return n == 1	return n >= 1
+resolve.go	in = l == "## "+rw.heading	in = true
+resolve.go	!in || !strings.HasPrefix(l, "| ")	!in
+resolve.go	strings.Split(l, "|")[1]	l
+resolve.go	all = all && strings.Contains(l, p)	all = all || strings.Contains(l, p)
+resolve.go	if !seen[s] {	if true {
+resolve.go	f.clean = append(f.clean, lx.depth == 0 && lx.str == 0)	f.clean = append(f.clean, true)
+rules.go	"cite-row": max(len(f), 4)	"cite-row": len(f)
+rules.go	if !slices.Contains(r.CiteTags, f[1]) {	if false {
+rules.go	ok || r.CiteAssert[f[1]]	ok
+rules.go	ok || r.CiteAssert[f[1]]	(ok && false) || r.CiteAssert[f[1]]
+rules.go	strings.ContainsAny(f[2], "[] ")	false
+rules.go	if _, ok := r.CiteRow[f[1]]; ok {	if false {
+rules.go	bad("cite-module %s: want an identifier", name)	_ = name
+rules.go	if _, ok := r.CiteModule[f[1]]; ok {	if false {
+#
+# #233: attributes written with blanks between `#`, `!` and `[`.
+scan.go	reAttrStart = re("^#[ \t]*!?[ \t]*\\[")	reAttrStart = re("^#!?\\[")
+scan.go	reAttrStart = re("^#[ \t]*!?[ \t]*\\[")	reAttrStart = re("^#[ \t]*!?\\[")
+scan.go	if s.aopen == 0 && hashEnd(t) {	if false && hashEnd(t) {
+scan.go	if s.aopen == 0 && hashEnd(t) {	if hashEnd(t) {
+scan.go	if hashEnd(t) {	if false {
+scan.go	s = strings.TrimRight(strings.TrimSuffix(s, "!"), " \t")	s = strings.TrimSuffix(s, "!")
+scan.go	s = strings.TrimRight(strings.TrimSuffix(s, "!"), " \t")	s = strings.TrimRight(s, " \t")
+scan.go	return !strings.HasSuffix(strings.TrimRight(s, "#"), "\"")	return true
+scan.go	return !strings.HasSuffix(strings.TrimRight(s, "#"), "\"")	return !strings.HasSuffix(s[:len(s)-1], "\"")
+scan.go	if reOuterAttr.MatchString(s.at) {	if strings.HasPrefix(s.at, "#[") {
+scan.go	rePairAttr   = re("^[ \t]*(\\$\\()?#[ \t]*\\[")	rePairAttr   = re("^[ \t]*(\\$\\()?#\\[")
+#
+# #235: the not-Copy checks of tracked types.
+notcopy.go	if i < 0 || strings.TrimSpace(target[:i]) == "" {	if i < 0 {
+notcopy.go	if !v.crateFile(file) {	if false {
+notcopy.go	if !f.ok {	if false {
+notcopy.go	text += " " + c	text += ""
+notcopy.go	in = !strings.HasSuffix(c, ");")	in = false
+notcopy.go	text, in = c, !strings.HasSuffix(c, ");")	text, in = c, false
+notcopy.go	h = strings.HasPrefix(l, label)	h = strings.HasPrefix(l, label) || true
+notcopy.go	if n != 1 || !ic || !il {	if n < 1 || !ic || !il {
+notcopy.go	if n != 1 || !ic || !il {	if n != 1 || !il {
+notcopy.go	if n != 1 || !ic || !il {	if n != 1 || !ic {
+notcopy.go	q := regexp.QuoteMeta(ty) + `(<[^<>]*>)?`	q := regexp.QuoteMeta(ty)
+notcopy.go	regexp.MustCompile(`[<:]`+q+` as NotCopy<_>>::HOLDS`).MatchString(text) &&	regexp.MustCompile(q+` as NotCopy<_>>::HOLDS`).MatchString(text) &&
+notcopy.go	regexp.MustCompile(`[<:]`+q+` as NotCopy<_>>::HOLDS`).MatchString(text) &&	true &&
+notcopy.go	if r.NotCopyFile == "" {	if false {
+notcopy.go	if seen[ty] {	if false {
+notcopy.go	!v.notCopy(ty, cite) || !v.assertion(cite)	!v.notCopy(ty, cite)
+notcopy.go	!v.notCopy(ty, cite) || !v.assertion(cite)	!v.assertion(cite)
+notcopy.go	if !reTrackedType.MatchString(e.hc) {	if false {
+notcopy.go	if c.tag == r.NotCopyTag {	if true {
+notcopy.go	if len(cited) == 0 {	if false {
+notcopy.go	ok = ok || v.notCopy(ty, t)	ok = v.notCopy(ty, t)
+notcopy.go	ic = ic || ungated && reNotCopyImpl.MatchString(c)	ic = true
+notcopy.go	il = il || ungated && reNotCloneImpl.MatchString(c)	il = true
+notcopy.go	ungated := d0 == 0 && !reAttrAbove.MatchString(prev)	ungated := d0 == 0 && prev == prev
+notcopy.go	if c != "" {	if true {
+notcopy.go	`(^|[^A-Za-z0-9_])tracked	`^[ \t]*(pub(\([^)]*\))?[ \t]+)?tracked
+rules.go	if r.NotCopyFile != "" {	if false {
+rules.go	if !r.CiteAssert[f[2]] {	if false {
+main.go	res.drift = append(res.drift, notCopyChecks(*root, r, res.entries, files)...)	_ = files
+main.go	append(append([]namedText{}, in.sources...), in.tests...)	in.sources
+notcopy.go	reTrackedDecl.FindAllStringIndex(c, -1)	reTrackedDecl.FindAllStringIndex(c, 1)
+notcopy.go	if ty == "" {	if false {
+notcopy.go	regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*`)	regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+#
+# #237: a cited FILE reached ungated from the crate root.
+reach.go	b.open += strings.Count(t, "[") - strings.Count(t, "]")	b.open = 0
+reach.go	if b.text += " " + t; b.open <= 0 {	if b.text += " " + t; false {
+reach.go	if !reOuterAttr.MatchString(at) {	if false {
+reach.go	b.open, b.text = strings.Count(at, "[")-strings.Count(at, "]"), at	b.open, b.text = 0, at
+reach.go	b.attrs = append(b.attrs, at)	b.attrs = append(b.attrs[:0:0], b.attrs...)
+reach.go	ia += strings.Count(t, "[") - strings.Count(t, "]")	ia = 0
+reach.go	} else if l0 == 0 && reInnerAttr.MatchString(t) {	} else if l0 == 0 && false {
+reach.go	} else if l0 == 0 && reInnerAttr.MatchString(t) {	} else if l0 == l0 && reInnerAttr.MatchString(t) {
+reach.go	level += nest(c)	level = 0
+reach.go	if strings.HasPrefix(p, d+"/") || p == d+".rs" && !strings.HasPrefix(p, v.r.Source+"/") {	if d == "\x00" {
+reach.go	if strings.HasPrefix(p, d+"/") || p == d+".rs" && !strings.HasPrefix(p, v.r.Source+"/") {	if strings.HasPrefix(p, d+"/") || p == d+".rs" {
+reach.go	if strings.HasPrefix(p, d+"/") || p == d+".rs" && !strings.HasPrefix(p, v.r.Source+"/") {	if strings.HasPrefix(p, d+"/") {
+reach.go	return p + " cannot be read whole"	return ""
+reach.go	if ln := innerGate(f); ln > 0 {	if ln := innerGate(f); false {
+reach.go	if v.exists(lib) {	if false {
+reach.go	} else if !v.exists(main) {	} else if false {
+reach.go	if p == root {	if false {
+reach.go	if p == main {	if false {
+reach.go	if base == "mod.rs" {	if false {
+reach.go	c != lib && c != main && path.Base(pd) != "mod"	c != main && path.Base(pd) != "mod"
+reach.go	c != lib && c != main && path.Base(pd) != "mod"	c != lib && path.Base(pd) != "mod"
+reach.go	c != lib && c != main && path.Base(pd) != "mod"	c != lib && c != main
+reach.go	parents = append(parents, pd+"/mod.rs")	_ = pd
+reach.go	parents = []string{root}	parents = []string{lib}
+reach.go	if pd == src {	if false {
+reach.go	if hashEnd(c) {	if false {
+reach.go	if hashEnd(c) {	if !reAttrAny.MatchString(c) && hashEnd(c) {
+reach.go	c, hash = "#"+strings.TrimLeft(c, " \t"), false	c, hash = strings.TrimLeft(c, " \t"), false
+reach.go	if ln == 0 {	if false {
+reach.go	if why != "" {	if false {
+reach.go	`[ \t]*;`)	`[ \t]*`)
+reach.go	if b.open == 0 && reOuterAttr.MatchString(strings.TrimLeft(c, " \t")) {	if false {
+reach.go	if reGateAttr.MatchString(a) {	if false {
+reach.go	if rePathAttr.MatchString(a) {	if false {
+reach.go	b = attrBlock{}	_ = b
+reach.go	if re.MatchString(c) && d0 != 0 {	if re.MatchString(c) && d0 != d0 {
+reach.go	depth += nest(c)	depth = 0
+reach.go	strings.Count(c, "{") + strings.Count(c, "[") + strings.Count(c, "(")	strings.Count(c, "{") + strings.Count(c, "[")
+reach.go	strings.Count(c, "{") + strings.Count(c, "[") + strings.Count(c, "(")	strings.Count(c, "{") + strings.Count(c, "(")
+reach.go	strings.Count(c, "}") - strings.Count(c, "]") - strings.Count(c, ")")	strings.Count(c, "}")
+reach.go	if loc := reAttrAny.FindStringIndex(c); loc != nil {	if loc := reAttrAny.FindStringIndex(c); false {
+reach.go	if nested != 0 {	if false {
+resolve.go	if why := v.reach(file); why != "" {	if why := v.reach(file); false {
+notcopy.go	if why := v.reach(nc); why != "" {	if why := v.reach(nc); false {
+reach.go	if reModHead.MatchString(c) {	if false {
+reach.go	c, pre = pre+" "+strings.TrimLeft(c, " \t"), ""	c, pre = strings.TrimLeft(c, " \t"), ""
+rules.go	if d := r.CiteModule[name]; strings.HasPrefix(r.Source+"/", d+"/") {	if d := r.CiteModule[name]; d == r.Source {
+resolve.go	if h && d0 == 0 && reAssertLine.MatchString(l) {	if h && d0 == d0 && reAssertLine.MatchString(l) {
+resolve.go	depth += nest(af.code[i])	depth = 0
+notcopy.go	if h && d0 == 0 && reAssertOpen.MatchString(l) {	if h && reAssertOpen.MatchString(l) {
+notcopy.go	ungated := d0 == 0 && !reAttrAbove.MatchString(prev)	ungated := !reAttrAbove.MatchString(prev)
+notcopy.go	depth += nest(c)	depth = 0
+reach.go	if why := v.targets(root); why != "" {	if why := v.targets(root); false {
+reach.go	lib := strings.HasSuffix(root, "/lib.rs")	lib := root != ""
+reach.go	table = tomlKey.Replace(t)	table = t
+reach.go	strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "")	strings.NewReplacer(" ", "", `"`, "", "'", "")
+reach.go	strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "")	strings.NewReplacer(" ", "", "\t", "", "'", "")
+reach.go	strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "")	strings.NewReplacer(" ", "", "\t", "", `"`, "")
+reach.go	if p := strings.Trim(val, `"'`); strings.HasPrefix(p, "/") || path.Join(dir, p) != root {	if p := strings.Trim(val, `"'`); p == "\x00" {
+reach.go	if p := strings.Trim(val, `"'`); strings.HasPrefix(p, "/")	if p := val; strings.HasPrefix(p, "/")
+reach.go	strings.HasPrefix(val, "false")	val != ""
+reach.go	(lib && k == "autolib" || !lib && k == "autobins")	(k == "autolib" || k == "autobins")
+reach.go	case table == "[lib]" && k == "path":	case false:
+reach.go	if !lib && table == "[[bin]]" {	if false {
+reach.go	if !lib && table == "[[bin]]" {	if table == "[[bin]]" {
+reach.go	if !lib && table == "[lib]" {	if false {
+reach.go	strings.HasPrefix(k, "lib.") || 	false ||
+reach.go	strings.HasPrefix(k, "package.auto") ||	false ||
+reach.go	table == "" && (k == "lib" || k == "bin" || k == "package")	(k == "lib" || k == "bin" || k == "package")
+reach.go	table == "" && (k == "lib" || k == "bin" || k == "package")	table == "" && (k == "bin" || k == "package")
+reach.go	table == "" && (k == "lib" || k == "bin" || k == "package")	table == "" && (k == "lib" || k == "package")
+reach.go	table == "" && (k == "lib" || k == "bin" || k == "package")	table == "" && (k == "lib" || k == "bin")
+reach.go	k, val := tomlKey.Replace(r.key), r.val	k, val := strings.TrimSpace(r.key), r.val
+reach.go	if !v.exists(man) {	if false {
+reach.go	if strings.Contains(l, `"""`) || strings.Contains(l, `'''`) {	if strings.Contains(l, `'''`) {
+reach.go	if strings.Contains(l, `"""`) || strings.Contains(l, `'''`) {	if strings.Contains(l, `"""`) {
+reach.go	if strings.Contains(t, `\`) {	if false {
+reach.go	if !reTomlHeader.MatchString(table) {	if false {
+reach.go	pkg = pkg || table == "[package]"	pkg = true
+reach.go	if !pkg {	if false {
+reach.go	strings.HasPrefix(p, "/") || path.Join(dir, p) != root	path.Join(dir, p) != root
+reach.go	regexp.MustCompile(`^\[\[?[^\[\]]+\]\]?$`)	regexp.MustCompile(`^\[\[?[^\[\]]+\]\]?`)
+#
+# #239: the manifest reader: open multi-line values, SOURCE not src.
+reach.go	if open > 0 {	if false {
+reach.go	if t != "" && t[0] == '[' {	if false {
+reach.go	if open != 0 {	if open < 0 {
+reach.go	if msg := brackets(r, man, root); msg != "" {	if msg := ""; msg != "" {
+reach.go	if why := brackets(r, man, root); why != "" {	if why := ""; why != "" {
+reach.go	open = r.depth // what the value	open = 1 // what the value
+reach.go	open = r.depth // what this value	open = 0 // what this value
+reach.go	if !r.eq {	if false {
+reach.go	if t == "" {	if false {
+reach.go	case r.under:	case false:
+reach.go	case r.reopen:	case false:
+reach.go	r.reopen = r.reopen || ended	r.reopen = r.reopen && ended
+reach.go	r.under = r.under || r.depth < 0	r.under = false
+reach.go	ended = r.depth == 0	ended = false
+reach.go	r.depth++	r.depth += 0
+reach.go	r.depth--	r.depth -= 0
+reach.go	case c == '=':	case false:
+reach.go	if at < 0 {	if true {
+reach.go	strings.TrimSpace(l[at+1:end])	strings.TrimSpace(l[at+1:])
+reach.go	end = i	_ = i
+reach.go	break scan	continue scan
+reach.go	r.text, r.closed = strings.TrimSpace(l[:end]), q == 0	r.text, r.closed = strings.TrimSpace(l[:end]), true
+reach.go	if i == 0 {	if i == 1 {
+reach.go	if strings.Contains(l, bom) {	if false {
+reach.go	braces++	braces += 0
+reach.go	braces--	braces -= 0
+reach.go	ended = r.depth == 0 && braces == 0	ended = r.depth == 0
+reach.go	ended = braces == 0 && r.depth == 0	ended = false
+reach.go	named = true	named = false
+reach.go	root != def && !named	!named
+reach.go	root != def && !named	root != def && (!named || named)
+reach.go	path.Join(dir, "src", path.Base(root))	path.Join(dir, path.Base(root))
+reach.go	if !r.closed {	if !r.closed && false {
+reach.go	case q != 0:	case false:
+reach.go	if c == q {	if c == '\x00' {
+reach.go	case c == '"' || c == '\'':	case c == '\'':
+reach.go	case c == '"' || c == '\'':	case c == '"':
+reach.go	case c == '#':	case false:

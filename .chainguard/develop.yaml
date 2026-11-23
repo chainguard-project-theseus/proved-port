@@ -1,0 +1,25 @@
+# Development sessions (`chainctl develop`) for the kit, on a large
+# guest (8 vCPU, 32 GiB).
+#
+# Packages: what the kit's checks (.chainguard/ci/*.yaml) install, so a
+# session can run each of them: the Wolfi rust stream count.yaml names
+# and the Wolfi go stream go.yaml names (move each with its check
+# file), build-base, busybox, git, make, curl and xz;
+# apk-tools and wolfi-keys, so a session can install a package from
+# Wolfi; and claude, Claude Code for the owner agents that run in
+# development sessions. No check installs this environment.
+version: 1
+resources: large
+environment:
+  packages:
+    - rust-1.100
+    - go-1.27
+    - build-base
+    - busybox
+    - git
+    - make
+    - curl
+    - xz
+    - apk-tools
+    - wolfi-keys
+    - claude

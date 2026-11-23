@@ -1,0 +1,14 @@
+counter	plain	s1-512	A0	1	instructions	
+counter	plain	s2-512	B0	1	cycles	<not counted>
+counter	plain	s2-512	B0	2	instructions	12e3
+empty-output	perpat	s1-1	W1	1
+output-diff	perpat2	none-1	B1	2	B1	1
+output-diff	perpat2	none-1	B1	3	B1	1
+output-diff	perpat2	none-1	B1	4	B1	1
+output-diff	perpat2	none-1	B1	5	B1	1
+output-diff	perpat2	none-1	C1	1	B1	1
+output-diff	perpat2	none-1	C1	2	B1	1
+output-diff	perpat2	none-1	C1	3	B1	1
+output-diff	perpat2	none-1	C1	4	B1	1
+output-diff	perpat2	none-1	C1	5	B1	1
+output-diff	perpat2	s4-1	B1	5	B1	1

@@ -8,11 +8,19 @@
 # repository to read a base revision from. apk-tools and wolfi-keys let
 # the deps agent's guest, which runs in this environment, install a new
 # stream and read Wolfi's index. count-installed tests kit/make as the
-# package installs it, against the counter built here.
+# package installs it, against the counter built here. make (GNU) and
+# go.yaml's go-1.NN stream (for the Go tools kit/install.sh builds) are
+# in the file's environment, not only count-installed's, because the
+# deps entries that run in it (toolchain, crates, verus_syn) run
+# kit/installed-test.sh too; the go-toolchain entry of
+# .chainguard/deps.yaml moves both go pins with go.yaml's. lint-unsafe-test
+# and noalias-test run kit/make/lint-unsafe.sh and kit/make/noalias.sh
+# with this toolchain's cargo, and perf-budget-test runs
+# kit/make/perf-budget.sh with it and binutils' objdump.
 version: 1
 
 environment:
-  packages: [rust-1.100, build-base, busybox, git, apk-tools, wolfi-keys]
+  packages: [rust-1.100, build-base, busybox, git, apk-tools, wolfi-keys, make, go-1.27]
 
 checks:
   count-test:
@@ -50,14 +58,61 @@ checks:
   count-installed:
     description: >-
       kit/installed-test.sh: the kit installed into a scratch root as the
-      theseus-proved-port package installs it, then a fixture port
+      theseus-proved-port package installs it (the proved-port-fncmp,
+      -stats and -seams Go tools too), then a fixture port
       (verus-count from PATH, no build, the PROVED_PORT_VERSION and
       counter-version guards, make verus-headers against the installed
       templates).
     trigger: [presubmit, postsubmit]
     timeout: 15m
     environment:
-      # The file's packages, and make (GNU) for the port's targets.
-      packages: [rust-1.100, build-base, busybox, git, make]
+      # The file's packages, make (GNU) for the port's targets, and
+      # go.yaml's go stream for the Go tools.
+      packages: [rust-1.100, build-base, busybox, git, make, go-1.27]
     network: *crates
     cmd: [sh, kit/installed-test.sh]
+
+  lint-unsafe-test:
+    description: >-
+      kit/lint-unsafe-test.sh: kit/make/lint-unsafe.sh (make lint-unsafe)
+      over a fixture workspace with cargo: it passes, and each planted
+      change (unsafe code in a module, test, build script or example, a
+      root without the forbid, half the Verus pair, a misspelt
+      UNSAFE_CRATES, missing workspace lints) fails it. The fixture has
+      no dependencies, so it needs no network.
+    trigger: [presubmit, postsubmit]
+    timeout: 10m
+    cmd: [sh, kit/lint-unsafe-test.sh]
+
+  noalias-test:
+    description: >-
+      kit/noalias-test.sh: kit/make/noalias.sh (make noalias) over a
+      fixture library with cargo: an Unpin type's &mut self is noalias
+      and fails it, a PhantomPinned one passes, and two builds, several
+      codegen units, a rerun, a type at the crate root, a type with only
+      &self and a wrong crate name give the verdicts they must. The
+      fixture has no dependencies, so it needs no network.
+    trigger: [presubmit, postsubmit]
+    timeout: 10m
+    cmd: [sh, kit/noalias-test.sh]
+
+  perf-budget-test:
+    description: >-
+      kit/perf-budget-test.sh: kit/make/perf-budget.sh (make perf-budget
+      and perf-budget-print) over a fixture library with cargo: the
+      settings it refuses, print measuring a table, check passing it
+      after a self-test that rejects every mutation, a count off by one,
+      a self-test mutation that does not apply, a table with no cell, two
+      builds with their own tables (and swapped), a failed build and an
+      unwritten library. It pins no counts, so it holds for this file's
+      rust stream whatever code it emits. The fixture has no
+      dependencies, so it needs no network.
+    trigger: [presubmit, postsubmit]
+    # The checker reads x86_64 code only, as challoc's perf-budget check,
+    # whose runner this is.
+    resources: medium-amd64
+    timeout: 10m
+    environment:
+      # The file's packages, and binutils for objdump.
+      packages: [rust-1.100, build-base, busybox, binutils]
+    cmd: [sh, kit/perf-budget-test.sh]

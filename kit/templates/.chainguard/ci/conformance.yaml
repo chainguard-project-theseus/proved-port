@@ -4,7 +4,7 @@
 # list (tests/upstream/deviations.txt), strictly both ways: a block that
 # fails and is not listed fails the check, and so does a listed block
 # that passes. The list only shrinks; every line's reason cites an
-# active docs/abi-changes.md entry. It runs on both architectures and
+# active docs/abi/ABI-nnn.md entry. It runs on both architectures and
 # blocks. `make conformance` runs the same script in a development
 # session.
 #

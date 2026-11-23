@@ -126,8 +126,12 @@ A seam is anything a verified function relies on without proof:
 `Tracked::assume_new` ghost-token mints for the C caller's premises, and
 `#[verifier::assume_unsupported_attributes]`, which trusts the symbol
 or section a `no_mangle`, `export_name` or `link_section` item gets
-(its body stays verified; the ABI tests are the grounds). SKILL.md's
-audit grep matches every one of these spellings.
+(its body stays verified; the ABI tests are the grounds), and
+`#[verifier::exec_allows_no_decreases_clause]`, which lets the exec
+functions it covers go without a termination proof (the counter
+classes them trusted; give each loop and recursive call its
+`decreases` instead). SKILL.md's audit grep matches every one of these
+spellings.
 
 - One `external_body` or `assume_specification` around the single
   unverifiable call, with a contract stating only what callers rely on.
@@ -143,6 +147,20 @@ audit grep matches every one of these spellings.
   check), the row's status, and the inert
   `#[cfg_attr(any(), discharged_by = "kani")]` marker. The counter fails
   a marker with no record.
+- A shipped function outside `verus!` (plain Rust, such as FFI glue)
+  has no seam, row or Verus contract. Its Kani discharge needs three
+  things in the same change: the harness, its source file's record,
+  `verus/seams/kani-<crate>-<path under src/, / as ->.md`, one per
+  file for every marked function in it (the signature and marker
+  quoted, the properties the harnesses assert, and the rest as above;
+  each function named by its path in backquotes, as `A::new`,
+  `<A as From<u8>>::from`, `a::init` or `init`, and each harness by its
+  file and name in backquotes), and the marker. The counter fails the
+  run unless the record names the file and name of a `#[kani::proof]`
+  harness of the crate, outside `cfg(test)`, whose body calls the
+  function (and, for a method, mentions its owner), and when two marked
+  functions in one file share a path (`cfg` twins). With `[ledger]` the
+  marker is refused.
 - `make kani` (the kit's `kani.sh`) fails a run with no harness to
   check, since cargo kani passes a crate with none. Until its first
   harness, a port with the kani checks sets `KANI_NONE = yes` in its
@@ -191,8 +209,18 @@ fails when:
 
 Rules:
 
+- A proof PR keeps its figures in its theorem file and its body, and
+  edits no shared coverage line (a README figure or row, the design or
+  handoff docs' coverage rows): the FLOOR PR updates them from main, so
+  parallel proof PRs do not conflict there (the template AGENTS.md,
+  "Shared coverage lines"). The exceptions are FLOOR's header's: the
+  first proof PR raises FLOOR and the badge from 0.0, and a PR with a
+  `lowered` line replaces the badge to match.
 - The check passes a share above its figure and names the figure to
-  record. Every port records it the same way, as the kit's FLOOR header
+  record: the share, or, for a port whose count.toml `[floor]` sets
+  `room_functions`/`room_lines` (its own FLOOR paragraph below the
+  header says so), the share with that room for unverified code, and
+  none while the share is within it. Every port records it the same way, as the kit's FLOOR header
   states: FLOOR, and the README badge that shows it, rise in a PR of
   their own, to the figures the check names on main, never in the PR
   that earns them, so parallel PRs never conflict there (pcre3's
@@ -229,7 +257,11 @@ Rules:
 - A drop is closed by verifying more code, in the PR or in a small PR
   that lands first. A `lowered` line is the last resort, and its reason
   names exactly which functions or lines became trusted or outside, with
-  counts (pcre3's FLOOR has examples).
+  counts (pcre3's FLOOR has examples). Deleting verified code, whole
+  functions or lines of one, lowers a share with nothing becoming
+  trusted or outside; that reason names the functions removed or
+  shortened, says nothing became trusted or outside, and gives the same
+  counts (the FLOOR template's header).
 - Code built only for the verifier still counts if it is trusted: a
   shipped proof can rest on it.
 

@@ -11,6 +11,8 @@
 #     that nothing builds the counter, even for a port that still has a
 #     verus/count or includes a verus/make copy of proved-port.mk, and
 #     that verify runs VERIFY_TARGETS in order and stops at a failure;
+#   - with a stub cargo, the clean runs before cargo verus, and `make
+#     verus` stops when the proofs fail, with no counter run;
 #   - the PROVED_PORT_VERSION and counter-version guards fail a target
 #     before it runs anything;
 #   - kani.sh runs with a stub cargo: crate selection, one harness,
@@ -23,6 +25,12 @@
 #     no verus/make/templates a port still has, takes only the `- The
 #     kit` item as the review prompt's kit rule, and gives the same
 #     result with --installed as with its defaults;
+#   - lint-unsafe passes the port's settings to lint-unsafe.sh, whose
+#     self-test passes with these tools (kit/lint-unsafe-test.sh runs
+#     the rest of it with cargo);
+#   - noalias passes the port's settings and builds to noalias.sh, whose
+#     self-test passes with these tools and which refuses a missing or
+#     malformed setting (kit/noalias-test.sh runs it with cargo);
 #   - no template carries a `kit: proved-port` line.
 # No Verus or Kani runs. Run it from the repository root.
 set -eu
@@ -312,6 +320,43 @@ for metadata in '{"packages":[],"workspace_default_members":[],"version":1}' '{"
 done
 rm -rf "$port/target"
 
+# Failing proofs stop `make verus` before the counter: a stub cargo whose
+# verus call writes a statistics file and exits 1, and a stub counter
+# that logs each call but --version. make must exit non-zero with no
+# counter run, so a recipe change that loses cargo verus's exit status
+# (a pipe, a `|| true`) fails here, not only in a port's red check.
+mkdir -p "$tmp/failbin"
+# shellcheck disable=SC2016
+printf '#!/bin/sh\necho "cargo $*" >> "%s"\nif [ "$1" = verus ]; then echo "{\\"verification-results\\": {\\"success\\": false}}"; echo "error: assertion failed" >&2; exit 1; fi\n' \
+  "$tmp/cargo.log" > "$tmp/failbin/cargo"
+chmod +x "$tmp/failbin/cargo"
+# shellcheck disable=SC2016
+printf '#!/bin/sh\nif [ "${1-}" = --version ]; then echo "verus-count %s"; exit 0; fi\necho "verus-count $*" >> "%s"\n' \
+  "$version" "$tmp/count.log" > "$tmp/failbin/verus-count"
+chmod +x "$tmp/failbin/verus-count"
+: > "$tmp/cargo.log"
+: > "$tmp/count.log"
+if PATH="$tmp/failbin:$PATH" make -s -C "$port" CARGO_TARGET_DIR= VERUS_BASE=none VERUS_COUNT="$tmp/failbin/verus-count" verus > /dev/null 2>&1; then
+  fail "make verus with failing proofs: got = success, want = failure"
+fi
+expect "make verus with failing proofs runs cargo verus" "$(tr -s ' ' < "$tmp/cargo.log" | sed 's/ $//')" \
+  "cargo clean --locked -p alpha -p beta --target-dir target/verus-partial
+cargo verus focus --locked -p alpha -p beta -j 1 -- --time-expanded --output-json"
+expect "make verus with failing proofs runs no counter after them" "$(cat "$tmp/count.log")" ""
+[ -s "$port/target/verus-stats.json" ] ||
+  fail "make verus with failing proofs: got = no statistics file, want = the stub's (so the counter had one to read)"
+# The same stubs with proofs that pass run the counter, so the row
+# above fails on the order, not on a counter stub that never runs.
+# shellcheck disable=SC2016
+printf '#!/bin/sh\necho "cargo $*" >> "%s"\n[ "$1" != verus ] || echo "{}"\n' \
+  "$tmp/cargo.log" > "$tmp/failbin/cargo"
+: > "$tmp/count.log"
+PATH="$tmp/failbin:$PATH" make -s -C "$port" CARGO_TARGET_DIR= VERUS_BASE=none VERUS_COUNT="$tmp/failbin/verus-count" verus > /dev/null 2>&1 ||
+  fail "make verus with passing proofs and a passing counter: got = failure, want = success"
+expect "make verus with passing proofs runs the counter" "$(tr -s ' ' < "$tmp/count.log" | sed 's/ $//')" \
+  "verus-count --floor verus/FLOOR --rlimit target/verus-stats.json --no-base ."
+rm -rf "$port/target"
+
 # Verify mode cleans VERUS_TARGET_DIR itself, which a fresh checkout's
 # recipe creates for VERUS_STATS before cargo runs. A stub cargo that, as
 # cargo does, refuses to clean an existing directory without
@@ -353,11 +398,154 @@ expect "make -n verus-headers, another name (verus/SHARES)" "$(shows verus-heade
   "VERUS_FLOOR=verus/SHARES sh $home/make/headers.sh ."
 expect "make -n kani" "$(shows kani)" "sh $home/make/kani.sh"
 expect "make -n kani-list" "$(shows kani-list)" "sh $home/make/kani.sh --list"
+# A workspace below the root (#71, cg-uutils): VERUS_CARGO_FLAGS'
+# --manifest-path, in either form, is kani.sh's KANI_MANIFEST too, and a
+# KANI_MANIFEST of its own wins.
+expect "make -n kani takes VERUS_CARGO_FLAGS' --manifest-path" \
+  "$(shows kani VERUS_CARGO_FLAGS='--manifest-path crates/uutils/Cargo.toml')" \
+  "KANI_MANIFEST='crates/uutils/Cargo.toml' sh $home/make/kani.sh"
+expect "make -n kani-list takes --manifest-path=P" \
+  "$(shows kani-list VERUS_CARGO_FLAGS='--features verus --manifest-path=crates/uutils/Cargo.toml')" \
+  "KANI_MANIFEST='crates/uutils/Cargo.toml' sh $home/make/kani.sh --list"
+expect "make -n kani-regular takes KANI_MANIFEST over VERUS_CARGO_FLAGS" \
+  "$(shows kani-regular VERUS_CARGO_FLAGS='--manifest-path a/Cargo.toml' KANI_MANIFEST=b/Cargo.toml)" \
+  "KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='--verbosity 9' KANI_FAIL_PATTERN='warning: ignoring' KANI_MANIFEST='b/Cargo.toml' sh $home/make/kani.sh"
 expect "make -n kani-regular, challoc's kani-ignoring" "$(shows kani-regular)" \
   "KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='--verbosity 9' KANI_FAIL_PATTERN='warning: ignoring' sh $home/make/kani.sh"
 expect "make -n kani-regular keeps the port's CBMC arguments and KANI_ARGS" \
   "$(shows kani-regular KANI_CBMC_ARGS='--unwind 4' KANI_ARGS='--features quantum8' KANI_JOBS=4)" \
   "KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='--unwind 4 --verbosity 9' KANI_FAIL_PATTERN='warning: ignoring' sh $home/make/kani.sh --features quantum8"
+
+# lint-unsafe passes the port's settings to lint-unsafe.sh; its manifest
+# is KANI_MANIFEST's unless the port gives its own.
+expect "make -n lint-unsafe, one crate allowed unsafe" \
+  "$(shows lint-unsafe UNSAFE_CRATES=alpha-capi)" \
+  "UNSAFE_CRATES='alpha-capi' UNSAFE_WORKSPACE_LINTS='yes' UNSAFE_MANIFEST='' UNSAFE_CHECK_FLAGS='' sh $home/make/lint-unsafe.sh ."
+expect "make -n lint-unsafe, two fence crates, no workspace lints, features" \
+  "$(shows lint-unsafe UNSAFE_CRATES='xml3-capi  xml3-cmem' UNSAFE_WORKSPACE_LINTS=no UNSAFE_CHECK_FLAGS='--features x')" \
+  "UNSAFE_CRATES='xml3-capi xml3-cmem' UNSAFE_WORKSPACE_LINTS='no' UNSAFE_MANIFEST='' UNSAFE_CHECK_FLAGS='--features x' sh $home/make/lint-unsafe.sh ."
+expect "make -n lint-unsafe takes VERUS_CARGO_FLAGS' --manifest-path" \
+  "$(shows lint-unsafe UNSAFE_CRATES=uu-capi VERUS_CARGO_FLAGS='--manifest-path crates/uutils/Cargo.toml')" \
+  "UNSAFE_CRATES='uu-capi' UNSAFE_WORKSPACE_LINTS='yes' UNSAFE_MANIFEST='crates/uutils/Cargo.toml' UNSAFE_CHECK_FLAGS='' sh $home/make/lint-unsafe.sh ."
+expect "make -n lint-unsafe takes UNSAFE_MANIFEST over KANI_MANIFEST" \
+  "$(shows lint-unsafe UNSAFE_CRATES=c KANI_MANIFEST=a/Cargo.toml UNSAFE_MANIFEST=b/Cargo.toml)" \
+  "UNSAFE_CRATES='c' UNSAFE_WORKSPACE_LINTS='yes' UNSAFE_MANIFEST='b/Cargo.toml' UNSAFE_CHECK_FLAGS='' sh $home/make/lint-unsafe.sh ."
+
+# noalias passes the port's settings to noalias.sh: one build by default,
+# and each build's own flags; its target directory is CARGO_TARGET_DIR's.
+expect "make -n noalias, one build" \
+  "$(shows noalias NOALIAS_CRATE=alpha NOALIAS_TYPE=heap::Heap)" \
+  "NOALIAS_CRATE='alpha' NOALIAS_TYPE='heap::Heap' NOALIAS_BUILDS='default' NOALIAS_FLAGS_default='' NOALIAS_CARGO_FLAGS='' NOALIAS_TARGET_DIR='target' sh $home/make/noalias.sh ."
+expect "make -n noalias, challoc's two quanta" \
+  "$(shows noalias NOALIAS_CRATE=challoc NOALIAS_TYPE=heap::Heap NOALIAS_BUILDS='q16  q8' NOALIAS_FLAGS_q8='--no-default-features --features quantum8' CARGO_TARGET_DIR=/t)" \
+  "NOALIAS_CRATE='challoc' NOALIAS_TYPE='heap::Heap' NOALIAS_BUILDS='q16 q8' NOALIAS_FLAGS_q16='' NOALIAS_FLAGS_q8='--no-default-features --features quantum8' NOALIAS_CARGO_FLAGS='' NOALIAS_TARGET_DIR='/t' sh $home/make/noalias.sh ."
+
+# codegen, codegen-capture and codegen-compare pass the port's settings
+# to codegen.sh: one build by default, each build's own flags, the
+# comparer, and CARGO_TARGET_DIR's target directory.
+expect "make -n codegen, one build" \
+  "$(shows codegen CODEGEN_LIB=libalpha.so)" \
+  "CODEGEN_LIB='libalpha.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='proved-port-fncmp' CODEGEN_BASE='' sh $home/make/codegen.sh base"
+expect "make -n codegen, challoc's two quanta" \
+  "$(shows codegen CODEGEN_LIB=libchalloc.so CODEGEN_BUILDS='q16  q8' CODEGEN_FLAGS_q8='--no-default-features --features quantum8' CARGO_TARGET_DIR=/t CODEGEN_FNCMP=/bin/fncmp CODEGEN_BASE=main)" \
+  "CODEGEN_LIB='libchalloc.so' CODEGEN_BUILDS='q16 q8' CODEGEN_FLAGS_q16='' CODEGEN_FLAGS_q8='--no-default-features --features quantum8' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='/t' CODEGEN_FNCMP='/bin/fncmp' CODEGEN_BASE='main' sh $home/make/codegen.sh base"
+expect "make -n codegen-capture" \
+  "$(shows codegen-capture CODEGEN_LIB=libalpha.so)" \
+  "CODEGEN_LIB='libalpha.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='proved-port-fncmp' sh $home/make/codegen.sh capture 'target/codegen-baseline'"
+expect "make -n codegen-compare, another directory" \
+  "$(shows codegen-compare CODEGEN_LIB=libalpha.so CODEGEN_DIR=/tmp/base)" \
+  "CODEGEN_LIB='libalpha.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='proved-port-fncmp' sh $home/make/codegen.sh compare '/tmp/base'"
+# perf-budget and perf-budget-print pass the port's settings to
+# perf-budget.sh: one build by default, each build's table and flags.
+expect "make -n perf-budget, one build" \
+  "$(shows perf-budget PERF_BUDGET_LIB=libalpha.so PERF_BUDGET_TABLE_default=verus/pb.txt)" \
+  "PERF_BUDGET_LIB='libalpha.so' PERF_BUDGET_BUILDS='default' PERF_BUDGET_TABLE_default='verus/pb.txt' PERF_BUDGET_FLAGS_default='' PERF_BUDGET_CARGO_FLAGS='' PERF_BUDGET_TARGET_DIR='target' PERF_BUDGET_SELFTEST_EXPORT='' sh $home/make/perf-budget.sh check"
+expect "make -n perf-budget-print, challoc's two quanta" \
+  "$(shows perf-budget-print PERF_BUDGET_LIB=libchalloc.so PERF_BUDGET_BUILDS='q16  q8' PERF_BUDGET_TABLE_q16=verus/perf-budget.txt PERF_BUDGET_TABLE_q8=verus/perf-budget-q8.txt PERF_BUDGET_FLAGS_q8='--no-default-features --features quantum8' PERF_BUDGET_CARGO_FLAGS=--locked CARGO_TARGET_DIR=/t PERF_BUDGET_SELFTEST_EXPORT=free)" \
+  "PERF_BUDGET_LIB='libchalloc.so' PERF_BUDGET_BUILDS='q16 q8' PERF_BUDGET_TABLE_q16='verus/perf-budget.txt' PERF_BUDGET_FLAGS_q16='' PERF_BUDGET_TABLE_q8='verus/perf-budget-q8.txt' PERF_BUDGET_FLAGS_q8='--no-default-features --features quantum8' PERF_BUDGET_CARGO_FLAGS='--locked' PERF_BUDGET_TARGET_DIR='/t' PERF_BUDGET_SELFTEST_EXPORT='free' sh $home/make/perf-budget.sh print"
+# skip-summary passes the log and the manifest as skip-summary.sh's
+# two arguments, blanks around them dropped.
+expect "make -n skip-summary, challoc's cell" \
+  "$(shows skip-summary SKIP_LOG=' test.log ' SKIP_MANIFEST=ci/expected-skips/x86_64-glibc.txt)" \
+  "sh $home/make/skip-summary.sh 'test.log' 'ci/expected-skips/x86_64-glibc.txt'"
+# glibc-max passes the library and the version as glibc-max.sh's two
+# arguments, blanks around them dropped.
+expect "make -n glibc-max, challoc's library" \
+  "$(shows glibc-max GLIBC_MAX_LIB=' .ci/target/release/libchalloc.so ' GLIBC_MAX=2.44)" \
+  "sh $home/make/glibc-max.sh '.ci/target/release/libchalloc.so' '2.44'"
+# known-failures passes the log and the list as known-failures.sh's
+# arguments, blanks around them dropped, and EXTRA as a third only when
+# it is set.
+expect "make -n known-failures, no EXTRA" \
+  "$(shows known-failures KNOWN_FAILURES_LOG=' test.log ' KNOWN_FAILURES_LIST=ci/known-failures.txt KNOWN_FAILURES_EXTRA=' ')" \
+  "sh $home/make/known-failures.sh 'test.log' 'ci/known-failures.txt'"
+expect "make -n known-failures, challoc's cgroup verdicts as EXTRA" \
+  "$(shows known-failures KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=ci/known-failures.txt KNOWN_FAILURES_EXTRA=ci/cgroup-failures.sh)" \
+  "sh $home/make/known-failures.sh 'test.log' 'ci/known-failures.txt' 'ci/cgroup-failures.sh'"
+# header-check passes the upstream directory and the prefixes as one
+# argument each, blanks around them dropped, and each header as its own.
+expect "make -n header-check, the PCRE2 port's headers, the default upstream" \
+  "$(shows header-check HEADER_CHECK_HEADERS=' include/pcre2.h  include/pcre2posix.h ' HEADER_CHECK_PREFIXES=' PCRE2_ REG_ ')" \
+  "sh $home/make/header-check.sh '/usr/include' 'PCRE2_ REG_' 'include/pcre2.h' 'include/pcre2posix.h'"
+expect "make -n header-check, another upstream" \
+  "$(shows header-check HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_ HEADER_CHECK_UPSTREAM=/opt/foo/include)" \
+  "sh $home/make/header-check.sh '/opt/foo/include' 'FOO_' 'include/foo.h'"
+# abi-elf passes the library, the map, the SONAME and the needs list as
+# one argument each, blanks around them dropped, TLS_MAX only when it
+# or DEFAULTS is set (empty for DEFAULTS alone) and DEFAULTS only when
+# it is set.
+expect "make -n abi-elf, the default needs, no TLS_MAX" \
+  "$(shows abi-elf ABI_ELF_LIB=' target/release/libfoo.so.1 ' ABI_ELF_MAP=maps/libfoo.map ABI_ELF_SONAME=libfoo.so.1 ABI_ELF_TLS_MAX=' ' ABI_ELF_DEFAULTS=' ')" \
+  "sh $home/make/abi-elf.sh 'target/release/libfoo.so.1' 'maps/libfoo.map' 'libfoo.so.1' 'libc.so.6 ld-linux-x86-64.so.2 ld-linux-aarch64.so.1'"
+expect "make -n abi-elf, the PCRE2 port's library, its needs and TLS_MAX" \
+  "$(shows abi-elf ABI_ELF_LIB=target/release/libpcre2-8.so.0 ABI_ELF_MAP=maps/libpcre2-8.map ABI_ELF_SONAME=libpcre2-8.so.0 ABI_ELF_NEEDED=' libc.so.6  libm.so.6 ' ABI_ELF_TLS_MAX=512)" \
+  "sh $home/make/abi-elf.sh 'target/release/libpcre2-8.so.0' 'maps/libpcre2-8.map' 'libpcre2-8.so.0' 'libc.so.6 libm.so.6' '512'"
+expect "make -n abi-elf, DEFAULTS alone" \
+  "$(shows abi-elf ABI_ELF_LIB=libfoo.so.1 ABI_ELF_MAP=foo.map ABI_ELF_SONAME=libfoo.so.1 ABI_ELF_DEFAULTS=' foo@V2  bar@V1 ')" \
+  "sh $home/make/abi-elf.sh 'libfoo.so.1' 'foo.map' 'libfoo.so.1' 'libc.so.6 ld-linux-x86-64.so.2 ld-linux-aarch64.so.1' '' 'foo@V2 bar@V1'"
+expect "make -n abi-elf, TLS_MAX and DEFAULTS" \
+  "$(shows abi-elf ABI_ELF_LIB=libfoo.so.1 ABI_ELF_MAP=foo.map ABI_ELF_SONAME=libfoo.so.1 ABI_ELF_TLS_MAX=512 ABI_ELF_DEFAULTS=foo@V2)" \
+  "sh $home/make/abi-elf.sh 'libfoo.so.1' 'foo.map' 'libfoo.so.1' 'libc.so.6 ld-linux-x86-64.so.2 ld-linux-aarch64.so.1' '512' 'foo@V2'"
+# kani-quotes passes the directory and the roots as one argument each,
+# blanks around them dropped, and SKIP only when it is set.
+expect "make -n kani-quotes, the defaults" \
+  "$(shows kani-quotes KANI_QUOTES_SKIP=' ')" \
+  "sh $home/make/kani-quotes.sh 'verus/seams' '.'"
+expect "make -n kani-quotes, a vstd root and a skipped record" \
+  "$(shows kani-quotes KANI_QUOTES_DIR=' docs/seams ' KANI_QUOTES_ROOTS='. /opt/vstd/src' KANI_QUOTES_SKIP='kani-s3.md  kani-s5.md')" \
+  "sh $home/make/kani-quotes.sh 'docs/seams' '. /opt/vstd/src' 'kani-s3.md kani-s5.md'"
+# deviations passes the results, the list and the ledger (by default
+# docs/abi), blanks around them dropped, and --update first only when
+# DEVIATIONS_UPDATE is set.
+expect "make -n deviations, the default ledger" \
+  "$(shows deviations DEVIATIONS_RESULTS=' target/conformance/results ' DEVIATIONS_LIST=tests/upstream/deviations.txt DEVIATIONS_UPDATE=' ')" \
+  "sh $home/make/deviations.sh 'target/conformance/results' 'tests/upstream/deviations.txt' 'docs/abi'"
+expect "make -n deviations, a ledger file and --update" \
+  "$(shows deviations DEVIATIONS_RESULTS=res DEVIATIONS_LIST=dev.txt DEVIATIONS_LEDGER=' docs/abi-changes.md ' DEVIATIONS_UPDATE=1)" \
+  "sh $home/make/deviations.sh --update 'res' 'dev.txt' 'docs/abi-changes.md'"
+# known-cites passes the table, the ledger (by default docs/abi) and the
+# repositories as one argument each, blanks around them dropped, and
+# KNOWN_CITES_OFFLINE and KNOWN_CITES_MACRO stripped in the script's
+# environment, always (an empty one the script reads as unset).
+expect "make -n known-cites, the default ledger" \
+  "$(shows known-cites KNOWN_CITES_FILE=' fuzz/diff/known.c ' KNOWN_CITES_REPO=o/port KNOWN_CITES_MACRO=' ')" \
+  "KNOWN_CITES_OFFLINE='' KNOWN_CITES_MACRO='' sh $home/make/known-cites.sh 'fuzz/diff/known.c' 'docs/abi' 'o/port'"
+expect "make -n known-cites, KNOWN_CITES_OFFLINE=1" \
+  "$(shows known-cites KNOWN_CITES_FILE=known.c KNOWN_CITES_REPO=o/port KNOWN_CITES_OFFLINE=' 1 ')" \
+  "KNOWN_CITES_OFFLINE='1' KNOWN_CITES_MACRO='' sh $home/make/known-cites.sh 'known.c' 'docs/abi' 'o/port'"
+expect "make -n known-cites, a ledger file, an old name and a macro" \
+  "$(shows known-cites KNOWN_CITES_FILE=src/known.rs KNOWN_CITES_LEDGER=' docs/abi-changes.md ' KNOWN_CITES_REPO='o/port  old/name' KNOWN_CITES_MACRO=' known! ')" \
+  "KNOWN_CITES_OFFLINE='' KNOWN_CITES_MACRO='known!' sh $home/make/known-cites.sh 'src/known.rs' 'docs/abi-changes.md' 'o/port old/name'"
+# consumers-run passes the swap directory and each name as one argument,
+# and the directories (by default tests/consumers and target/consumers),
+# the sonames and the prefix stripped in the script's environment,
+# always (an empty one the script reads as unset).
+expect "make -n consumers-run, the defaults" \
+  "$(shows consumers-run CONSUMERS_LIB=' target/consumers/lib ' CONSUMERS_SONAME=' ')" \
+  "CONSUMERS_DIR='tests/consumers' CONSUMERS_WORK='target/consumers' CONSUMERS_SONAME='' CONSUMERS_PREFIX='' sh $home/make/consumers.sh run 'target/consumers/lib'"
+expect "make -n consumers-run, names, sonames, a prefix and directories" \
+  "$(shows consumers-run CONSUMERS_LIB=swap CONSUMERS_NAMES=' grep  git ' CONSUMERS_SONAME='libfoo.so.1  libfoo-posix.so.3' CONSUMERS_PREFIX=' CG_FOO ' CONSUMERS_DIR=' t/c ' CONSUMERS_WORK=' w ')" \
+  "CONSUMERS_DIR='t/c' CONSUMERS_WORK='w' CONSUMERS_SONAME='libfoo.so.1 libfoo-posix.so.3' CONSUMERS_PREFIX='CG_FOO' sh $home/make/consumers.sh run 'swap' 'grep' 'git'"
 
 # verify runs every target VERIFY_TARGETS lists, in order, each with the
 # command line's variables. Under -n make prints its loop (a line naming
@@ -421,6 +609,88 @@ refuses_make "make -n kani-regular with a --verbosity in KANI_CBMC_ARGS" "KANI_C
   kani-regular KANI_CBMC_ARGS='--unwind 4 --verbosity 0'
 refuses_make "make -n kani-regular with --verbosity=1 in KANI_CBMC_ARGS" "KANI_CBMC_ARGS sets --verbosity" \
   kani-regular KANI_CBMC_ARGS=--verbosity=1
+refuses_make "make -n lint-unsafe with no UNSAFE_CRATES" "UNSAFE_CRATES is empty" lint-unsafe
+refuses_make "make -n lint-unsafe with a blank UNSAFE_CRATES" "UNSAFE_CRATES is empty" lint-unsafe UNSAFE_CRATES=' '
+refuses_make "make -n noalias with no NOALIAS_CRATE" "NOALIAS_CRATE is empty" noalias NOALIAS_TYPE=Heap
+refuses_make "make -n noalias with no NOALIAS_TYPE" "NOALIAS_TYPE is empty" noalias NOALIAS_CRATE=alpha
+refuses_make "make -n noalias with a blank NOALIAS_BUILDS" "NOALIAS_BUILDS is empty" \
+  noalias NOALIAS_CRATE=alpha NOALIAS_TYPE=Heap NOALIAS_BUILDS=' '
+for t in codegen codegen-capture codegen-compare; do
+  refuses_make "make -n $t with no CODEGEN_LIB" "CODEGEN_LIB is empty" $t
+  refuses_make "make -n $t with a blank CODEGEN_BUILDS" "CODEGEN_BUILDS is empty" \
+    $t CODEGEN_LIB=libalpha.so CODEGEN_BUILDS=' '
+done
+for t in codegen-capture codegen-compare; do
+  refuses_make "make -n $t with a blank CODEGEN_DIR" "CODEGEN_DIR is empty" $t CODEGEN_LIB=libalpha.so CODEGEN_DIR=' '
+done
+for t in perf-budget perf-budget-print; do
+  refuses_make "make -n $t with no PERF_BUDGET_LIB" "PERF_BUDGET_LIB is empty" $t
+  refuses_make "make -n $t with a blank PERF_BUDGET_BUILDS" "PERF_BUDGET_BUILDS is empty" \
+    $t PERF_BUDGET_LIB=libalpha.so PERF_BUDGET_BUILDS=' '
+done
+refuses_make "make -n skip-summary with no SKIP_LOG" "SKIP_LOG is empty" skip-summary SKIP_MANIFEST=skips.txt
+refuses_make "make -n skip-summary with a blank SKIP_MANIFEST" "SKIP_MANIFEST is empty" skip-summary SKIP_LOG=test.log SKIP_MANIFEST=' '
+refuses_make "make -n glibc-max with no GLIBC_MAX_LIB" "GLIBC_MAX_LIB is empty" glibc-max GLIBC_MAX=2.44
+refuses_make "make -n glibc-max with a blank GLIBC_MAX" "GLIBC_MAX is empty" glibc-max GLIBC_MAX_LIB=libalpha.so GLIBC_MAX=' '
+refuses_make "make -n known-failures with no KNOWN_FAILURES_LOG" "KNOWN_FAILURES_LOG is empty" known-failures KNOWN_FAILURES_LIST=known.txt
+refuses_make "make -n known-failures with a blank KNOWN_FAILURES_LIST" "KNOWN_FAILURES_LIST is empty" known-failures KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=' '
+refuses_make "make -n header-check with no HEADER_CHECK_HEADERS" "HEADER_CHECK_HEADERS is empty" header-check HEADER_CHECK_PREFIXES=FOO_
+refuses_make "make -n header-check with a blank HEADER_CHECK_PREFIXES" "HEADER_CHECK_PREFIXES is empty" header-check HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=' '
+refuses_make "make -n header-check with a blank HEADER_CHECK_UPSTREAM" "HEADER_CHECK_UPSTREAM is empty" header-check HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_ HEADER_CHECK_UPSTREAM=' '
+refuses_make "make -n abi-elf with no ABI_ELF_LIB" "ABI_ELF_LIB is empty" abi-elf ABI_ELF_MAP=foo.map ABI_ELF_SONAME=libfoo.so.1
+refuses_make "make -n abi-elf with a blank ABI_ELF_MAP" "ABI_ELF_MAP is empty" abi-elf ABI_ELF_LIB=libfoo.so.1 ABI_ELF_MAP=' ' ABI_ELF_SONAME=libfoo.so.1
+refuses_make "make -n abi-elf with no ABI_ELF_SONAME" "ABI_ELF_SONAME is empty" abi-elf ABI_ELF_LIB=libfoo.so.1 ABI_ELF_MAP=foo.map
+refuses_make "make -n abi-elf with a blank ABI_ELF_NEEDED" "ABI_ELF_NEEDED is empty" abi-elf ABI_ELF_LIB=libfoo.so.1 ABI_ELF_MAP=foo.map ABI_ELF_SONAME=libfoo.so.1 ABI_ELF_NEEDED=' '
+refuses_make "make -n kani-quotes with a blank KANI_QUOTES_DIR" "KANI_QUOTES_DIR is empty" kani-quotes KANI_QUOTES_DIR=' '
+refuses_make "make -n kani-quotes with no KANI_QUOTES_ROOTS" "KANI_QUOTES_ROOTS is empty" kani-quotes KANI_QUOTES_ROOTS=
+refuses_make "make -n deviations with no DEVIATIONS_RESULTS" "DEVIATIONS_RESULTS is empty" deviations DEVIATIONS_LIST=dev.txt
+refuses_make "make -n deviations with a blank DEVIATIONS_LIST" "DEVIATIONS_LIST is empty" deviations DEVIATIONS_RESULTS=res DEVIATIONS_LIST=' '
+refuses_make "make -n deviations with no DEVIATIONS_LEDGER" "DEVIATIONS_LEDGER is empty" deviations DEVIATIONS_RESULTS=res DEVIATIONS_LIST=dev.txt DEVIATIONS_LEDGER=
+refuses_make "make -n deviations with DEVIATIONS_UPDATE=0" "DEVIATIONS_UPDATE is '0': set it to 1" deviations DEVIATIONS_RESULTS=res DEVIATIONS_LIST=dev.txt DEVIATIONS_UPDATE=0
+refuses_make "make -n deviations with DEVIATIONS_UPDATE=no" "DEVIATIONS_UPDATE is 'no': set it to 1" deviations DEVIATIONS_RESULTS=res DEVIATIONS_LIST=dev.txt DEVIATIONS_UPDATE=no
+refuses_make "make -n known-cites with no KNOWN_CITES_FILE" "KNOWN_CITES_FILE is empty" known-cites KNOWN_CITES_REPO=o/port
+refuses_make "make -n known-cites with a blank KNOWN_CITES_LEDGER" "KNOWN_CITES_LEDGER is empty" known-cites KNOWN_CITES_FILE=known.c KNOWN_CITES_LEDGER=' ' KNOWN_CITES_REPO=o/port
+refuses_make "make -n known-cites with no KNOWN_CITES_REPO" "KNOWN_CITES_REPO is empty" known-cites KNOWN_CITES_FILE=known.c
+refuses_make "make -n known-cites with KNOWN_CITES_OFFLINE=0" "KNOWN_CITES_OFFLINE is '0': set it to 1" known-cites KNOWN_CITES_FILE=known.c KNOWN_CITES_REPO=o/port KNOWN_CITES_OFFLINE=0
+refuses_make "make -n consumers-run with no CONSUMERS_LIB" "CONSUMERS_LIB is empty" consumers-run
+refuses_make "make -n consumers-run with a blank CONSUMERS_DIR" "CONSUMERS_DIR is empty" consumers-run CONSUMERS_LIB=swap CONSUMERS_DIR=' '
+refuses_make "make -n consumers-run with no CONSUMERS_WORK" "CONSUMERS_WORK is empty" consumers-run CONSUMERS_LIB=swap CONSUMERS_WORK=
+# The no-kit guard kit/count/README.md gives ports lists every kit
+# target, so each fails with the kit's message where the package is
+# missing: proved_port_phony and verify, in that order.
+readme_targets=$(sed -n 's/^  PROVED_PORT_TARGETS = //p' kit/count/README.md)
+mk_targets="$(sed -n 's/^proved_port_phony = //p' kit/make/proved-port.mk) verify"
+expect "kit/count/README.md's PROVED_PORT_TARGETS are proved-port.mk's targets" "$readme_targets" "$mk_targets"
+# lint-unsafe.sh's root reader is awk, and the check environments have
+# BusyBox's: its self-test passes with the tools here, needing no cargo.
+# kit/lint-unsafe-test.sh runs the rest of it with cargo.
+sh "$home/make/lint-unsafe.sh" --self-test > "$tmp/out" 2>&1 \
+  || { cat "$tmp/out" >&2; fail "lint-unsafe.sh --self-test: got = failure, want = success"; }
+if grep -v '^ok   \|^===' "$tmp/out"; then fail "lint-unsafe.sh --self-test printed a line other than ok"; fi
+echo "ok lint-unsafe.sh's self-test passes with these tools ($(grep -c '^ok' "$tmp/out") planted roots)"
+if UNSAFE_CRATES='' sh "$home/make/lint-unsafe.sh" "$port" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 2 ] || ! grep -qF 'UNSAFE_CRATES is empty' "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "lint-unsafe.sh, no UNSAFE_CRATES: got = exit $rc, want = exit 2 naming UNSAFE_CRATES"
+fi
+echo "ok lint-unsafe.sh refuses a run with no UNSAFE_CRATES (exit 2)"
+# noalias.sh's scan is grep, sed and the shell, the check environments'
+# BusyBox ones: its self-test (challoc's fixtures) passes with the tools
+# here, needing no cargo. kit/noalias-test.sh runs it with cargo.
+sh "$home/make/noalias.sh" --self-test > "$tmp/out" 2>&1 \
+  || { cat "$tmp/out" >&2; fail "noalias.sh --self-test: got = failure, want = success"; }
+[ "$(grep -c '^self-test: ok ' "$tmp/out")" -eq 5 ] && [ "$(wc -l < "$tmp/out")" -eq 5 ] \
+  || { cat "$tmp/out" >&2; fail "noalias.sh --self-test: got = another output, want = five ok lines"; }
+echo "ok noalias.sh's self-test passes with these tools (5 fixtures)"
+for bad in "NOALIAS_CRATE=" "NOALIAS_TYPE=" "NOALIAS_TYPE=heap:Heap" "NOALIAS_TYPE=heap::" \
+  "NOALIAS_TYPE=heap::2Heap" "NOALIAS_CRATE=a.b" "NOALIAS_BUILDS=q-8"; do
+  if env NOALIAS_CRATE=alpha NOALIAS_TYPE=heap::Heap "$bad" sh "$home/make/noalias.sh" "$port" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+  if [ "$rc" -ne 2 ] || ! grep -qF "${bad%%=*}" "$tmp/out"; then
+    cat "$tmp/out" >&2
+    fail "noalias.sh, $bad: got = exit $rc, want = exit 2 naming ${bad%%=*}"
+  fi
+  echo "ok noalias.sh refuses $bad (exit 2)"
+done
 # Run for real: a port's target that fails fails verify, and the targets
 # after it do not run.
 cp "$port/Makefile" "$tmp/Makefile.verify"
@@ -515,13 +785,13 @@ rmdir "$port/verus/make" "$port/verus/count"
 # A pin KIT does not record, or none, fails every kit target before it
 # runs anything; another counter first on PATH fails verus and
 # verus-count, the targets that run it.
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular verify; do
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run verify; do
   for p in "PROVED_PORT_VERSION=0.0.0-other" "PROVED_PORT_VERSION="; do
     case $p in
       *=) msg="PROVED_PORT_VERSION is not set" ;;
       *) msg="PROVED_PORT_VERSION is 0.0.0-other, but $home/KIT records tag v$version" ;;
     esac
-    if make -s -n -C "$port" "$t" VERUS_BASE=none "$p" > "$tmp/out" 2> "$tmp/err"; then
+    if make -s -n -C "$port" "$t" VERUS_BASE=none UNSAFE_CRATES=alpha-capi NOALIAS_CRATE=alpha NOALIAS_TYPE=Heap CODEGEN_LIB=libalpha.so PERF_BUDGET_LIB=libalpha.so "$p" > "$tmp/out" 2> "$tmp/err"; then
       fail "make -n $t $p: got = success, want = failure"
     fi
     grep -qF "$msg" "$tmp/err" \
@@ -559,7 +829,8 @@ log=$tmp/cargo.log
 # harness is listed only with its feature), fails a run of crate
 # $STUB_FAIL and prints $STUB_SAY in each run. Its `list` prints the
 # build on stdout, as cargo kani does, and for crate $STUB_LIST_FAIL
-# fails it, a compile error on stdout and cargo's summary on stderr. As
+# fails it, a compile error on stdout and cargo's summary on stderr; for
+# crate $STUB_LIST_NONE it passes and writes no kani-list.json. As
 # Kani 0.68.0's does, a
 # separate `-p` takes every bare word after it, so `-p CRATE list` is a
 # usage error (exit 2).
@@ -586,6 +857,7 @@ case " \$* " in
       echo "error: could not compile \$crate" >&2
       exit 101
     fi
+    [ "\$crate" != "\${STUB_LIST_NONE:-}" ] || exit 0
     cp "\$json" kani-list.json; exit 0 ;;
 esac
 echo "Checking harness of \$crate"
@@ -698,6 +970,16 @@ for said in "kani: cargo kani list failed for alpha, printing:" \
     { cat "$tmp/out" >&2; fail "kani.sh, a failed listing: got = no \"$said\", want = it"; }
 done
 echo "ok kani.sh prints a failed listing's output"
+# A listing that passes but writes no kani-list.json fails, though a
+# stale one (beta's) sits in the root: it is removed before the listing,
+# so alpha is not run with beta's harnesses.
+cp "$tmp/lists/beta.json" "$port/kani-list.json"
+refuses "a listing that writes no kani-list.json, a stale one aside" 1 KANI_CRATES=alpha STUB_LIST_NONE=alpha sh "$k"
+[ ! -e "$port/kani-list.json" ] || { rm -f "$port/kani-list.json"; fail "kani.sh, a listing that writes none: the stale kani-list.json is still there"; }
+grep -qxF "kani: cargo kani list wrote no kani-list.json for alpha" "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "kani.sh, a listing that writes none: got = no message naming alpha, want = one"; }
+expect "kani.sh runs nothing after a listing that writes none" "$(cat "$tmp/calls")" "$la"
+echo "ok kani.sh refuses a listing that writes no kani-list.json"
 kani KANI_CRATES=alpha sh "$k" || { cat "$tmp/out" >&2; fail "kani.sh, a listing that passes: kani.sh failed"; }
 ! grep -q 'Compiling alpha for Kani' "$tmp/out" ||
   { cat "$tmp/out" >&2; fail "kani.sh, a listing that passes: got = its build output, want = none"; }
@@ -956,6 +1238,33 @@ echo "ok make kani fails a port with no harnesses that does not declare KANI_NON
 grep -qx 'alpha kani::a_q8 src/lib.rs' "$tmp/out" ||
   { cat "$tmp/out" >&2; fail "make kani-list KANI_ARGS: got = no kani::a_q8, want = the harness quantum8 gates"; }
 echo "ok make kani-list passes KANI_ARGS to the listing"
+
+# A workspace below the root (#71, cg-uutils): KANI_MANIFEST goes to
+# cargo fetch and, after -p, to each cargo kani call; make kani takes it
+# from VERUS_CARGO_FLAGS. One that names no file, or has a space, exits 2.
+mkdir -p "$port/ws"
+: > "$port/ws/Cargo.toml"
+kani KANI_CRATES=alpha KANI_MANIFEST=ws/Cargo.toml sh "$k" ||
+  { cat "$tmp/out" >&2; fail "KANI_MANIFEST: kani.sh failed"; }
+expect "kani.sh KANI_MANIFEST reaches cargo fetch" "$(grep '^fetch' "$log")" \
+  "fetch --locked --manifest-path=ws/Cargo.toml"
+expect "kani.sh KANI_MANIFEST reaches each cargo kani call" "$(cat "$tmp/calls")" \
+  "kani -p=alpha --manifest-path=ws/Cargo.toml list --format json
+kani -p=alpha --manifest-path=ws/Cargo.toml"
+kani KANI_MANIFEST=ws/Cargo.toml sh "$k" ||
+  { cat "$tmp/out" >&2; fail "KANI_MANIFEST with cargo's default selection: kani.sh failed"; }
+expect "kani.sh KANI_MANIFEST with cargo's default selection" "$(cat "$tmp/calls")" \
+  "kani --manifest-path=ws/Cargo.toml list --format json
+kani --manifest-path=ws/Cargo.toml"
+refuses "KANI_MANIFEST naming no file" 2 KANI_MANIFEST=ws/none.toml sh "$k"
+: > "$port/ws/a b.toml"
+refuses "KANI_MANIFEST with a space" 2 KANI_MANIFEST="ws/a b.toml" sh "$k"
+(cd "$port" && PATH="$bin:$PATH" make -s kani KANI_CRATES=alpha VERUS_CARGO_FLAGS='--manifest-path ws/Cargo.toml' > "$tmp/out" 2>&1) ||
+  { cat "$tmp/out" >&2; fail "make kani with VERUS_CARGO_FLAGS' --manifest-path failed"; }
+expect "make kani passes VERUS_CARGO_FLAGS' --manifest-path to kani.sh" "$(grep -v '^fetch' "$log")" \
+  "kani -p=alpha --manifest-path=ws/Cargo.toml list --format json
+kani -p=alpha --manifest-path=ws/Cargo.toml"
+rm -r "$port/ws"
 
 # --- headers.sh ----------------------------------------------------------
 templates=$home/templates

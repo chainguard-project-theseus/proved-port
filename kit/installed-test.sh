@@ -2,8 +2,9 @@
 # kit/installed-test.sh: tests of kit/make as the theseus-proved-port
 # package installs it (the count-installed check). It installs the kit
 # into a scratch root with kit/install.sh, the way the package's build
-# does: the counter built from kit/count as usr/bin/verus-count,
-# kit/make/* (mode 0644) in usr/share/proved-port/make/, all of
+# does: the counter built from kit/count as usr/bin/verus-count, the Go
+# tools as usr/bin/proved-port-fncmp, -stats and -seams (each checked to
+# be its tool), kit/make/* (mode 0644) in usr/share/proved-port/make/, all of
 # kit/templates in usr/share/proved-port/templates/, kit/CHANGELOG.md as
 # usr/share/proved-port/CHANGELOG.md with porting notes for the release,
 # and usr/share/proved-port/KIT with the commit and tag. It holds the script's
@@ -22,7 +23,8 @@
 #   - make verus-headers holds the port's Verus files to the installed
 #     templates, reads no verus/make or verus/count the port still has,
 #     and needs no `# kit:` line.
-# Run it from the repository root. It builds the counter (cargo).
+# Run it from the repository root. It builds the counter (cargo) and the
+# Go tools (go, with no network: they use only the standard library).
 set -eu
 
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
@@ -55,6 +57,10 @@ mkdir "$kitrepo/kit/count"
 for f in Cargo.toml Cargo.lock src; do
   cp -R "kit/count/$f" "$kitrepo/kit/count/"
 done
+mkdir -p "$kitrepo/kit/perf/codegen" "$kitrepo/kit/verus"
+cp -R kit/perf/stats "$kitrepo/kit/perf/"
+cp -R kit/perf/codegen/fncmp "$kitrepo/kit/perf/codegen/"
+cp -R kit/verus/seams "$kitrepo/kit/verus/"
 git -C "$kitrepo" init -q
 git -C "$kitrepo" add .
 git -C "$kitrepo" -c user.name=installed-test -c user.email=installed-test@example.com \
@@ -109,6 +115,23 @@ grep -q "kit/ has changes not in tag v" "$tmp/install.err" \
 rm "$kitrepo/kit/stray"
 echo "ok kit/install.sh installs the release's tag, and refuses another commit or a changed kit/ but with --dev"
 
+# The Go tools, as the package installs them: proved-port-fncmp,
+# proved-port-stats and proved-port-seams in bin/, mode 0755, each the
+# tool its module builds (its usage on a bad flag, exit 2).
+# gotool NAME WANT: bin/proved-port-NAME's first line of usage is WANT.
+gotool() {
+  _b=$root/usr/bin/proved-port-$1
+  expect "kit/install.sh installs proved-port-$1 mode 0755" "$(find "$_b" -perm 755)" "$_b"
+  _rc=0
+  "$_b" -no-such-flag > "$tmp/gotool.out" 2>&1 || _rc=$?
+  expect "proved-port-$1 on a bad flag exits 2" "$_rc" 2
+  expect "proved-port-$1 is $1" "$(grep -m1 '^usage:' "$tmp/gotool.out")" "$2"
+}
+gotool fncmp "usage: fncmp OLD NEW"
+gotool stats "usage:"
+grep -qx '  stats md5 LOG\.\.\.' "$tmp/gotool.out" || { cat "$tmp/gotool.out" >&2; fail "proved-port-stats: its usage names no stats md5"; }
+gotool seams "usage: seams [-C DIR] [-rules FILE] [-write | -check | -entries | -cites]"
+
 # Over the --dev install, at the tag. An install that fails part way (here
 # at its bin/, a file) leaves no KIT, which every kit target refuses, not
 # the --dev install's KIT over a mix of files.
@@ -133,6 +156,34 @@ expect "kit/install.sh over the --dev install records the tag in KIT" \
   "$(sed 1d "$devhome/KIT")" "commit $sha
 tag v$version"
 echo "ok kit/install.sh over an earlier install drops its KIT first and replaces its files whole"
+# A Go tool that does not build fails the install before it touches
+# PREFIX: the earlier install's KIT and binaries stay as they were.
+cp "$devhome/KIT" "$tmp/kit.before"
+cp "$tmp/dev/bin/proved-port-seams" "$tmp/seams.before"
+printf 'package main\n\nfunc broken( {\n' > "$kitrepo/kit/verus/seams/broken.go"
+# --dev, so the changed kit/ is no refusal of its own before the build.
+if install "$tmp/dev" --dev; then
+  fail "kit/install.sh with a Go tool that does not build: got = success, want = failure"
+fi
+rm "$kitrepo/kit/verus/seams/broken.go"
+cmp -s "$tmp/kit.before" "$devhome/KIT" \
+  || fail "kit/install.sh, a Go build that fails: got = the earlier KIT removed or changed, want = it as it was"
+cmp -s "$tmp/seams.before" "$tmp/dev/bin/proved-port-seams" \
+  || fail "kit/install.sh, a Go build that fails: got = the earlier proved-port-seams removed or changed, want = it as it was"
+[ -f "$devhome/make/proved-port.mk" ] \
+  || fail "kit/install.sh, a Go build that fails: got = the earlier make/ removed, want = it as it was"
+echo "ok kit/install.sh with a Go tool that does not build fails and leaves the earlier install as it was"
+# A relative CARGO_TARGET_DIR is read from the caller's directory, by
+# the Go builds too, which run from each module's directory.
+rm -rf "$target/go"
+(cd "$(dirname "$target")" && CARGO_TARGET_DIR=$(basename "$target") sh "$kitrepo/kit/install.sh" "$tmp/rel" 2> "$tmp/install.err") \
+  || { cat "$tmp/install.err" >&2; fail "kit/install.sh with a relative CARGO_TARGET_DIR failed"; }
+for t in fncmp stats seams; do
+  [ -x "$tmp/rel/bin/proved-port-$t" ] || fail "kit/install.sh with a relative CARGO_TARGET_DIR: got = no proved-port-$t, want = installed"
+  [ ! -e "$kitrepo/kit/verus/seams/$(basename "$target")" ] && [ ! -e "$kitrepo/kit/perf/stats/$(basename "$target")" ] \
+    || fail "kit/install.sh with a relative CARGO_TARGET_DIR: got = a target directory under a Go module, want = the caller's"
+done
+echo "ok kit/install.sh with a relative CARGO_TARGET_DIR builds and installs from the caller's target directory"
 PATH=$root/usr/bin:$PATH
 export PATH
 
@@ -204,10 +255,213 @@ expect "make verus-count-test runs no cargo test" \
   "verus-count-test: verus-count is not built here; its package tests it"
 expect "make -n kani-list: the package's kani.sh" \
   "$(shows "$installed" kani-list)" "sh $home/make/kani.sh --list"
+expect "make -n lint-unsafe: the package's lint-unsafe.sh" \
+  "$(shows "$installed" lint-unsafe UNSAFE_CRATES=c)" \
+  "UNSAFE_CRATES='c' UNSAFE_WORKSPACE_LINTS='yes' UNSAFE_MANIFEST='' UNSAFE_CHECK_FLAGS='' sh $home/make/lint-unsafe.sh ."
+if [ ! -f "$home/make/lint-unsafe.sh" ] || ! sh "$home/make/lint-unsafe.sh" --self-test > "$tmp/out"; then
+  cat "$tmp/out" >&2 || true
+  fail "the installed lint-unsafe.sh: got = missing or a failing self-test, want = its self-test passes"
+fi
+echo "ok the installed lint-unsafe.sh passes its self-test"
+expect "make -n noalias: the package's noalias.sh" \
+  "$(shows "$installed" noalias NOALIAS_CRATE=c NOALIAS_TYPE=T)" \
+  "NOALIAS_CRATE='c' NOALIAS_TYPE='T' NOALIAS_BUILDS='default' NOALIAS_FLAGS_default='' NOALIAS_CARGO_FLAGS='' NOALIAS_TARGET_DIR='target' sh $home/make/noalias.sh ."
+if [ ! -f "$home/make/noalias.sh" ] || ! sh "$home/make/noalias.sh" --self-test > "$tmp/out"; then
+  cat "$tmp/out" >&2 || true
+  fail "the installed noalias.sh: got = missing or a failing self-test, want = its self-test passes"
+fi
+echo "ok the installed noalias.sh passes its self-test"
+expect "make -n codegen: the package's codegen.sh" \
+  "$(shows "$installed" codegen CODEGEN_LIB=libc.so)" \
+  "CODEGEN_LIB='libc.so' CODEGEN_BUILDS='default' CODEGEN_FLAGS_default='' CODEGEN_CARGO_FLAGS='' CODEGEN_TARGET_DIR='target' CODEGEN_FNCMP='proved-port-fncmp' CODEGEN_BASE='' sh $home/make/codegen.sh base"
+# codegen.sh refuses a run with no CODEGEN_LIB before it builds anything.
+if [ ! -f "$home/make/codegen.sh" ]; then
+  fail "the installed codegen.sh: got = missing, want = installed"
+fi
+if sh "$home/make/codegen.sh" capture "$tmp/codegen" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 2 ] || ! grep -qF 'CODEGEN_LIB is empty' "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed codegen.sh, no CODEGEN_LIB: got = exit $rc, want = exit 2 naming CODEGEN_LIB"
+fi
+echo "ok the installed codegen.sh refuses a run with no CODEGEN_LIB"
+expect "make -n perf-budget: the package's perf-budget.sh" \
+  "$(shows "$installed" perf-budget PERF_BUDGET_LIB=libc.so PERF_BUDGET_TABLE_default=t.txt)" \
+  "PERF_BUDGET_LIB='libc.so' PERF_BUDGET_BUILDS='default' PERF_BUDGET_TABLE_default='t.txt' PERF_BUDGET_FLAGS_default='' PERF_BUDGET_CARGO_FLAGS='' PERF_BUDGET_TARGET_DIR='target' PERF_BUDGET_SELFTEST_EXPORT='' sh $home/make/perf-budget.sh check"
+# perf-budget.sh builds its checker from the perf-budget.rs installed
+# beside it, and refuses a run with no PERF_BUDGET_LIB before any build.
+for f in perf-budget.sh perf-budget.rs; do
+  [ -f "$home/make/$f" ] || fail "the installed $f: got = missing, want = installed"
+done
+if sh "$home/make/perf-budget.sh" check > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 2 ] || ! grep -qF 'PERF_BUDGET_LIB is empty' "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed perf-budget.sh, no PERF_BUDGET_LIB: got = exit $rc, want = exit 2 naming PERF_BUDGET_LIB"
+fi
+echo "ok the installed perf-budget.sh and perf-budget.rs; the script refuses a run with no PERF_BUDGET_LIB"
+expect "make -n skip-summary: the package's skip-summary.sh" \
+  "$(shows "$installed" skip-summary SKIP_LOG=test.log SKIP_MANIFEST=skips.txt)" \
+  "sh $home/make/skip-summary.sh 'test.log' 'skips.txt'"
+# The installed script runs: a log whose one skip the manifest expects.
+[ -f "$home/make/skip-summary.sh" ] || fail "the installed skip-summary.sh: got = missing, want = installed"
+printf 'SKIP c_mseal no mseal\n' > "$tmp/skip.log"
+printf 'c_mseal\n' > "$tmp/skips.txt"
+if sh "$home/make/skip-summary.sh" "$tmp/skip.log" "$tmp/skips.txt" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qF "skips match $tmp/skips.txt" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed skip-summary.sh, an expected skip: got = exit $rc, want = exit 0 with skips match"
+fi
+echo "ok the installed skip-summary.sh passes an expected skip"
+expect "make -n glibc-max: the package's glibc-max.sh" \
+  "$(shows "$installed" glibc-max GLIBC_MAX_LIB=libc.so GLIBC_MAX=2.44)" \
+  "sh $home/make/glibc-max.sh 'libc.so' '2.44'"
+# The installed script runs: a missing library fails, naming it (the
+# check's environment may have no readelf, so it reads no ELF here).
+[ -f "$home/make/glibc-max.sh" ] || fail "the installed glibc-max.sh: got = missing, want = installed"
+if sh "$home/make/glibc-max.sh" "$tmp/no.so" 2.44 > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 1 ] || ! grep -qxF "error: $tmp/no.so missing" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed glibc-max.sh, a missing library: got = exit $rc, want = exit 1 naming it"
+fi
+echo "ok the installed glibc-max.sh fails a missing library"
+expect "make -n known-failures: the package's known-failures.sh" \
+  "$(shows "$installed" known-failures KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=known.txt)" \
+  "sh $home/make/known-failures.sh 'test.log' 'known.txt'"
+# The installed script runs: a log whose one failure the list knows.
+[ -f "$home/make/known-failures.sh" ] || fail "the installed known-failures.sh: got = missing, want = installed"
+printf 'test api::x ... FAILED\n' > "$tmp/kf.log"
+printf 'api::x\n' > "$tmp/known.txt"
+if sh "$home/make/known-failures.sh" "$tmp/kf.log" "$tmp/known.txt" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qxF "warning: known failure ($tmp/known.txt): api::x" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed known-failures.sh, a known failure: got = exit $rc, want = exit 0 with its warning"
+fi
+echo "ok the installed known-failures.sh passes a known failure"
+expect "make -n header-check: the package's header-check.sh" \
+  "$(shows "$installed" header-check HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_)" \
+  "sh $home/make/header-check.sh '/usr/include' 'FOO_' 'include/foo.h'"
+# The installed script runs: a header whose one definition is upstream's.
+[ -f "$home/make/header-check.sh" ] || fail "the installed header-check.sh: got = missing, want = installed"
+mkdir -p "$tmp/hc/up" "$tmp/hc/ours"
+printf '#define FOO_X 1\n' > "$tmp/hc/up/foo.h"
+printf '#define  FOO_X 1 /* ours */\n' > "$tmp/hc/ours/foo.h"
+if sh "$home/make/header-check.sh" "$tmp/hc/up" FOO_ "$tmp/hc/ours/foo.h" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qxF "ok   foo.h: 1 definitions match $tmp/hc/up/foo.h" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed header-check.sh, a matching header: got = exit $rc, want = exit 0 with its ok line"
+fi
+echo "ok the installed header-check.sh passes a matching header"
+expect "make -n abi-elf: the package's abi-elf.sh" \
+  "$(shows "$installed" abi-elf ABI_ELF_LIB=libfoo.so.1 ABI_ELF_MAP=foo.map ABI_ELF_SONAME=libfoo.so.1)" \
+  "sh $home/make/abi-elf.sh 'libfoo.so.1' 'foo.map' 'libfoo.so.1' 'libc.so.6 ld-linux-x86-64.so.2 ld-linux-aarch64.so.1'"
+# The installed script runs: a missing library fails naming it, before
+# readelf runs (kit/abi-elf-test.sh runs it on built libraries).
+[ -f "$home/make/abi-elf.sh" ] || fail "the installed abi-elf.sh: got = missing, want = installed"
+if sh "$home/make/abi-elf.sh" "$tmp/no.so" "$tmp/no.map" libfoo.so.1 libc.so.6 > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 1 ] || ! grep -qxF "error: $tmp/no.so missing" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed abi-elf.sh, a missing library: got = exit $rc, want = exit 1 naming it"
+fi
+echo "ok the installed abi-elf.sh fails a missing library"
+expect "make -n kani-quotes: the package's kani-quotes.sh" \
+  "$(shows "$installed" kani-quotes)" \
+  "sh $home/make/kani-quotes.sh 'verus/seams' '.'"
+# The installed script runs: a record whose one quoted line is its
+# source's.
+[ -f "$home/make/kani-quotes.sh" ] || fail "the installed kani-quotes.sh: got = missing, want = installed"
+mkdir -p "$tmp/kq/seams" "$tmp/kq/src"
+printf 'pub fn get(v: &Vec<u8>) -> (r: u8)\n' > "$tmp/kq/src/a.rs"
+# shellcheck disable=SC2016 # the record's Markdown backquotes are literal text
+printf '# `get`\n\nSeam S1: `get` (`src/a.rs`).\n\n## 1. Contract\n\n```rust\npub fn get(v: &Vec<u8>) -> (r: u8)\n```\n' > "$tmp/kq/seams/kani-s1.md"
+if (cd "$tmp/kq" && sh "$home/make/kani-quotes.sh" seams .) > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qxF "ok   kani-s1.md: 1 chunks match ./src/a.rs" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed kani-quotes.sh, a matching record: got = exit $rc, want = exit 0 with its ok line"
+fi
+echo "ok the installed kani-quotes.sh passes a matching record"
+expect "make -n deviations: the package's deviations.sh" \
+  "$(shows "$installed" deviations DEVIATIONS_RESULTS=res DEVIATIONS_LIST=dev.txt)" \
+  "sh $home/make/deviations.sh 'res' 'dev.txt' 'docs/abi'"
+# The installed script runs: one listed failure citing an active entry.
+[ -f "$home/make/deviations.sh" ] || fail "the installed deviations.sh: got = missing, want = installed"
+mkdir -p "$tmp/dv/abi"
+printf 'PASS a\nFAIL b\n' > "$tmp/dv/res"
+printf 'b ABI-001: a known difference\n' > "$tmp/dv/dev.txt"
+printf '### ABI-001: x\n\n- **Status:** active\n' > "$tmp/dv/abi/ABI-001.md"
+if (cd "$tmp/dv" && sh "$home/make/deviations.sh" res dev.txt abi) > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qxF "PASS: the failing keys are exactly the 1 listed in dev.txt, each with its reason" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed deviations.sh, a listed failure: got = exit $rc, want = exit 0 with its PASS line"
+fi
+echo "ok the installed deviations.sh passes a listed failure"
+expect "make -n known-cites: the package's known-cites.sh" \
+  "$(shows "$installed" known-cites KNOWN_CITES_FILE=known.c KNOWN_CITES_REPO=o/port)" \
+  "KNOWN_CITES_OFFLINE='' KNOWN_CITES_MACRO='' sh $home/make/known-cites.sh 'known.c' 'docs/abi' 'o/port'"
+# The installed script runs, reading the ledger with the installed
+# ledger-active.sh beside it: one row citing an active entry.
+[ -f "$home/make/known-cites.sh" ] || fail "the installed known-cites.sh: got = missing, want = installed"
+[ -f "$home/make/ledger-active.sh" ] || fail "the installed ledger-active.sh: got = missing, want = installed"
+mkdir -p "$tmp/kc/abi"
+printf '#define KNOWN(c, p) {c, p}\n    KNOWN("ABI-001", a),\n' > "$tmp/kc/known.c"
+printf '### ABI-001: x\n\n- **Status:** active\n' > "$tmp/kc/abi/ABI-001.md"
+if (cd "$tmp/kc" && sh "$home/make/known-cites.sh" known.c abi o/port) > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qxF "PASS: 1 rows of known.c, each citing an active entry of abi or an open issue" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "the installed known-cites.sh, a cited row: got = exit $rc, want = exit 0 with its PASS line"
+fi
+echo "ok the installed known-cites.sh passes a cited row"
+# Through make, with blank KNOWN_CITES_MACRO and KNOWN_CITES_OFFLINE on
+# the command line (which make exports to the recipe as given): the
+# script gets them stripped, reads them as unset, and passes.
+if make -s -C "$installed" known-cites KNOWN_CITES_FILE="$tmp/kc/known.c" KNOWN_CITES_LEDGER="$tmp/kc/abi" KNOWN_CITES_REPO=o/port KNOWN_CITES_MACRO=' ' KNOWN_CITES_OFFLINE=' ' PROVED_PORT_VERSION="$version" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qxF "PASS: 1 rows of $tmp/kc/known.c, each citing an active entry of $tmp/kc/abi or an open issue" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "make known-cites with blank KNOWN_CITES_MACRO and KNOWN_CITES_OFFLINE: got = exit $rc, want = exit 0 with its PASS line"
+fi
+echo "ok make known-cites with blank KNOWN_CITES_MACRO and KNOWN_CITES_OFFLINE"
+expect "make -n consumers-run: the package's consumers.sh" \
+  "$(shows "$installed" consumers-run CONSUMERS_LIB=swap)" \
+  "CONSUMERS_DIR='tests/consumers' CONSUMERS_WORK='target/consumers' CONSUMERS_SONAME='' CONSUMERS_PREFIX='' sh $home/make/consumers.sh run 'swap'"
+# The installed script runs a consumer that skips (no library to load
+# here), through make with a blank CONSUMERS_PREFIX on the command line
+# (which make exports to the recipe as given; the script reads the
+# stripped one as unset).
+[ -f "$home/make/consumers.sh" ] || fail "the installed consumers.sh: got = missing, want = installed"
+mkdir -p "$tmp/cr/swap" "$tmp/cr/tests/consumers/one"
+: > "$tmp/cr/swap/libfoo.so.1"
+# shellcheck disable=SC2016 # run.sh expands it
+printf 'echo "SKIP $CONSUMER_HARNESS"\nexit 77\n' > "$tmp/cr/tests/consumers/one/run.sh"
+if (cd "$tmp/cr" && make -s -f "$installed/Makefile" consumers-run CONSUMERS_LIB=swap CONSUMERS_PREFIX=' ' PROVED_PORT_VERSION="$version") > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 0 ] || ! grep -qxF "SKIP one: $home/make/consumers.sh" "$tmp/out"; then
+  cat "$tmp/out" >&2
+  fail "make consumers-run with the installed consumers.sh, a skipping consumer: got = exit $rc, want = exit 0 with its SKIP line"
+fi
+echo "ok make consumers-run with the installed consumers.sh skips a consumer that skips"
+# The differential fuzzer's driver shell: a driver built from the
+# installed fuzz-diff.c with -I the installed make/ refuses a relative
+# library path (kit/fuzz-diff-test.sh tests the rest).
+for f in fuzz-diff.h fuzz-diff.c; do
+  [ -f "$home/make/$f" ] || fail "the installed $f: got = missing, want = installed"
+done
+cat > "$tmp/fd.c" <<'EOF'
+#include "fuzz-diff.h"
+int main(void) {
+  struct ppd_lib l = {"port", "lib.so", 0, 0, 0};
+  ppd_init("fd", "FD");
+  ppd_open(&l);
+  return 0;
+}
+EOF
+cc -I"$home/make" -o "$tmp/fd" "$tmp/fd.c" "$home/make/fuzz-diff.c" -ldl
+if "$tmp/fd" > "$tmp/out" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" -ne 1 ] || [ "$(cat "$tmp/out")" != "fd: port: lib.so is not an absolute path" ]; then
+  cat "$tmp/out" >&2
+  fail "a driver on the installed fuzz-diff.c, a relative path: got = exit $rc, want = exit 1 naming it"
+fi
+echo "ok a driver built on the installed fuzz-diff.c refuses a relative library path"
 
 # --- PROVED_PORT_VERSION -------------------------------------------------
-for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular verify; do
-  make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
+for t in verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run verify; do
+  make -s -n -C "$installed" "$t" VERUS_BASE=none UNSAFE_CRATES=c NOALIAS_CRATE=c NOALIAS_TYPE=T CODEGEN_LIB=libc.so PERF_BUDGET_LIB=libc.so SKIP_LOG=test.log SKIP_MANIFEST=skips.txt GLIBC_MAX_LIB=libc.so GLIBC_MAX=2.44 KNOWN_FAILURES_LOG=test.log KNOWN_FAILURES_LIST=known.txt HEADER_CHECK_HEADERS=include/foo.h HEADER_CHECK_PREFIXES=FOO_ ABI_ELF_LIB=libc.so ABI_ELF_MAP=c.map ABI_ELF_SONAME=libc.so DEVIATIONS_RESULTS=res DEVIATIONS_LIST=dev.txt KNOWN_CITES_FILE=known.c KNOWN_CITES_REPO=o/port CONSUMERS_LIB=swap PROVED_PORT_VERSION="$version" > /dev/null 2> "$tmp/err" \
     || { cat "$tmp/err" >&2; fail "make -n $t, PROVED_PORT_VERSION=$version (KIT's): got = failure, want = success"; }
   if make -s -n -C "$installed" "$t" VERUS_BASE=none PROVED_PORT_VERSION="$other" > "$tmp/out" 2> "$tmp/err"; then
     fail "make -n $t, PROVED_PORT_VERSION=$other: got = success, want = failure"

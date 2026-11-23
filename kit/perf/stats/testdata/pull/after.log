@@ -1,0 +1,8 @@
+== after
+4f2a1c0d9e8b7a6f5e4d3c2b1a090807  /box/tar/rev-a.tar.gz
+0123456789abcdef0123456789abcdef /box/lib/rev-a/libx.so.0
+fedcba9876543210fedcba9876543211  /box/lib/rev-b/libx.so.0
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /box/run.sh
+cccccccccccccccccccccccccccccccc  /box/run.sh
+0123456789ABCDEF0123456789ABCDEF  /box/upper-is-not-md5sum
+done 23:59 (md5sum below)

@@ -71,6 +71,21 @@ fn count(root: &Path, args: &[&str]) -> (i32, String, String) {
     )
 }
 
+/// [`count`] with the environment variables `env` set.
+fn count_env(root: &Path, env: &[(&str, &str)], args: &[&str]) -> (i32, String, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_verus-count"))
+        .envs(env.iter().copied())
+        .args(args)
+        .arg(root)
+        .output()
+        .expect("runs");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
 /// The counter run with `args` alone, no ROOT: its exit code, standard
 /// output and standard error.
 fn run(args: &[&str]) -> (i32, String, String) {
@@ -186,6 +201,664 @@ fn a_gate_dropped_since_the_base_fails_the_run() {
         );
     }
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// A head that moves its configuration with `--config` to a path the base
+/// lacks is held to the one configuration file of the base's tree
+/// (`verus/count.toml` or another, whatever Git's quoting): moving it with
+/// every gate passes, and narrowing a gate on the way fails. A base with
+/// several such files fails, naming them, even when one is
+/// `verus/count.toml`; one that does not parse, or whose name is not
+/// UTF-8, fails with exit 2. A base with none passes, unless it has
+/// a FLOOR (at the head's `[floor] path` or `verus/FLOOR`), whose gates
+/// came from a configuration the run cannot find: that exits 1, with
+/// `--config` or without. A configuration outside ROOT, which the base
+/// cannot hold at its path, is compared with the base's
+/// `verus/count.toml`, or with the base's one configuration file (several
+/// fail, as above), or, with none, with nothing even beside a FLOOR.
+#[test]
+fn a_moved_configuration_is_held_to_the_base_one() {
+    let dir = repository("moved");
+    let commit = |tag: &str, rm: &[&str], add: &[(&str, &str)]| {
+        for f in rm {
+            fs::remove_file(dir.join(f)).expect("rm");
+        }
+        for (f, text) in add {
+            fs::write(dir.join(f), text).expect("write");
+        }
+        git(&dir, &["add", "-A", "verus"]);
+        git(&dir, &["commit", "-q", "-m", tag]);
+        git(&dir, &["tag", tag]);
+    };
+    commit(
+        "floored",
+        &["verus/count.toml"],
+        &[("verus/FLOOR", "functions 0.0\n")],
+    );
+    commit(
+        "floored2",
+        &["verus/FLOOR"],
+        &[("verus/F2", "functions 0.0\n")],
+    );
+    commit("elsewhere", &["verus/F2"], &[("verus/other.toml", GATED)]);
+    commit("twice", &[], &[("verus/third.toml", PLAIN)]);
+    // A name Git quotes in its output unless asked for it verbatim.
+    commit(
+        "quoted",
+        &["verus/other.toml", "verus/third.toml"],
+        &[("verus/café FLOOR.toml", GATED)],
+    );
+    // A base that ran verus/a.toml and kept an older verus/count.toml.
+    commit(
+        "stale",
+        &["verus/café FLOOR.toml"],
+        &[("verus/count.toml", PLAIN), ("verus/a.toml", GATED)],
+    );
+    // A base configuration with a key this release does not read.
+    let unknown = format!("dropped_key = 1\n{GATED}");
+    commit(
+        "unknown",
+        &["verus/count.toml", "verus/a.toml"],
+        &[("verus/other.toml", unknown.as_str())],
+    );
+    // A base configuration that is not TOML: a `[crates]` table twice,
+    // with comments on the headers.
+    commit(
+        "malformed",
+        &["verus/other.toml"],
+        &[(
+            "verus/m.toml",
+            "[crates] # one\ndir = \"crates\"\n[crates] # two\ndir = \"crates\"\n",
+        )],
+    );
+    let outside =
+        std::env::temp_dir().join(format!("verus-count-outside-{}.toml", std::process::id()));
+    let outside = outside.to_str().expect("utf-8").to_owned();
+    let moved = dir.join("verus/count2.toml");
+    let moved = moved.to_str().expect("utf-8").to_owned();
+    let default = dir.join("verus/count.toml");
+    let default = default.to_str().expect("utf-8").to_owned();
+    let f2 = format!("{PLAIN}[floor]\npath = \"verus/F2\"\n");
+    // A row with no exit code passes the configuration check and fails
+    // later, on GATED's [reach] file, which this repository lacks. A row
+    // whose file is the default one runs without --config.
+    for (file, text, base, code, want) in [
+        (
+            &moved,
+            PLAIN,
+            "gated",
+            Some(1),
+            "FAIL configuration: verus/count2.toml: the [mints] section is gone, so its gate no longer runs, where gated:verus/count.toml runs it",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "gated",
+            Some(1),
+            "ok configuration: gated has no verus/count2.toml, so verus/count2.toml is held to gated:verus/count.toml, the one configuration gated has",
+        ),
+        (
+            &moved,
+            GATED,
+            "gated",
+            None,
+            "ok configuration: verus/count2.toml keeps every gate gated:verus/count.toml runs",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "none",
+            Some(0),
+            "ok configuration: none has no verus/count2.toml or other configuration to compare with",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "floored",
+            Some(1),
+            "FAIL configuration: floored has verus/FLOOR but no configuration",
+        ),
+        (
+            &moved,
+            &f2,
+            "floored",
+            Some(1),
+            "FAIL configuration: floored has verus/FLOOR but no configuration",
+        ),
+        (
+            &moved,
+            &f2,
+            "floored2",
+            Some(1),
+            "FAIL configuration: floored2 has verus/F2 but no configuration",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "elsewhere",
+            Some(1),
+            "FAIL configuration: verus/count2.toml: the [mints] section is gone, so its gate no longer runs, where elsewhere:verus/other.toml runs it",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "elsewhere",
+            Some(1),
+            "ok configuration: elsewhere has no verus/count2.toml, so verus/count2.toml is held to elsewhere:verus/other.toml, the one configuration elsewhere has",
+        ),
+        (
+            &moved,
+            GATED,
+            "elsewhere",
+            None,
+            "ok configuration: verus/count2.toml keeps every gate elsewhere:verus/other.toml runs",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "twice",
+            Some(1),
+            "FAIL configuration: twice has no verus/count2.toml, and 2 configuration files (verus/other.toml, verus/third.toml)",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "stale",
+            Some(1),
+            "FAIL configuration: stale has no verus/count2.toml, and 2 configuration files (verus/a.toml, verus/count.toml)",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "unknown",
+            Some(2),
+            "FAIL configuration: unknown:verus/other.toml: ",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "malformed",
+            Some(2),
+            "FAIL configuration: malformed:verus/m.toml: ",
+        ),
+        (
+            &moved,
+            PLAIN,
+            "quoted",
+            Some(1),
+            "FAIL configuration: verus/count2.toml: the [mints] section is gone, so its gate no longer runs, where quoted:verus/café FLOOR.toml runs it",
+        ),
+        (
+            &default,
+            PLAIN,
+            "floored",
+            Some(1),
+            "FAIL configuration: floored has verus/FLOOR but no configuration",
+        ),
+        (
+            &outside,
+            PLAIN,
+            "floored",
+            Some(0),
+            "ok configuration: floored has no verus/count.toml to compare with",
+        ),
+        (
+            &outside,
+            PLAIN,
+            "elsewhere",
+            Some(1),
+            "ok configuration: elsewhere has no verus/count.toml, so the configuration outside ROOT is held to elsewhere:verus/other.toml, the one configuration elsewhere has",
+        ),
+        (
+            &outside,
+            PLAIN,
+            "elsewhere",
+            Some(1),
+            "the [mints] section is gone, so its gate no longer runs, where elsewhere:verus/other.toml runs it",
+        ),
+        (
+            &outside,
+            PLAIN,
+            "twice",
+            Some(1),
+            "FAIL configuration: twice has no verus/count.toml, and 2 configuration files (verus/other.toml, verus/third.toml)",
+        ),
+    ] {
+        fs::write(file, text).expect("write");
+        let mut args = vec!["--base-rev", base];
+        if *file != default {
+            args.extend(["--config", file.as_str()]);
+        }
+        let (got, out, err) = count(&dir, &args);
+        let exit = code.map_or(!err.contains("FAIL configuration"), |c| got == c);
+        assert!(
+            exit && (out.contains(want) || err.contains(want)),
+            "{base} with {file} {text:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code:?}, {want:?}"
+        );
+        if *file == default {
+            fs::remove_file(file).expect("rm");
+        }
+    }
+    // Git's pathspec variables do not reach the search (#117): under each,
+    // the base's verus/other.toml is still found, and the dropped
+    // `[mints]` still fails. GIT_ICASE_PATHSPECS, which this base cannot
+    // show, has a test of its own below.
+    fs::write(&moved, PLAIN).expect("write");
+    for var in [
+        "GIT_GLOB_PATHSPECS",
+        "GIT_LITERAL_PATHSPECS",
+        "GIT_NOGLOB_PATHSPECS",
+    ] {
+        let (got, out, err) = count_env(
+            &dir,
+            &[(var, "1")],
+            &["--base-rev", "elsewhere", "--config", moved.as_str()],
+        );
+        let want = "where elsewhere:verus/other.toml runs it";
+        assert!(
+            got == 1 && err.contains(want),
+            "{var}=1: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+        );
+    }
+    // A base configuration whose name is not UTF-8 cannot be read back,
+    // so the run fails (exit 2) rather than pass it over.
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let name = std::ffi::OsStr::from_bytes(b"verus/\xff.toml");
+        fs::remove_file(dir.join("verus/m.toml")).expect("rm");
+        fs::remove_file(&moved).expect("rm");
+        fs::write(dir.join(name), GATED).expect("write");
+        git(&dir, &["add", "-A", "verus"]);
+        git(&dir, &["commit", "-q", "-m", "bytes"]);
+        git(&dir, &["tag", "bytes"]);
+        fs::write(&moved, PLAIN).expect("write");
+        let (got, out, err) = count(&dir, &["--base-rev", "bytes", "--config", &moved]);
+        let want = "is not a UTF-8 path under the commit";
+        assert!(
+            got == 2 && err.contains(want),
+            "bytes: got = exit {got}, {out:?}, {err:?}; wanted = exit 2, {want:?}"
+        );
+    }
+    let _ = fs::remove_file(&outside);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// GIT_ICASE_PATHSPECS does not reach the search (#117): a base whose one
+/// configuration is `verus/cargo.toml`, which only a case-folded match
+/// takes for a `Cargo.toml` and excludes, is still found under it, so its
+/// dropped `[mints]` fails, as it does with no variable set.
+#[test]
+fn a_case_folded_pathspec_does_not_hide_a_base_configuration() {
+    let dir = repository("icase");
+    fs::remove_file(dir.join("verus/count.toml")).expect("rm");
+    fs::write(dir.join("verus/cargo.toml"), GATED).expect("write");
+    git(&dir, &["add", "-A", "verus"]);
+    git(&dir, &["commit", "-q", "-m", "lower"]);
+    git(&dir, &["tag", "lower"]);
+    let moved = dir.join("verus/count2.toml");
+    fs::write(&moved, PLAIN).expect("write");
+    let moved = moved.to_str().expect("utf-8");
+    let icase: &[(&str, &str)] = &[("GIT_ICASE_PATHSPECS", "1")];
+    for env in [&[][..], icase] {
+        let (got, out, err) = count_env(&dir, env, &["--base-rev", "lower", "--config", moved]);
+        let want = "where lower:verus/cargo.toml runs it";
+        assert!(
+            got == 1 && err.contains(want),
+            "{env:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A base configuration whose blob cannot be read fails the run (exit 2)
+/// rather than be passed over: the only configuration of the base, an
+/// unreadable gated one beside a readable stale one (where `git grep`
+/// exits 0 or 1 and reports the blob only on stderr), and the base's copy
+/// at the head's own path (whose tree entry exists, so it is not read as
+/// absent).
+#[test]
+fn an_unreadable_base_configuration_fails_closed() {
+    let dir = repository("unreadable");
+    let commit = |tag: &str, rm: &[&str], add: &[(&str, String)]| {
+        for f in rm {
+            fs::remove_file(dir.join(f)).expect("rm");
+        }
+        for (f, text) in add {
+            fs::write(dir.join(f), text).expect("write");
+        }
+        git(&dir, &["add", "-A", "verus"]);
+        git(&dir, &["commit", "-q", "-m", tag]);
+        git(&dir, &["tag", tag]);
+    };
+    // Each configuration is a blob of its own, so deleting it touches no
+    // other commit's.
+    commit(
+        "lone",
+        &["verus/count.toml"],
+        &[("verus/a.toml", format!("{GATED}# lone\n"))],
+    );
+    commit(
+        "beside",
+        &["verus/a.toml"],
+        &[
+            ("verus/b.toml", format!("{GATED}# beside\n")),
+            ("verus/count.toml", format!("{PLAIN}# stale\n")),
+        ],
+    );
+    commit(
+        "headpath",
+        &["verus/b.toml"],
+        &[("verus/count.toml", format!("{GATED}# headpath\n"))],
+    );
+    for object in [
+        "lone:verus/a.toml",
+        "beside:verus/b.toml",
+        "headpath:verus/count.toml",
+    ] {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["rev-parse", object])
+            .output()
+            .expect("runs");
+        let oid = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        assert!(out.status.success() && oid.len() == 40, "{object}: {oid:?}");
+        fs::remove_file(dir.join(".git/objects").join(&oid[..2]).join(&oid[2..]))
+            .expect("rm object");
+    }
+    let moved = dir.join("verus/count2.toml");
+    fs::write(&moved, PLAIN).expect("write");
+    let moved = moved.to_str().expect("utf-8").to_owned();
+    fs::write(dir.join("verus/count.toml"), PLAIN).expect("write");
+    for (base, config, want) in [
+        (
+            "lone",
+            Some(moved.as_str()),
+            "FAIL configuration: git grep crates ",
+        ),
+        (
+            "beside",
+            Some(moved.as_str()),
+            "FAIL configuration: git grep crates ",
+        ),
+        ("headpath", None, "FAIL configuration: git show "),
+    ] {
+        let mut args = vec!["--base-rev", base];
+        args.extend(config.iter().flat_map(|c| ["--config", c]));
+        let (got, out, err) = count(&dir, &args);
+        assert!(
+            got == 2 && err.contains(want),
+            "{base}: got = exit {got}, {out:?}, {err:?}; wanted = exit 2, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A ROOT below the repository's top level: `git grep` there lists the
+/// base's configuration relative to ROOT, and the base reads find it
+/// there (#114), so a moved configuration is held to it.
+#[test]
+fn a_moved_configuration_below_the_top_level_is_held_to_the_base_one() {
+    let top = std::env::temp_dir().join(format!("verus-count-cli-sub-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&top);
+    let dir = top.join("sub");
+    fs::create_dir_all(dir.join("crates/a/src")).expect("mkdir");
+    fs::create_dir_all(dir.join("verus")).expect("mkdir");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n",
+    )
+    .expect("write");
+    fs::write(dir.join("crates/a/src/lib.rs"), "pub fn f() {}\n").expect("write");
+    fs::write(dir.join("verus/a.toml"), GATED).expect("write");
+    git(&top, &["init", "-q"]);
+    git(&top, &["add", "sub"]);
+    git(&top, &["commit", "-q", "-m", "base"]);
+    git(&top, &["tag", "base"]);
+    let moved = dir.join("verus/count2.toml");
+    fs::write(&moved, PLAIN).expect("write");
+    let (got, out, err) = count(
+        &dir,
+        &[
+            "--base-rev",
+            "base",
+            "--config",
+            moved.to_str().expect("utf-8"),
+        ],
+    );
+    let want = "FAIL configuration: verus/count2.toml: the [mints] section is gone, so its gate no longer runs, where base:verus/a.toml runs it";
+    assert!(
+        got == 1 && err.contains(want),
+        "got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&top);
+}
+
+/// A ROOT below the repository's top level reads the base at ROOT's
+/// paths: a gate the base's verus/count.toml there runs, dropped at the
+/// head, fails the run, and an unchanged configuration passes. Before
+/// the base reads resolved from ROOT, both read nothing and passed.
+#[test]
+fn a_root_below_the_top_level_reads_its_base() {
+    let top = std::env::temp_dir().join(format!("verus-count-cli-subroot-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&top);
+    let dir = top.join("sub");
+    fs::create_dir_all(dir.join("crates/a/src")).expect("mkdir");
+    fs::create_dir_all(dir.join("verus")).expect("mkdir");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n",
+    )
+    .expect("write");
+    fs::write(dir.join("crates/a/src/lib.rs"), "pub fn f() {}\n").expect("write");
+    fs::write(dir.join("verus/count.toml"), GATED).expect("write");
+    git(&top, &["init", "-q"]);
+    git(&top, &["add", "sub"]);
+    git(&top, &["commit", "-q", "-m", "gated"]);
+    git(&top, &["tag", "gated"]);
+    fs::write(dir.join("verus/count.toml"), PLAIN).expect("write");
+    let (got, out, err) = count(&dir, &["--base-rev", "gated"]);
+    let want = "FAIL configuration: verus/count.toml: the [mints] section is gone, so its gate no longer runs, where gated:verus/count.toml runs it";
+    assert!(
+        got == 1 && err.contains(want),
+        "dropped gate: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+    );
+    git(&top, &["commit", "-q", "-a", "-m", "plain"]);
+    git(&top, &["tag", "plain"]);
+    let (got, out, err) = count(&dir, &["--base-rev", "plain"]);
+    let want = "ok configuration: verus/count.toml keeps every gate plain:verus/count.toml runs";
+    assert!(
+        got == 0 && out.contains(want),
+        "unchanged: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&top);
+}
+
+/// A repository whose port is in `sub/`: its commit tagged `base` holds
+/// `files` (path under `sub/`, bytes), each a path Git may quote. Returns
+/// the top level and ROOT (`sub/`).
+fn sub_repository(name: &str, files: &[(&[u8], &str)]) -> (PathBuf, PathBuf) {
+    use std::os::unix::ffi::OsStrExt;
+    let top =
+        std::env::temp_dir().join(format!("verus-count-cli-sub-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&top);
+    let dir = top.join("sub");
+    for (path, text) in files {
+        let p = dir.join(std::ffi::OsStr::from_bytes(path));
+        fs::create_dir_all(p.parent().expect("a parent")).expect("mkdir");
+        fs::write(p, text).expect("write");
+    }
+    git(&top, &["init", "-q"]);
+    git(&top, &["add", "-A"]);
+    git(&top, &["commit", "-q", "-m", "base"]);
+    git(&top, &["tag", "base"]);
+    (top, dir)
+}
+
+/// Every base read resolves from a ROOT below the top level (#114): the
+/// crates of a base `dir` (a crate the head deletes is a narrowing), the
+/// base's FLOOR (a lowered figure fails), the base crate's sources (a
+/// raised `rlimit` fails) and its workspace manifest (an inherited edition
+/// reads the same on both sides), and the base sources' names, verbatim
+/// (one Git quotes reads back; one that is not UTF-8 fails, exit 2).
+#[test]
+#[cfg(unix)]
+fn a_root_below_the_top_level_reads_every_base_file() {
+    let manifest = |name: &str| {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\n[package.metadata.verus]\nverify = true\n"
+        )
+    };
+    let check = |what: &str, got: i32, out: &str, err: &str, code: i32, want: &str| {
+        assert!(
+            got == code && (out.contains(want) || err.contains(want)),
+            "{what}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+        );
+    };
+    // A crate of `dir` the head deletes.
+    let (ma, mb) = (manifest("a"), manifest("b"));
+    let (top, dir) = sub_repository(
+        "deleted",
+        &[
+            (b"verus/count.toml", PLAIN),
+            (b"crates/a/Cargo.toml", &ma),
+            (b"crates/a/src/lib.rs", "pub fn f() {}\n"),
+            (b"crates/b/Cargo.toml", &mb),
+            (b"crates/b/src/lib.rs", "pub fn g() {}\n"),
+        ],
+    );
+    fs::remove_dir_all(dir.join("crates/b")).expect("rm");
+    let (got, out, err) = count(&dir, &["--base-rev", "base"]);
+    check(
+        "deleted crate",
+        got,
+        &out,
+        &err,
+        1,
+        "[crates] crate \"b\" at \"crates/b\" is no longer read",
+    );
+    let _ = fs::remove_dir_all(&top);
+    // A lowered FLOOR, and a limit raised in the base crate's source, in a
+    // file Git quotes beside the one it reads.
+    let split =
+        |attr: &str| format!("use vstd::prelude::*;\nverus! {{\n{attr} pub fn f() {{}}\n}}\n");
+    let lib = "mod split;\npub fn o() {}\n";
+    let (top, dir) = sub_repository(
+        "ratchets",
+        &[
+            (b"verus/count.toml", RATCHET_CONFIG),
+            (b"verus/FLOOR", RATCHET_FLOOR),
+            (b"verus/RLIMIT", RATCHET_RLIMIT),
+            (b"crates/a/Cargo.toml", &ma),
+            (b"crates/a/src/lib.rs", lib),
+            (b"crates/a/src/split.rs", &split("#[verifier::rlimit(5)]")),
+            ("crates/a/src/café.rs".as_bytes(), "// No functions.\n"),
+        ],
+    );
+    let stats = top.join("stats.json");
+    fs::write(&stats, stats_naming(&[("a::split::f", 1_000_000)])).expect("write");
+    let args = |floor: &Path| {
+        vec![
+            "--floor".to_owned(),
+            floor.to_string_lossy().into_owned(),
+            "--rlimit".to_owned(),
+            stats.to_string_lossy().into_owned(),
+            "--base-rev".to_owned(),
+            "base".to_owned(),
+        ]
+    };
+    let run_at = |a: Vec<String>| {
+        let a: Vec<&str> = a.iter().map(String::as_str).collect();
+        count(&dir, &a)
+    };
+    let (got, out, err) = run_at(args(&dir.join("verus/FLOOR")));
+    check(
+        "as committed",
+        got,
+        &out,
+        &err,
+        0,
+        "ok rlimit headroom: 1 functions",
+    );
+    fs::write(
+        dir.join("verus/FLOOR"),
+        RATCHET_FLOOR.replace("functions 50.0\nlines", "functions 40.0\nlines"),
+    )
+    .expect("write");
+    let (got, out, err) = run_at(args(&dir.join("verus/FLOOR")));
+    check(
+        "lowered floor",
+        got,
+        &out,
+        &err,
+        1,
+        "lowers functions from 50.0% to 40.0%",
+    );
+    fs::write(dir.join("verus/FLOOR"), RATCHET_FLOOR).expect("write");
+    fs::write(dir.join("crates/a/src/split.rs"), split("")).expect("write");
+    let (got, out, err) = run_at(args(&dir.join("verus/FLOOR")));
+    check(
+        "raised rlimit",
+        got,
+        &out,
+        &err,
+        1,
+        "raises a::split::f's rlimit from 5 to 10",
+    );
+    let _ = fs::remove_dir_all(&top);
+    // A base source whose name is not UTF-8 cannot be read back.
+    let (top, dir) = sub_repository(
+        "bytes",
+        &[
+            (b"verus/count.toml", RATCHET_CONFIG),
+            (b"verus/FLOOR", RATCHET_FLOOR),
+            (b"verus/RLIMIT", RATCHET_RLIMIT),
+            (b"crates/a/Cargo.toml", &ma),
+            (b"crates/a/src/lib.rs", lib),
+            (b"crates/a/src/split.rs", &split("#[verifier::rlimit(5)]")),
+            (b"crates/a/src/\xff.rs", "// No functions.\n"),
+        ],
+    );
+    let stats = top.join("stats.json");
+    fs::write(&stats, stats_naming(&[("a::split::f", 1_000_000)])).expect("write");
+    let s = stats.to_string_lossy().into_owned();
+    let floor = dir.join("verus/FLOOR").to_string_lossy().into_owned();
+    let (got, out, err) = count(
+        &dir,
+        &["--floor", &floor, "--rlimit", &s, "--base-rev", "base"],
+    );
+    check("not UTF-8", got, &out, &err, 2, "is not a UTF-8 path");
+    let _ = fs::remove_dir_all(&top);
+    // The edition a crate inherits from the workspace at the base.
+    let (top, dir) = sub_repository(
+        "workspace",
+        &[
+            (
+                b"Cargo.toml",
+                "[workspace]\nmembers = [\"crates/a\"]\n[workspace.package]\nedition = \"2024\"\n",
+            ),
+            (
+                b"crates/a/Cargo.toml",
+                "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition.workspace = true\n[package.metadata.verus]\nverify = true\n",
+            ),
+            (
+                b"crates/a/src/lib.rs",
+                "::vstd::prelude::verus! {\n#[verifier::rlimit(10)]\npub fn f() {}\n}\n",
+            ),
+            (
+                b"verus/count.toml",
+                &format!("{PLAIN}[rlimit]\npath = \"verus/RLIMIT\"\n"),
+            ),
+            (b"verus/RLIMIT", "max-share 65\n"),
+        ],
+    );
+    let stats = top.join("stats.json");
+    fs::write(&stats, ratchet_stats(3_000_000).replace("a::v", "a::f")).expect("write");
+    let s = stats.to_string_lossy().into_owned();
+    let (got, out, err) = count(&dir, &["--rlimit", &s, "--base-rev", "base"]);
+    check("workspace", got, &out, &err, 0, "ok rlimit headroom");
+    let _ = fs::remove_dir_all(&top);
 }
 
 /// A narrowing named by a `[[narrowed]]` line with a reason passes, and the
@@ -857,6 +1530,502 @@ fn a_reach_section_needs_its_file() {
 /// fallback and its function counts; in 2024 it takes the first rule. The
 /// edition is the library's (`[lib]`'s own, else the package's), never a
 /// test's, bench's or example's.
+/// A `thread_local!` not shown to be std's is read as any other macro of
+/// its name (#68): the crate's own `macro_rules! thread_local` is
+/// expanded, so the function it writes is counted, and another crate's,
+/// by its path or by a `use`, counts as one Outside `thread_local!`
+/// function. std's, by `::std::` or by the bare name where nothing else
+/// may bind it, writes statics alone and adds no row.
+#[test]
+fn a_thread_local_not_std_s_is_counted() {
+    for (i, (lib, want)) in [
+        (
+            "macro_rules! thread_local { () => { pub fn made() {} }; }\nthread_local!();\n",
+            vec![("Outside", "crates/a/src/lib.rs:2", "made")],
+        ),
+        (
+            "elsewhere::thread_local! {}\n",
+            vec![("Outside", "crates/a/src/lib.rs:1", "thread_local!")],
+        ),
+        (
+            "use elsewhere::thread_local;\nthread_local! { static A: u8 = 1; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:2", "thread_local!")],
+        ),
+        (
+            "::std::thread_local! { static A: u8 = 1; }\nthread_local! { static B: u8 = 2; }\n",
+            vec![],
+        ),
+        // A bare one only a `*` may bind to another macro is std's in
+        // nearly every port (beside `vstd::prelude::*`): it counts
+        // nothing, as before, though its module's globs place no type.
+        (
+            "use vstd::prelude::*;\nthread_local! { static C: u8 = 3; }\n",
+            vec![],
+        ),
+        ("std::thread_local! { static D: u8 = 4; }\n", vec![]),
+        // std's imported by name: the `use` binds the bare name, so it is
+        // not shown to be std's, but its path is std's, so it counts
+        // nothing.
+        (
+            "use std::thread_local;\nthread_local! { static E: u8 = 5; }\n",
+            vec![],
+        ),
+        // A module of the crate named `core` shadows the extern prelude's:
+        // `core::thread_local!` is the crate's own macro, expanded.
+        (
+            "mod core {\n    macro_rules! thread_local { () => { pub fn made() {} }; }\n    pub(crate) use thread_local;\n}\ncore::thread_local!();\n",
+            vec![("Outside", "crates/a/src/lib.rs:5", "made")],
+        ),
+        // With a Cargo dependency renamed to `std`, `std::` and a `use
+        // std::thread_local;` may name another crate's macro: each counts.
+        (
+            "RENAMED\nstd::thread_local! { static F: u8 = 6; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:1", "thread_local!")],
+        ),
+        (
+            "RENAMED\nuse std::thread_local;\nthread_local! { static G: u8 = 7; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:2", "thread_local!")],
+        ),
+        // A bare one beside a `*` or a `#[macro_use]` that may bring
+        // another crate's `thread_local` counts as one (#122): a glob of
+        // another crate, of a module of this crate that imports the name or
+        // globs another crate in turn, or a `#[macro_use]` of a crate other
+        // than std's or Verus's. std's, core's and Verus's globs, a glob of
+        // a module that brings nothing in, and `#[macro_use]` of std or
+        // vstd do not.
+        (
+            "use elsewhere::*;\nthread_local! { static H: u8 = 8; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:2", "thread_local!")],
+        ),
+        (
+            "mod m {\n    pub(crate) use elsewhere::*;\n}\nuse m::*;\nthread_local! { static J: u8 = 10; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:5", "thread_local!")],
+        ),
+        (
+            "#[macro_use]\nextern crate elsewhere;\nthread_local! { static K: u8 = 11; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        (
+            "use std::io::prelude::*;\nuse core::cell::*;\nuse verus_builtin_macros::*;\nthread_local! { static L: u8 = 12; }\n",
+            vec![],
+        ),
+        (
+            "mod m {\n    pub(crate) use std::cell::*;\n    pub fn f() {}\n}\nuse m::*;\nmod n {\n    use super::*;\n    thread_local! { static M: u8 = 13; }\n}\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "f")],
+        ),
+        (
+            "#[macro_use]\nextern crate std;\n#[macro_use]\nextern crate vstd;\nthread_local! { static N: u8 = 14; }\n",
+            vec![],
+        ),
+        // A glob only tests build is not in a shipped build.
+        (
+            "#[cfg(test)]\nuse elsewhere::*;\nthread_local! { static O: u8 = 15; }\n",
+            vec![],
+        ),
+        // From 2018 on, a glob's plain first segment in a module other
+        // than the root names a module in scope there or a crate, not the
+        // root's module of that name: `elsewhere` here is the crate.
+        (
+            "mod elsewhere {}\nmod n {\n    use elsewhere::*;\n    thread_local! { static P: u8 = 16; }\n}\n",
+            vec![("Outside", "crates/a/src/lib.rs:4", "thread_local!")],
+        ),
+        (
+            "mod n {\n    mod elsewhere {}\n    use elsewhere::*;\n    thread_local! { static Q: u8 = 17; }\n}\n",
+            vec![],
+        ),
+        // A name a `use` rebinds, or a Cargo dependency renamed to Verus's
+        // crate, is not that crate.
+        (
+            "use elsewhere as std;\nuse std::*;\nthread_local! { static R: u8 = 18; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        (
+            "RENAMED vstd\nuse vstd::prelude::*;\nthread_local! { static S: u8 = 19; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:2", "thread_local!")],
+        ),
+        (
+            "RENAMED vstd\n#[macro_use]\nextern crate vstd;\nthread_local! { static T: u8 = 20; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        (
+            "extern crate elsewhere as core;\nuse core::*;\nthread_local! { static Y: u8 = 25; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        // A module under a `cfg` the counter cannot settle may be left
+        // out, and the glob then names the crate.
+        (
+            "#[cfg(feature = \"stub\")]\nmod elsewhere {}\nuse elsewhere::*;\nthread_local! { static AH: u8 = 34; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:4", "thread_local!")],
+        ),
+        // So may one inside it, or one a `cfg`-gated `verus!` block
+        // declares.
+        (
+            "#[cfg(feature = \"stub\")]\nmod e {\n    pub mod inner {}\n}\nuse e::inner::*;\nthread_local! { static AI: u8 = 35; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:6", "thread_local!")],
+        ),
+        (
+            "#[cfg(feature = \"stub\")]\nverus! {\n    mod elsewhere {}\n}\nuse elsewhere::*;\nthread_local! { static AJ: u8 = 36; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:6", "thread_local!")],
+        ),
+        // A `cfg` may select a module of that name or the alias: either
+        // may be what the glob names.
+        (
+            "#[cfg(feature = \"local\")]\nmod core {}\n#[cfg(not(feature = \"local\"))]\nextern crate elsewhere as core;\nuse core::*;\nthread_local! { static AB: u8 = 28; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:6", "thread_local!")],
+        ),
+        // From 2018 on a leading `::` names a crate, never a module in
+        // scope; `::std::` is still std's.
+        (
+            "mod n {\n    mod elsewhere {}\n    use ::elsewhere::*;\n    thread_local! { static X: u8 = 24; }\n}\n",
+            vec![("Outside", "crates/a/src/lib.rs:4", "thread_local!")],
+        ),
+        (
+            "use ::std::cell::*;\nthread_local! { static Z: u8 = 26; }\n",
+            vec![],
+        ),
+        (
+            "RENAMED verus_builtin\n#[macro_use]\nextern crate verus_builtin;\nthread_local! { static W: u8 = 23; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        // A `std` or `core` that a `use` or an `extern crate .. as` gives
+        // another crate names that crate in a named import and in a path
+        // (#137).
+        (
+            "extern crate elsewhere as core;\nuse core::thread_local;\nthread_local! { static AT: u8 = 46; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        (
+            "use elsewhere as core;\ncore::thread_local! { static AU: u8 = 47; }\n",
+            vec![("Outside", "crates/a/src/lib.rs:2", "thread_local!")],
+        ),
+        (
+            "extern crate elsewhere as std;\nmod n {\n    std::thread_local! { static AV: u8 = 48; }\n}\n",
+            vec![("Outside", "crates/a/src/lib.rs:3", "thread_local!")],
+        ),
+        (
+            "mod n {\n    use elsewhere as core;\n    use core::thread_local;\n    thread_local! { static AW: u8 = 49; }\n}\n",
+            vec![("Outside", "crates/a/src/lib.rs:4", "thread_local!")],
+        ),
+        // From 2018 on a `use` path's `core` in `n` is the crate, not the
+        // root's module of that name (#140).
+        (
+            "mod core {\n    pub(crate) use elsewhere::thread_local;\n}\nmod n {\n    use core::thread_local;\n    thread_local! { static BC: u8 = 55; }\n}\n",
+            vec![],
+        ),
+        // A root `use` does not rebind a path in another module from 2018
+        // on: `core` in `n` is core.
+        (
+            "use elsewhere as core;\nmod n {\n    core::thread_local! { static AX: u8 = 50; }\n    use core::thread_local;\n    thread_local! { static AY: u8 = 51; }\n}\n",
+            vec![],
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        // A `RENAMED` first line stands for a Cargo.toml that renames a
+        // dependency to `std`, `RENAMED vstd` to `vstd`.
+        let (renamed, lib) = match lib.split_once('\n') {
+            Some(("RENAMED", rest)) => (Some("std"), rest),
+            Some((first, rest)) if first.starts_with("RENAMED ") => {
+                (Some(&first["RENAMED ".len()..]), rest)
+            }
+            _ => (None, lib),
+        };
+        let dir = crate_of(&format!("thread-local-{i}"), &[("lib.rs", lib)]);
+        if let Some(name) = renamed {
+            fs::write(
+                dir.join("crates/a/Cargo.toml"),
+                format!("[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[package.metadata.verus]\nverify = true\n[dependencies]\n{name} = {{ package = \"other\", path = \"x\" }}\n"),
+            )
+            .expect("write");
+        }
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<(String, String, String)> = list_rows(&out)
+            .into_iter()
+            .map(|r| (r.0, r.1, r.2))
+            .collect();
+        let want: Vec<(String, String, String)> = want
+            .iter()
+            .map(|(c, at, n)| ((*c).to_owned(), (*at).to_owned(), (*n).to_owned()))
+            .collect();
+        assert!(
+            got == 0 && rows == want,
+            "{lib:?}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A glob of a module of this crate that brings the name in by a `use`
+    // may bring another crate's: the invocation resolves as any other
+    // macro's, and a re-export the counter does not follow fails the run.
+    let dir = crate_of(
+        "thread-local-binds",
+        &[(
+            "lib.rs",
+            "mod m {\n    pub(crate) use elsewhere::thread_local;\n}\nuse m::*;\nthread_local! { static I: u8 = 9; }\n",
+        )],
+    );
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("thread_local! may come through `m::*`"),
+        "binds: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // In 2015 a `use` path starts at the crate root, so `core` in `n` is
+    // the root's module, not core (#140): its re-export may be another
+    // crate's macro, and one the counter does not follow fails the run.
+    let dir = crate_of(
+        "thread-local-2015-module",
+        &[(
+            "lib.rs",
+            "extern crate elsewhere;\nmod core {\n    pub(crate) use elsewhere::thread_local;\n}\nmod n {\n    use core::thread_local;\n    thread_local! { static BB: u8 = 54; }\n}\n",
+        )],
+    );
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2015\"\n[package.metadata.verus]\nverify = true\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains(
+                "thread_local! is imported from this crate by a path the counter does not follow"
+            ),
+        "2015 module: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // From 2018 on (the edition boundary of the rule) `core` in `n` is the
+    // crate, not the root's module: the bare one is std's.
+    let dir = crate_of(
+        "thread-local-2018-module",
+        &[(
+            "lib.rs",
+            "mod core {\n    pub(crate) use elsewhere::thread_local;\n}\nmod n {\n    use core::thread_local;\n    thread_local! { static BE: u8 = 57; }\n}\n",
+        )],
+    );
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2018\"\n[package.metadata.verus]\nverify = true\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &["--list"]);
+    assert!(
+        got == 0 && list_rows(&out).is_empty(),
+        "2018 module: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, no rows"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // In 2015 a `use` path starts at the crate root: `elsewhere` in `n` is
+    // the root's empty module, so the bare one stays std's; with no such
+    // module at the root it is the crate, though `n` has a child
+    // `elsewhere`.
+    for (case, lib, want) in [
+        (
+            "the root's module",
+            "mod elsewhere {}\nmod n {\n    use elsewhere::*;\n    thread_local! { static U: u8 = 21; }\n}\n",
+            vec![],
+        ),
+        (
+            "a `cfg`-gated module beside the crate",
+            "#[cfg(feature = \"stub\")]\nmod elsewhere {}\n#[cfg(not(feature = \"stub\"))]\nextern crate elsewhere;\nuse elsewhere::*;\nthread_local! { static AG: u8 = 33; }\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:6".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob that brings a module named core",
+            "extern crate elsewhere;\nmod outer {\n    pub mod core {\n        pub use elsewhere::*;\n    }\n}\nuse outer::*;\nmod n {\n    use core::*;\n    thread_local! { static AM: u8 = 39; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:10".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob through an alias that brings a module named core",
+            "extern crate elsewhere;\nmod outer {\n    pub mod core {\n        pub use elsewhere::*;\n    }\n}\nuse outer as alias;\nuse alias::*;\nmod n {\n    use core::*;\n    thread_local! { static AO: u8 = 41; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:11".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob through an alias that brings a module named vstd",
+            "extern crate elsewhere;\nmod outer {\n    pub mod vstd {\n        pub mod prelude {\n            pub use elsewhere::*;\n        }\n    }\n}\nuse outer as alias;\nuse alias::*;\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AP: u8 = 42; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:13".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob of an alias named core that brings vstd",
+            "extern crate elsewhere;\nmod outer {\n    pub mod vstd {\n        pub mod prelude {\n            pub use elsewhere::*;\n        }\n    }\n}\nuse outer as core;\nuse core::*;\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AQ: u8 = 43; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:13".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob of an extern crate alias named core",
+            "extern crate elsewhere as core;\nuse core::*;\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AS: u8 = 45; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob of a module named core that brings vstd",
+            "extern crate elsewhere;\nmod core {\n    pub mod vstd {\n        pub mod prelude {\n            pub use elsewhere::*;\n        }\n    }\n}\nuse core::*;\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AR: u8 = 44; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:12".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root glob that brings a module named vstd",
+            "extern crate elsewhere;\nmod outer {\n    pub mod vstd {\n        pub mod prelude {\n            pub use elsewhere::*;\n        }\n    }\n}\nuse outer::*;\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AN: u8 = 40; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:12".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `use` alias of vstd",
+            "extern crate elsewhere;\nuse elsewhere as vstd;\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AC: u8 = 29; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `use` alias of core",
+            "extern crate elsewhere;\nuse elsewhere as core;\nmod n {\n    use core::*;\n    thread_local! { static AD: u8 = 30; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `mod vstd` that re-exports a crate's module",
+            "mod vstd {\n    pub(crate) use elsewhere::prelude;\n}\nmod n {\n    use vstd::prelude::*;\n    thread_local! { static AE: u8 = 31; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:6".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `mod core` that re-exports a crate's module",
+            "mod core {\n    pub(crate) use elsewhere::cell;\n}\nuse core::cell::*;\nthread_local! { static AF: u8 = 32; }\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `mod core` that globs a crate",
+            "mod core {\n    pub use elsewhere::*;\n}\nuse core::*;\nthread_local! { static AA: u8 = 27; }\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `use` alias of core, in a named import (#137)",
+            "extern crate elsewhere;\nuse elsewhere as core;\nmod n {\n    use core::thread_local;\n    thread_local! { static AZ: u8 = 52; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+        (
+            "a root `use` alias of core, beside a path in another module",
+            "extern crate elsewhere;\nuse elsewhere as core;\nmod n {\n    core::thread_local! { static BA: u8 = 53; }\n}\n",
+            vec![],
+        ),
+        (
+            "the crate, beside a child module",
+            "extern crate elsewhere;\nmod n {\n    mod elsewhere {}\n    use elsewhere::*;\n    thread_local! { static V: u8 = 22; }\n}\n",
+            vec![(
+                "Outside".to_owned(),
+                "crates/a/src/lib.rs:5".to_owned(),
+                "thread_local!".to_owned(),
+            )],
+        ),
+    ] {
+        let dir = crate_of("thread-local-2015", &[("lib.rs", lib)]);
+        fs::write(
+            dir.join("crates/a/Cargo.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2015\"\n[package.metadata.verus]\nverify = true\n",
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<(String, String, String)> = list_rows(&out)
+            .into_iter()
+            .map(|r| (r.0, r.1, r.2))
+            .collect();
+        assert!(
+            got == 0 && rows == want,
+            "2015, {case}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A module file whose own `#![cfg]` may leave it out: the glob names
+    // the crate then, in either edition.
+    for (edition, lib, line) in [
+        (
+            "2024",
+            "mod elsewhere;\nuse elsewhere::*;\nthread_local! { static AK: u8 = 37; }\n",
+            3,
+        ),
+        (
+            "2015",
+            "mod elsewhere;\n#[cfg(not(feature = \"stub\"))]\nextern crate elsewhere;\nuse elsewhere::*;\nthread_local! { static AL: u8 = 38; }\n",
+            5,
+        ),
+    ] {
+        let dir = crate_of(
+            "thread-local-file-cfg",
+            &[
+                ("lib.rs", lib),
+                ("elsewhere.rs", "#![cfg(feature = \"stub\")]\n"),
+            ],
+        );
+        fs::write(
+            dir.join("crates/a/Cargo.toml"),
+            format!("[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"{edition}\"\n[package.metadata.verus]\nverify = true\n"),
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<(String, String, String)> = list_rows(&out)
+            .into_iter()
+            .map(|r| (r.0, r.1, r.2))
+            .collect();
+        let want = vec![(
+            "Outside".to_owned(),
+            format!("crates/a/src/lib.rs:{line}"),
+            "thread_local!".to_owned(),
+        )];
+        assert!(
+            got == 0 && rows == want,
+            "file #![cfg], {edition}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 #[test]
 fn the_edition_sets_what_an_expr_matches() {
     let lib = "macro_rules! m { ($e:expr) => {}; ($t:tt) => { pub fn unproved() {} }; }\nm!(_);\n";
@@ -1073,6 +2242,458 @@ fn every_shipped_file_is_scanned_for_exports() {
         }
         let _ = fs::remove_dir_all(&dir);
     }
+}
+
+/// An export a `cfg_attr` applies roots the walk where a shipped build
+/// can meet the predicate (#153): with an empty
+/// REACH, an unverified `cfg_attr(feature = "export-symbols",
+/// unsafe(export_name = prefix!(..)))` function and the helper it calls
+/// fail as reached, with the feature in `verus_sets` or not. Negative:
+/// under `cfg_attr(test, ..)` neither is an entry point, so the run
+/// passes.
+#[test]
+fn an_export_under_cfg_attr_roots_the_walk() {
+    let sets = "verus_sets = ['feature = \"export-symbols\"']\n";
+    let reach = "[reach]\npath = \"verus/REACH\"\n";
+    let lib = |p: &str| {
+        format!(
+            "fn helper() {{}}\n#[cfg_attr({p}, unsafe(export_name = prefix!(BZ2_x)))]\npub extern \"C\" fn api() {{ helper() }}\n"
+        )
+    };
+    for (config, src, reached) in [
+        (
+            format!("{PLAIN}{sets}{reach}"),
+            lib("feature = \"export-symbols\""),
+            true,
+        ),
+        (
+            format!("{PLAIN}{reach}"),
+            lib("feature = \"export-symbols\""),
+            true,
+        ),
+        (format!("{PLAIN}{sets}{reach}"), lib("test"), false),
+    ] {
+        let dir = crate_of("cfg-attr-export", &[("lib.rs", &src)]);
+        fs::write(dir.join("verus/count.toml"), &config).expect("write");
+        fs::write(dir.join("verus/REACH"), "").expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        if reached {
+            assert!(
+                got == 1
+                    && err.contains("`api` is reachable from a C entry point")
+                    && err.contains("`helper` is reachable from a C entry point"),
+                "{config}{src}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, api and helper reached"
+            );
+        } else {
+            assert!(
+                got == 0,
+                "{config}{src}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// A `macro_rules!` under a `cfg` that `verus_sets` names is sure in
+/// Verus's build but not in a shipped one, which may compile the earlier
+/// definition of its name instead: both are candidates (#26), so a pair
+/// that counts differently fails the run and one that counts alike
+/// passes, written or emitted, as the same pair under `cfg(unix)` does.
+#[test]
+fn a_macro_a_shipped_build_may_skip_does_not_shadow_the_one_before() {
+    let jit = "verus_sets = ['feature = \"jit\"']\n";
+    let arch = "verus_sets = ['target_arch = \"x86_64\"', 'target_arch = \"aarch64\"']\n";
+    let differ = Some("m! could be any of 2 definitions");
+    for (config, lib, want) in [
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\n#[cfg(feature = \"jit\")]\nmacro_rules! m { () => { fn a() {} }; }\nm!();\n",
+            differ,
+        ),
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} }; }\n#[cfg(feature = \"jit\")]\nmacro_rules! m { () => { fn a() {} }; }\nm!();\n",
+            None,
+        ),
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\n#[cfg(feature = \"jit\")]\nmod j {\n    macro_rules! m { () => { fn a() {} }; }\n    m!();\n}\n",
+            None,
+        ),
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\nmacro_rules! def { () => { #[cfg(feature = \"jit\")] macro_rules! m { () => { fn a() {} }; } }; }\ndef!();\nm!();\n",
+            differ,
+        ),
+        // The `cfg` is on what holds the definition: a `#[macro_use]`
+        // module, a `verus!` block, or a `verus!` block an expansion
+        // writes it in.
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\n#[cfg(feature = \"jit\")]\n#[macro_use]\nmod j {\n    macro_rules! m { () => { fn a() {} }; }\n}\nm!();\n",
+            differ,
+        ),
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\n#[cfg(feature = \"jit\")]\nverus! {\n    macro_rules! m { () => { fn a() {} }; }\n}\nm!();\n",
+            differ,
+        ),
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\nmacro_rules! def { () => { macro_rules! m { () => { fn a() {} }; } }; }\n#[cfg(feature = \"jit\")]\nverus! {\n    def!();\n}\nm!();\n",
+            differ,
+        ),
+        (
+            arch,
+            "#[cfg(target_arch = \"x86_64\")]\nmacro_rules! m { () => { fn a() {} fn b() {} }; }\n#[cfg(target_arch = \"aarch64\")]\nmacro_rules! m { () => { fn a() {} }; }\nm!();\n",
+            differ,
+        ),
+        (
+            "",
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\nmacro_rules! m { () => { fn a() {} }; }\nm!();\n",
+            None,
+        ),
+        // A `cfg` the counter cannot read may be false: the definition
+        // under it does not shadow.
+        (
+            jit,
+            "macro_rules! m { () => { fn a() {} fn b() {} }; }\n#[cfg(version(\"1.80\"))]\nmacro_rules! m { () => { fn a() {} }; }\nm!();\n",
+            differ,
+        ),
+        // In Verus-only code the rule reads Verus's build, which surely
+        // compiles the `jit` definition: it alone is the one, and the
+        // earlier one, which does not expand, is never tried.
+        (
+            jit,
+            "macro_rules! m { () => { fn }; }\n#[cfg(feature = \"jit\")]\nmacro_rules! m { () => {}; }\n#[cfg(verus_keep_ghost)]\nmod j {\n    m!();\n}\n",
+            None,
+        ),
+    ] {
+        let dir = crate_of("macro-shadow", &[("lib.rs", lib)]);
+        fs::write(dir.join("verus/count.toml"), format!("{PLAIN}{config}")).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        match want {
+            None => assert!(
+                got == 0,
+                "{config:?} {lib:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+            ),
+            Some(want) => assert!(
+                got == 1 && err.contains(want),
+                "{config:?} {lib:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+            ),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// A module declaration whose file the walk does not read fails the run
+/// (#124): a `#[path]` to a file not named `*.rs` (`src/gen`), to a
+/// `.rs` file outside `src/`, or a `cfg_attr` path to either. A test-only
+/// module may sit anywhere, since its functions are left out anyway.
+#[test]
+fn a_module_file_the_walk_does_not_read_fails_the_run() {
+    let fns = "verus! { pub fn f() {} }\n";
+    for (lib, want) in [
+        (
+            "#[path = \"gen\"]\nmod gen;\n",
+            Some("src/gen, which the counter does not read"),
+        ),
+        (
+            "#[path = \"../extra.rs\"]\nmod extra;\n",
+            Some("crates/a/extra.rs, which the counter does not read"),
+        ),
+        (
+            "#[cfg_attr(unix, path = \"gen\")]\nmod gen;\n",
+            Some("src/gen, which the counter does not read"),
+        ),
+        ("#[cfg(test)]\n#[path = \"gen\"]\nmod gen;\n", None),
+        (
+            "#[cfg(test)]\n#[path = \"../extra.rs\"]\nmod extra;\n",
+            None,
+        ),
+        ("#[path = \"gen.rs\"]\nmod gen;\n", None),
+    ] {
+        let dir = crate_of(
+            "unread-module",
+            &[("lib.rs", lib), ("gen", fns), ("gen.rs", fns)],
+        );
+        fs::write(dir.join("crates/a/extra.rs"), fns).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        match want {
+            None => assert!(
+                got == 0,
+                "{lib:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+            ),
+            Some(want) => assert!(
+                got == 1 && err.contains(want),
+                "{lib:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+            ),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// A lib.rs that is a module (`a::lib`) declares its modules under
+/// `lib/`, the other reading of where its modules live: a `#[path]` in
+/// an inline module there reaches `src/a/lib/inl/gen`, which the walk
+/// does not read, and fails the run as a primary reading's would. Under
+/// `cfg(test)` it may sit anywhere.
+#[test]
+fn an_unread_module_file_of_the_other_reading_fails_the_run() {
+    let fns = "verus! { pub fn f() {} }\n";
+    for (inl, want) in [
+        ("mod inl {\n    #[path = \"gen\"]\n    mod g;\n}\n", true),
+        (
+            "#[cfg(test)]\nmod inl {\n    #[path = \"gen\"]\n    mod g;\n}\n",
+            false,
+        ),
+    ] {
+        let dir = crate_of("unread-alternate", &[("lib.rs", "mod a;\n")]);
+        let src = dir.join("crates/a/src");
+        fs::create_dir_all(src.join("a/lib/inl")).expect("mkdir");
+        fs::write(src.join("a/mod.rs"), "mod lib;\n").expect("write");
+        fs::write(src.join("a/lib.rs"), inl).expect("write");
+        fs::write(src.join("a/lib/inl/gen"), fns).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        if want {
+            assert!(
+                got == 1 && err.contains("src/a/lib/inl/gen, which the counter does not read"),
+                "{inl:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+            );
+        } else {
+            assert!(
+                got == 0,
+                "{inl:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A descendant: `a/lib/child.rs`, which the shipped build reaches by
+    // the other reading of `a/lib.rs` and which the one declaration of the
+    // primary reading names under `cfg(test)`, declares `gen`. Its
+    // declaring file is shipped by the other reading, so `gen` is too.
+    let dir = crate_of(
+        "unread-descendant",
+        &[(
+            "lib.rs",
+            "mod a;\n#[cfg(test)]\n#[path = \"a/lib/child.rs\"]\nmod test_child;\n",
+        )],
+    );
+    let src = dir.join("crates/a/src");
+    fs::create_dir_all(src.join("a/lib")).expect("mkdir");
+    fs::write(src.join("a/mod.rs"), "mod lib;\n").expect("write");
+    fs::write(src.join("a/lib.rs"), "mod child;\n").expect("write");
+    fs::write(src.join("a/lib/child.rs"), "#[path = \"gen\"]\nmod g;\n").expect("write");
+    fs::write(src.join("a/lib/gen"), fns).expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("src/a/lib/gen, which the counter does not read"),
+        "descendant: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // A crate root is built on its own: `src/main.rs`, a binary, names
+    // `gen` (directly, or through `src/m.rs`), though the library declares
+    // `main` only under `cfg(test)`.
+    for (main, m, want) in [
+        ("#[path = \"gen\"]\nmod g;\nfn main() {}\n", None, "src/gen"),
+        (
+            "mod m;\nfn main() {}\n",
+            Some("#[path = \"gen\"]\nmod g;\n"),
+            "src/gen",
+        ),
+    ] {
+        let dir = crate_of(
+            "unread-root",
+            &[
+                ("lib.rs", "#[cfg(test)]\nmod main;\n"),
+                ("main.rs", main),
+                ("gen", fns),
+            ],
+        );
+        if let Some(m) = m {
+            fs::write(dir.join("crates/a/src/m.rs"), m).expect("write");
+        }
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 1 && err.contains(&format!("{want}, which the counter does not read")),
+            "{main:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A file no declaration names may be a target the counter does not
+    // know, so it is an entry point; one whose own `#![cfg(test)]` keeps
+    // it out of shipped builds declares only test-only modules.
+    for (lib, other, want) in [
+        ("", "#[path = \"gen\"]\nmod g;\n", 1),
+        (
+            "mod other;\n",
+            "#![cfg(test)]\n#[path = \"gen\"]\nmod g;\n",
+            0,
+        ),
+    ] {
+        let dir = crate_of(
+            "unread-entry",
+            &[("lib.rs", lib), ("other.rs", other), ("gen", fns)],
+        );
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == want && (want == 0 || err.contains("src/gen, which the counter does not read")),
+            "{other:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {want}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A test-only step earlier on the path: `t` is declared only under
+    // `cfg(test)`, and `t.rs` (or `u.rs`, which `t.rs` declares) names
+    // `gen` with no guard of its own. No shipped build reaches it.
+    for (t, u) in [
+        ("#[path = \"gen\"]\nmod g;\n", None),
+        ("mod u;\n", Some("#[path = \"../gen\"]\nmod g;\n")),
+    ] {
+        let dir = crate_of(
+            "unread-test-path",
+            &[
+                ("lib.rs", "#[cfg(test)]\nmod t;\n"),
+                ("t.rs", t),
+                ("gen", fns),
+            ],
+        );
+        if let Some(u) = u {
+            fs::create_dir_all(dir.join("crates/a/src/t")).expect("mkdir");
+            fs::write(dir.join("crates/a/src/t/u.rs"), u).expect("write");
+        }
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 0,
+            "{t:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A link under src/ to a file not named `*.rs`, which the walk passes
+    // over (#71), reaches the check by the file it names.
+    let dir = crate_of("unread-link", &[("lib.rs", "#[path = \"gen\"]\nmod g;\n")]);
+    fs::write(dir.join("crates/a/extra"), fns).expect("write");
+    std::os::unix::fs::symlink("../extra", dir.join("crates/a/src/gen")).expect("ln");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("crates/a/extra, which the counter does not read"),
+        "link: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A file is classed from every reading that may compile it (#47): one
+/// that only the other reading of a lib.rs that is a module (`a::lib`,
+/// whose `mod child;` is `a/lib/child.rs`) reaches without a guard is
+/// shipped, though the primary reading names it only under `cfg(test)`;
+/// and a binary root is shipped, though the library declares it as a
+/// module under `cfg(test)`.
+#[test]
+fn a_file_is_classed_from_every_reading_that_compiles_it() {
+    let tree = |name: &str| {
+        let dir = crate_of(name, &[]);
+        let src = dir.join("crates/a/src");
+        (dir, src)
+    };
+    let (dir, src) = tree("every-reading-alternate");
+    fs::create_dir_all(src.join("a/lib")).expect("mkdir");
+    fs::write(
+        src.join("lib.rs"),
+        "mod a;\n#[cfg(test)]\n#[path = \"a/lib/child.rs\"]\nmod test_child;\n",
+    )
+    .expect("write");
+    fs::write(src.join("a/mod.rs"), "mod lib;\n").expect("write");
+    fs::write(src.join("a/lib.rs"), "mod child;\n").expect("write");
+    fs::write(src.join("a/lib/child.rs"), "pub fn shipped_fn() {}\n").expect("write");
+    let (got, out, err) = count(&dir, &["--list"]);
+    let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+    assert!(
+        got == 0 && names == ["shipped_fn"],
+        "alternate: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, [\"shipped_fn\"]"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    let (dir, src) = tree("every-reading-root");
+    fs::write(src.join("lib.rs"), "#[cfg(test)]\nmod main;\n").expect("write");
+    fs::write(src.join("main.rs"), "pub fn helper() {}\nfn main() {}\n").expect("write");
+    let (got, out, err) = count(&dir, &["--list"]);
+    let mut names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+    names.sort();
+    assert!(
+        got == 0 && names == ["helper", "main"],
+        "root: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, [\"helper\", \"main\"]"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // The other reading may be one no target makes: a stray `src/lib/foo.rs`
+    // beside a root lib.rs's `mod foo;`, or `src/b.rs` beside `src/a.rs`'s
+    // `mod b;` where lib.rs declares `b` only for tests. Each is counted as
+    // unsure through that reading, never verified.
+    for (case, files) in [
+        (
+            "stray lib/foo.rs",
+            &[
+                ("lib.rs", "mod foo;\n"),
+                ("foo.rs", ""),
+                ("lib/foo.rs", "verus! { pub fn b() {} }\n"),
+            ][..],
+        ),
+        (
+            "a.rs's mod b; read beside a.rs",
+            &[
+                ("lib.rs", "mod a;\n#[cfg(test)]\nmod b;\n"),
+                ("a.rs", "mod b;\n"),
+                ("a/b.rs", ""),
+                ("b.rs", "verus! { pub fn b() {} }\n"),
+            ][..],
+        ),
+        // Named by no primary declaration, and by the other reading only
+        // under `cfg(test)`: it keeps the fallback of a file nothing
+        // declares (here `include!` compiles it).
+        (
+            "only a test-only alternate names it",
+            &[
+                ("lib.rs", "mod parser;\ninclude!(\"tables.rs\");\n"),
+                ("parser.rs", "#[cfg(test)]\nmod tables;\n"),
+                ("parser/tables.rs", ""),
+                ("tables.rs", "pub fn b() {}\n"),
+            ][..],
+        ),
+    ] {
+        let (dir, src) = tree("every-reading-stray");
+        for (path, text) in files {
+            if let Some(parent) = src.join(path).parent() {
+                fs::create_dir_all(parent).expect("mkdir");
+            }
+            fs::write(src.join(path), text).expect("write");
+        }
+        let (got, out, err) = count(&dir, &["--list"]);
+        let rows: Vec<(String, String)> = list_rows(&out).into_iter().map(|r| (r.0, r.2)).collect();
+        assert!(
+            got == 0
+                && rows.iter().any(|(_, name)| name == "b")
+                && rows.iter().all(|(class, _)| class != "Verified"),
+            "{case}: got = exit {got}, {rows:?}, {err:?}; wanted = exit 0, `b` counted, nothing Verified"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // One the primary reading declares only for tests, and the other
+    // reading too, stays test-only: the fallback is for a file the
+    // primary reading does not declare.
+    let (dir, src) = tree("every-reading-test-only");
+    fs::create_dir_all(src.join("parser")).expect("mkdir");
+    for (path, text) in [
+        ("lib.rs", "mod parser;\n#[cfg(test)]\nmod tables;\n"),
+        ("parser.rs", "#[cfg(test)]\nmod tables;\n"),
+        ("parser/tables.rs", ""),
+        ("tables.rs", "pub fn t() {}\n"),
+    ] {
+        fs::write(src.join(path), text).expect("write");
+    }
+    let (got, out, err) = count(&dir, &["--list"]);
+    let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+    assert!(
+        got == 0 && names.is_empty(),
+        "test-only in both readings: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, no rows"
+    );
+    let _ = fs::remove_dir_all(&dir);
 }
 
 /// A head that turns verus/count.toml, or the directory above it, into a
@@ -2381,6 +4002,135 @@ fn list_rows(out: &str) -> Vec<(String, String, String, String)> {
         .collect()
 }
 
+/// The nested-loop check (`[loops]`, #76): with the section, a shipped
+/// function that nests a loop, or calls one that loops from inside a
+/// loop, fails the run until the table names its file and quotes
+/// `fn NAME`; a crate that does not ship is not read; without the section
+/// nothing is checked.
+#[test]
+fn a_nested_loop_needs_a_work_bound_row() {
+    let lib = "pub fn f(a: &[u8]) -> usize {\n    let mut n = 0;\n    for i in 0..a.len() {\n        for _ in 0..i {\n            n += 1;\n        }\n    }\n    n\n}\nfn g() { for _ in 0..2 {} }\npub fn h() {\n    loop { g(); break; }\n}\n";
+    let dir = crate_of("loops", &[("lib.rs", lib)]);
+    let (got, _, err) = count(&dir, &[]);
+    assert!(
+        got == 0 && !err.contains("FAIL loops"),
+        "off: got = exit {got}, {err:?}"
+    );
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}[loops]\ntable = \"verus/WORK1.md\"\n"),
+    )
+    .expect("write");
+    let (got, _, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains("FAIL loops: crates/a/src/lib.rs:1: `f` has a loop at line 4 inside another")
+            && err.contains("FAIL loops: crates/a/src/lib.rs:11: `h` has a call to `g`, which loops, inside the loop at line 12")
+            && err.contains("verus/WORK1.md's table has no row naming its file and quoting `fn f`"),
+        "no rows: got = exit {got}, {err:?}"
+    );
+    // One row: the other still fails.
+    fs::write(
+        dir.join("verus/WORK1.md"),
+        "| function | file | bound |\n|---|---|---|\n| `fn f` | `crates/a/src/lib.rs` | n^2 |\n",
+    )
+    .expect("write");
+    let (got, _, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && !err.contains("`f` has") && err.contains("`h` has"),
+        "one row: got = exit {got}, {err:?}"
+    );
+    fs::write(
+        dir.join("verus/WORK1.md"),
+        "| function | file | bound |\n|---|---|---|\n| `fn f` | `crates/a/src/lib.rs` | n^2 |\n| `fn h` | `crates/a/src/lib.rs` | 2 |\n",
+    )
+    .expect("write");
+    let (got, _, err) = count(&dir, &[]);
+    assert!(
+        got == 0 && !err.contains("FAIL loops"),
+        "both rows: got = exit {got}, {err:?}"
+    );
+    // A crate that does not ship is not read.
+    fs::write(dir.join("verus/WORK1.md"), "").expect("write");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n[package.metadata.verus]\nverify = true\n",
+    )
+    .expect("write");
+    let (got, _, err) = count(&dir, &[]);
+    assert!(
+        got == 0 && !err.contains("FAIL loops"),
+        "unshipped: got = exit {got}, {err:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `[floor] room_functions` and `room_lines` (#100): the figure a raise
+/// records leaves that room for unverified code, or no raise where the
+/// room's share is not above the floor; the pass is the share's alone.
+#[test]
+fn a_floor_raise_leaves_the_configured_room() {
+    // Three verified functions of one line each, one outside `verus!`.
+    let lib = "use vstd::prelude::*;\nverus! {\npub fn a() {}\npub fn b() {}\npub fn c() {}\n}\npub fn o() {}\n";
+    let dir = crate_of("floor-room", &[("lib.rs", lib)]);
+    fs::write(
+        dir.join("verus/FLOOR"),
+        "functions 50.0\nlines 50.0\nchecked-functions 50.0\nchecked-lines 50.0\n",
+    )
+    .expect("write");
+    fs::create_dir_all(dir.join("verus/ledger")).expect("mkdir");
+    fs::write(dir.join("verus/ledger/lib.rs.md"), "").expect("write");
+    let run = |room: &str| {
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!("{PLAIN}[floor]\npath = \"verus/FLOOR\"\n{room}"),
+        )
+        .expect("write");
+        let floor = dir.join("verus/FLOOR");
+        count(&dir, &["--floor", &floor.to_string_lossy(), "--no-base"])
+    };
+    // No room: the share itself, 3 of 4.
+    let (got, out, err) = run("");
+    assert!(
+        got == 0 && out.contains("raise verus/FLOOR to `functions 75.0`"),
+        "no room: got = exit {got}, {out:?}, {err:?}"
+    );
+    // Room for 1 function: 3 of 5.
+    let (got, out, err) = run("room_functions = 1\n");
+    assert!(
+        got == 0 && out.contains("raise verus/FLOOR to `functions 60.0`"),
+        "room 1: got = exit {got}, {out:?}, {err:?}"
+    );
+    // Room for 4: 3 of 8, not above 50.0: no raise, and still a pass.
+    let (got, out, err) = run("room_functions = 4\nroom_lines = 0\n");
+    assert!(
+        got == 0
+            && out.contains("functions verified 75.0%, above the floor's 50.0% but within [floor]'s room for unverified code (37.5%): no raise")
+            && !out.contains("raise verus/FLOOR to `functions"),
+        "room 4: got = exit {got}, {out:?}, {err:?}"
+    );
+    // `room_lines` from the configuration: the lines are one each, so 3 of
+    // 5 lines.
+    let (got, out, err) = run("room_lines = 1\n");
+    assert!(
+        got == 0
+            && out.contains("raise verus/FLOOR to `lines 60.0`")
+            && out.contains("raise verus/FLOOR to `functions 75.0`"),
+        "room_lines 1: got = exit {got}, {out:?}, {err:?}"
+    );
+    // A port with `[ledger]` reports through the ledger's tables: the room
+    // holds there too.
+    let (got, out, err) =
+        run("room_functions = 1\nroom_lines = 1\n[ledger]\ndir = \"verus/ledger\"\n");
+    assert!(
+        got == 0
+            && out.contains("raise verus/FLOOR to `functions 60.0`")
+            && out.contains("raise verus/FLOOR to `lines 60.0`"),
+        "ledger: got = exit {got}, {out:?}, {err:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A crate `a` with `files` (path under `src/` and text) and `PLAIN`.
 fn crate_of(name: &str, files: &[(&str, &str)]) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("verus-count-cli-{name}-{}", std::process::id()));
@@ -2491,6 +4241,334 @@ fn an_export_a_macro_writes_is_listed_at_its_invocation() {
         assert!(
             got != 0 && err.contains("export! could be any of 2 definitions"),
             "differing candidates: got = exit {got}, {err:?}; wanted = a failure naming export!"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// With a generated ledger, a `no_decreases` row at a function's `fn`
+/// line is its entry when the attribute alone makes it trusted (no
+/// warning); beside `external_body` it is not (the warning stays). At a
+/// macro invocation's line, the row stands for the functions there only
+/// when every one of them is trusted for the attribute alone.
+#[test]
+fn a_no_decreases_row_is_the_entry_of_a_function_trusted_for_it_alone() {
+    let ledger_of = |dir: &Path, lines: &[u32]| {
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!("{PLAIN}[ledger]\ndir = \"verus/ledger\"\n"),
+        )
+        .expect("write");
+        fs::create_dir_all(dir.join("verus/ledger")).expect("mkdir");
+        let rows: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                format!("crates/a/src/lib.rs:{l}. Kind: no_decreases. Category: termination.\nTool: none (assumption). Status: trusted.\n")
+            })
+            .collect();
+        fs::write(dir.join("verus/ledger/lib.rs.md"), rows.join("\n")).expect("write");
+    };
+    let warning = |l: u32| {
+        format!("warning: trusted function at crates/a/src/lib.rs:{l} has no ledger entry")
+    };
+    let warnings = |err: &str| -> Vec<String> {
+        err.lines()
+            .filter(|l| l.ends_with("has no ledger entry"))
+            .map(str::to_owned)
+            .collect()
+    };
+    // Functions in a verus! block, each with a row: one trusted for the
+    // attribute alone, and one `external_body` too. (One with the Kani
+    // marker as well fails the run in this mode:
+    // the_ledger_refuses_the_kani_marker_on_a_function_the_termination_attribute_covers.)
+    let lib = "verus! {\n#[verifier::exec_allows_no_decreases_clause]\nfn alone() {}\n#[verifier::exec_allows_no_decreases_clause]\n#[verifier::external_body]\nfn body() {}\n}\n";
+    let dir = crate_of("no-decreases-row", &[("lib.rs", lib)]);
+    ledger_of(&dir, &[3, 6]);
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0 && warnings(&err) == [warning(6)],
+        "verus! block: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, a warning at 6"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // A macro invocation writing both: the row at its line stands for
+    // neither. Writing two attribute-only functions: it stands for both.
+    let def = |second: &str| {
+        format!(
+            "macro_rules! m {{ () => {{ verus! {{\n#[verifier::exec_allows_no_decreases_clause]\nfn a() {{}}\n#[verifier::exec_allows_no_decreases_clause]\n{second}fn b() {{}}\n}} }}; }}\nm!();\n"
+        )
+    };
+    for (second, warns) in [("#[verifier::external_body]\n", true), ("", false)] {
+        let lib = def(second);
+        // The invocation is the last line.
+        let at = u32::try_from(lib.lines().count()).expect("a short file");
+        let want = if warns {
+            vec![warning(at), warning(at)]
+        } else {
+            vec![]
+        };
+        let dir = crate_of("no-decreases-row-macro", &[("lib.rs", &lib)]);
+        ledger_of(&dir, &[at]);
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 0 && warnings(&err) == want,
+            "macro, second {second:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// With a generated ledger, a discharged function seam at a function
+/// `exec_allows_no_decreases_clause` covers does not make it discharged:
+/// it counts unchecked and the run warns, while the same seam at a
+/// function the attribute does not cover still counts (#169).
+#[test]
+fn a_function_seam_does_not_discharge_a_function_the_termination_attribute_covers() {
+    let lib = "verus! {\nfn v() {}\n#[verifier::exec_allows_no_decreases_clause]\n#[verifier::external_body]\nfn body() {}\n#[verifier::external_body]\nfn plain() {}\n}\n";
+    let dir = crate_of("no-decreases-fn-seam", &[("lib.rs", lib)]);
+    fs::write(
+        dir.join("verus/count.toml"),
+        format!("{PLAIN}[ledger]\ndir = \"verus/ledger\"\n"),
+    )
+    .expect("write");
+    fs::create_dir_all(dir.join("verus/ledger")).expect("mkdir");
+    let row = |l: u32| {
+        format!(
+            "crates/a/src/lib.rs:{l}. Kind: external_body. Category: x.\nTool: Kani. Status: discharged (Kani: h).\n"
+        )
+    };
+    fs::write(
+        dir.join("verus/ledger/lib.rs.md"),
+        format!("{}\n{}", row(5), row(7)),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    let warning = "warning: crates/a/src/lib.rs:5: #[verifier::exec_allows_no_decreases_clause] covers the trusted function here, so its discharged external_body seam counts it unchecked: nothing checks that it ends";
+    // v verified, plain discharged; body unchecked.
+    let row = "a\t2\t1\t0\t66.6%\t2\t1\t0\t66.6%";
+    assert!(
+        got == 0
+            && err
+                .lines()
+                .filter(|l| l.starts_with("warning:"))
+                .eq([warning])
+            && out.lines().any(|l| l == row),
+        "got = exit {got}, {out:?}, {err:?}; wanted = exit 0, {warning:?}, {row:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// With `[ledger]`, the Kani marker is refused (exit 1) on a function
+/// `exec_allows_no_decreases_clause` covers, as on any other, though
+/// such a function counts as trusted, not discharged (#169). Without the
+/// marker the run passes.
+#[test]
+fn the_ledger_refuses_the_kani_marker_on_a_function_the_termination_attribute_covers() {
+    let marked = "verus! {\n#[verifier::exec_allows_no_decreases_clause]\n#[cfg_attr(any(), discharged_by = \"kani\")]\n#[verifier::external_body]\nfn marked() {}\n}\n";
+    let bare = marked.replace("#[cfg_attr(any(), discharged_by = \"kani\")]\n", "");
+    for (lib, refused) in [(marked, true), (bare.as_str(), false)] {
+        let dir = crate_of("no-decreases-marker", &[("lib.rs", lib)]);
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!("{PLAIN}[ledger]\ndir = \"verus/ledger\"\n"),
+        )
+        .expect("write");
+        fs::create_dir_all(dir.join("verus/ledger")).expect("mkdir");
+        fs::write(
+            dir.join("verus/ledger/lib.rs.md"),
+            "crates/a/src/lib.rs:5. Kind: external_body. Category: x.\nTool: none. Status: trusted.\n",
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        let fail = "FAIL discharged: crates/a/src/lib.rs: `marked` has the discharged_by = \"kani\" marker, but with [ledger] configured the ledger, not the marker, says what is discharged";
+        let ok = if refused {
+            got == 1 && err.lines().any(|l| l == fail)
+        } else {
+            got == 0 && !err.contains("FAIL")
+        };
+        assert!(
+            ok,
+            "refused {refused}: got = exit {got}, {out:?}, {err:?}; wanted = {}",
+            if refused { fail } else { "exit 0" }
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// The Kani marker on functions outside `verus!`: each needs a record
+/// that quotes `fn NAME` and names it in backquotes by its path (`free`,
+/// `A::new`), and a record that names, in backquotes, a `#[kani::proof]`
+/// harness of the crate (here in a `cfg(kani)` file) that calls it, or the
+/// run fails (exit 1). With no record each fails; a record naming only
+/// `A::new` leaves `free` and `B::new` failing; one naming all three but
+/// no harness, or harness names without their file, leaves all three
+/// failing; one naming only a harness that
+/// `make kani` never runs, in a file no `mod` declares, in one
+/// `#[cfg(any())] mod` declares, or in one `#[cfg(test)] mod` declares,
+/// leaves `free` failing; one naming the declared harnesses passes.
+#[test]
+fn a_marked_function_outside_verus_needs_a_record_naming_its_owner_and_harness() {
+    let lib = "#[cfg(kani)]\nmod proofs;\n#[cfg(any())]\nmod dead_proofs;\n#[cfg(test)]\nmod test_proofs;\n\
+        pub struct A;\npub struct B;\n\
+        #[cfg_attr(any(), discharged_by = \"kani\")]\npub fn free() {}\n\
+        impl A {\n#[cfg_attr(any(), discharged_by = \"kani\")]\npub fn new() {}\n}\n\
+        impl B {\n#[cfg_attr(any(), discharged_by = \"kani\")]\npub fn new() {}\n}\n";
+    let proofs = "#[kani::proof]\nfn check_free() {\ncrate::free();\n}\n\
+        #[kani::proof]\nfn check_new() {\ncrate::A::new();\ncrate::B::new();\n}\n";
+    let orphan = "#[kani::proof]\nfn check_orphan() {\ncrate::free();\n}\n";
+    let dead = "#[kani::proof]\nfn check_dead() {\ncrate::free();\n}\n";
+    let tested = "#[kani::proof]\nfn check_test() {\ncrate::free();\n}\n";
+    let quotes = "```rust\npub fn free() {}\npub fn new() {}\n```\n";
+    let unquoted = |n: &str| {
+        format!(
+            "FAIL discharged: crates/a/src/lib.rs: `{n}` has the discharged_by = \"kani\" marker, but no verus/seams/kani-*.md record names its file and quotes `fn {n}`"
+        )
+    };
+    let unowned = |p: &str| {
+        format!(
+            "FAIL discharged: crates/a/src/lib.rs: `{p}` has the discharged_by = \"kani\" marker outside verus!, but no verus/seams/kani-*.md record names its file and `{p}` in backquotes"
+        )
+    };
+    let unharnessed = |p: &str, n: &str, owner: &str| {
+        format!(
+            "FAIL discharged: crates/a/src/lib.rs: `{p}` has the discharged_by = \"kani\" marker outside verus!, but no verus/seams/kani-*.md record that covers it names, each in backquotes, the file and name of a #[kani::proof] harness of crate a whose body calls `{n}`{owner}"
+        )
+    };
+    let proofs_rs = "`crates/a/src/proofs.rs`";
+    for (record, want_fails) in [
+        (
+            None,
+            vec![
+                unquoted("free"),
+                unquoted("new"),
+                unquoted("new"),
+                unowned("free"),
+                unowned("A::new"),
+                unowned("B::new"),
+            ],
+        ),
+        (
+            Some(format!(
+                "`A::new` (`crates/a/src/lib.rs`): {proofs_rs}, `check_free`, `check_new`.\n\n{quotes}"
+            )),
+            vec![unowned("free"), unowned("B::new")],
+        ),
+        (
+            Some(format!(
+                "`free`, `A::new` and `B::new` (`crates/a/src/lib.rs`).\n\n{quotes}"
+            )),
+            vec![
+                unharnessed("free", "free", ""),
+                unharnessed("A::new", "new", " and mentions `A`"),
+                unharnessed("B::new", "new", " and mentions `B`"),
+            ],
+        ),
+        (
+            Some(format!(
+                "`free`, `A::new` and `B::new` (`crates/a/src/lib.rs`): `check_free`, `check_new`, but not their file.\n\n{quotes}"
+            )),
+            vec![
+                unharnessed("free", "free", ""),
+                unharnessed("A::new", "new", " and mentions `A`"),
+                unharnessed("B::new", "new", " and mentions `B`"),
+            ],
+        ),
+        (
+            Some(format!(
+                "`free`, `A::new` and `B::new` (`crates/a/src/lib.rs`): `crates/a/src/old_proofs.rs`, `check_orphan`, {proofs_rs}, `check_new`.\n\n{quotes}"
+            )),
+            vec![unharnessed("free", "free", "")],
+        ),
+        (
+            Some(format!(
+                "`free`, `A::new` and `B::new` (`crates/a/src/lib.rs`): `crates/a/src/dead_proofs.rs`, `check_dead`, {proofs_rs}, `check_new`.\n\n{quotes}"
+            )),
+            vec![unharnessed("free", "free", "")],
+        ),
+        (
+            Some(format!(
+                "`free`, `A::new` and `B::new` (`crates/a/src/lib.rs`): `crates/a/src/test_proofs.rs`, `check_test`, {proofs_rs}, `check_new`.\n\n{quotes}"
+            )),
+            vec![unharnessed("free", "free", "")],
+        ),
+        (
+            Some(format!(
+                "`free`, `A::new` and `B::new` (`crates/a/src/lib.rs`): {proofs_rs}, `check_free`, `check_new`.\n\n{quotes}"
+            )),
+            vec![],
+        ),
+    ] {
+        let dir = crate_of(
+            "outside-marker",
+            &[
+                ("lib.rs", lib),
+                ("proofs.rs", proofs),
+                ("old_proofs.rs", orphan),
+                ("dead_proofs.rs", dead),
+                ("test_proofs.rs", tested),
+            ],
+        );
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!("{PLAIN}[kani]\nrecords = \"verus/seams\"\n"),
+        )
+        .expect("write");
+        fs::create_dir_all(dir.join("verus/seams")).expect("mkdir");
+        if let Some(r) = &record {
+            fs::write(dir.join("verus/seams/kani-a-lib.md"), r).expect("write");
+        }
+        let (got, out, err) = count(&dir, &[]);
+        let fails: Vec<&str> = err.lines().filter(|l| l.starts_with("FAIL")).collect();
+        let want_code = if want_fails.is_empty() { 0 } else { 1 };
+        assert!(
+            got == want_code && fails == want_fails,
+            "record {record:?}: got = exit {got}, {fails:?}, {out:?}, {err:?}; wanted = exit {want_code}, {want_fails:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// Candidate definitions of a macro that differ only in why a function
+/// they write is trusted (`exec_allows_no_decreases_clause` alone, or
+/// `external_body` too), or in whether the attribute covers an
+/// `external_body` one, or in the Kani marker on a function the
+/// attribute covers, count differently, so the run fails rather than let
+/// the first candidate decide whether a `no_decreases` ledger row stands
+/// for the function, a function seam classes it, or its marker is
+/// refused. Candidates that agree pass. None of this needs `[ledger]`.
+#[test]
+fn candidates_that_differ_in_why_a_function_is_trusted_fail() {
+    let only = "macro_rules! m { () => { verus! {\n#[verifier::exec_allows_no_decreases_clause]\nfn f() {}\n} }; }\n";
+    let body = "macro_rules! m { () => { verus! {\n#[verifier::exec_allows_no_decreases_clause]\n#[verifier::external_body]\nfn f() {}\n} }; }\n";
+    let plain =
+        "macro_rules! m { () => { verus! {\n#[verifier::external_body]\nfn f() {}\n} }; }\n";
+    let marked = "macro_rules! m { () => { verus! {\n#[verifier::exec_allows_no_decreases_clause]\n#[cfg_attr(any(), discharged_by = \"kani\")]\n#[verifier::external_body]\nfn f() {}\n} }; }\n";
+    for (unix, other) in [
+        (only, body),
+        (body, only),
+        (body, plain),
+        (plain, body),
+        // The Kani marker on a covered function, in one candidate only:
+        // with `[ledger]` it is refused, so it is not the first
+        // candidate's to decide.
+        (body, marked),
+        (marked, body),
+    ] {
+        let lib = format!("#[cfg(unix)]\n{unix}#[cfg(not(unix))]\n{other}m!();\n");
+        let dir = crate_of("no-decreases-macro-differs", &[("lib.rs", &lib)]);
+        let (got, _, err) = count(&dir, &[]);
+        assert!(
+            got != 0 && err.contains("m! could be any of 2 definitions"),
+            "differing candidates: got = exit {got}, {err:?}; wanted = a failure naming m!"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    for same in [only, body, plain, marked] {
+        let lib = format!("#[cfg(unix)]\n{same}#[cfg(not(unix))]\n{same}m!();\n");
+        let dir = crate_of("no-decreases-macro-same", &[("lib.rs", &lib)]);
+        let (got, _, err) = count(&dir, &[]);
+        assert!(
+            got == 0,
+            "agreeing candidates: got = exit {got}, {err:?}; wanted = exit 0"
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3719,7 +5797,7 @@ fn every_invocation_shape_is_counted() {
     for (invocation, want) in [
         (
             "diff!();",
-            "diff! could be any of 2 definitions (crates/a/src/pairs.rs:6, crates/a/src/pairs.rs:8), which count differently",
+            "diff! could be any of 2 definitions (crates/a/src/pairs.rs:8, crates/a/src/pairs.rs:6), which count differently",
         ),
         (
             "#[cfg(unix)]\nmacro_rules! pm { () => { pub fn ma() {} pub fn mb() {} }; }\n#[cfg(not(unix))]\nmacro_rules! pm { () => { pub fn ma() {} }; }\npm!();",
@@ -3739,6 +5817,399 @@ fn every_invocation_shape_is_counted() {
             "{invocation}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
         );
     }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A definition at the top of a file a `#[macro_use] mod name;` declares
+/// is in the declaring file's textual scope from that `mod` on, as rustc
+/// reads it (#128): after an earlier definition there it shadows it, and
+/// before a later one it is shadowed, also two files out (`j` carrying
+/// `k`). An invocation before the `mod` does not see it.
+#[test]
+fn a_macro_use_file_s_definition_is_in_scope_from_its_mod() {
+    let one = "macro_rules! m { () => { pub fn a() {} }; }\n";
+    let three = "macro_rules! m { () => { pub fn a() {} pub fn b() {} pub fn c() {} }; }\n";
+    let carry_k = "#[macro_use]\nmod k;\n";
+    // `j`'s definition after its `mod k;`, and before it; `k`'s on a later
+    // line of its own file than `j`'s, so the lines alone would misorder.
+    let j_after_k = format!("{carry_k}{three}");
+    let j_before_k = format!("{three}{carry_k}");
+    let k_late = format!("{}{one}", "\n".repeat(9));
+    let inline = format!("#[macro_use]\nmod inner {{\n{three}}}\n");
+    let in_verus = format!("verus! {{\n{three}}}\n");
+    for (case, lib, j, k, want) in [
+        (
+            "after an earlier one",
+            format!("{one}#[macro_use]\nmod j;\nm!();\n"),
+            three,
+            None,
+            &["a", "b", "c"][..],
+        ),
+        (
+            "before a later one",
+            format!("#[macro_use]\nmod j;\n{one}m!();\n"),
+            three,
+            None,
+            &["a"][..],
+        ),
+        (
+            "an invocation before the mod",
+            format!("{one}m!();\n#[macro_use]\nmod j;\n"),
+            three,
+            None,
+            &["a"][..],
+        ),
+        (
+            "two files out",
+            format!("{one}#[macro_use]\nmod j;\nm!();\n"),
+            carry_k,
+            Some(three),
+            &["a", "b", "c"][..],
+        ),
+        (
+            "j's after its mod k shadows k's",
+            "#[macro_use]\nmod j;\nm!();\n".to_owned(),
+            &j_after_k,
+            Some(&k_late),
+            &["a", "b", "c"][..],
+        ),
+        (
+            "k's shadows j's before its mod k",
+            "#[macro_use]\nmod j;\nm!();\n".to_owned(),
+            &j_before_k,
+            Some(&k_late),
+            &["a"][..],
+        ),
+        (
+            "in an inline #[macro_use] module of the carried file",
+            format!("{one}#[macro_use]\nmod j;\nm!();\n"),
+            &inline,
+            None,
+            &["a", "b", "c"][..],
+        ),
+        (
+            "in a verus! block of the carried file",
+            format!("{one}#[macro_use]\nmod j;\nm!();\n"),
+            &in_verus,
+            None,
+            &["a", "b", "c"][..],
+        ),
+    ] {
+        let dir = crate_of("macro-use-mod", &[("lib.rs", &lib)]);
+        let src = dir.join("crates/a/src");
+        match k {
+            None => fs::write(src.join("j.rs"), j).expect("write"),
+            Some(k) => {
+                fs::create_dir_all(src.join("j")).expect("mkdir");
+                fs::write(src.join("j/mod.rs"), j).expect("write");
+                fs::write(src.join("j/k.rs"), k).expect("write");
+            }
+        }
+        let (got, out, err) = count(&dir, &["--list"]);
+        let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+        assert!(
+            got == 0 && names == want,
+            "{case}: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // A definition on the line of the `mod` that carries the other in: the
+    // order on the line is not read, so both are candidates, and as they
+    // count differently the run fails.
+    let dir = crate_of(
+        "macro-use-mod-line",
+        &[
+            (
+                "lib.rs",
+                &format!("{} #[macro_use] mod j;\nm!();\n", one.trim_end()),
+            ),
+            ("j.rs", three),
+        ],
+    );
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("m! could be any of 2 definitions"),
+        "same line: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // Two `mod`s on one line carry two files in: their order on the line
+    // is not read, whatever lines the definitions sit on in their own
+    // files, so both are candidates.
+    let dir = crate_of(
+        "macro-use-mod-siblings",
+        &[
+            ("lib.rs", "#[macro_use] mod j; #[macro_use] mod k;\nm!();\n"),
+            ("j.rs", &format!("{}{one}", "\n".repeat(9))),
+            ("k.rs", three),
+        ],
+    );
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("m! could be any of 2 definitions"),
+        "sibling mods: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // A `mod` on the invocation's own line: its order against the
+    // invocation is not read either, so j's is a candidate beside the
+    // earlier one.
+    let dir = crate_of(
+        "macro-use-mod-invocation-line",
+        &[
+            ("lib.rs", &format!("{one}#[macro_use] mod j; m!();\n")),
+            ("j.rs", three),
+        ],
+    );
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("m! could be any of 2 definitions"),
+        "mod on the invocation's line: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // One module declared by two `mod`s under `cfg`s, one before a
+    // definition and one after: each build places the carried file at
+    // its own `mod`, so the two are not ordered, and as they count
+    // differently the run fails. Also when only one `mod` carries, when
+    // the definition is inside an inline `#[macro_use]` module or a
+    // `verus!` block of the carried file, and when the module declared
+    // twice is one file further in (`k`, carried out through `j`).
+    let ghost = "#[cfg(verus_keep_ghost)]";
+    let real = "#[cfg(not(verus_keep_ghost))]";
+    let twice = format!("{ghost} #[macro_use] mod j;\n{one}{real} #[macro_use] mod j;\nm!();\n");
+    let k_twice = format!("{ghost} #[macro_use] mod k;\n{one}{real} #[macro_use] mod k;\n");
+    for (case, lib, files) in [
+        (
+            "the carried one is the larger",
+            twice.clone(),
+            vec![("j.rs", three.to_owned())],
+        ),
+        (
+            "the written one is the larger",
+            format!("{real} #[macro_use] mod j;\n{three}{ghost} #[macro_use] mod j;\nm!();\n"),
+            vec![("j.rs", one.to_owned())],
+        ),
+        (
+            "one mod after the invocation",
+            format!("{one}{ghost} #[macro_use] mod j;\nm!();\n{real} #[macro_use] mod j;\n"),
+            vec![("j.rs", three.to_owned())],
+        ),
+        (
+            "only one mod carries",
+            format!("{ghost} #[macro_use] mod j;\n{one}{real} mod j;\nm!();\n"),
+            vec![("j.rs", three.to_owned())],
+        ),
+        (
+            "in an inline #[macro_use] module",
+            twice.clone(),
+            vec![("j.rs", inline.clone())],
+        ),
+        (
+            "in a verus! block",
+            twice.clone(),
+            vec![("j.rs", in_verus.clone())],
+        ),
+        (
+            "one file further in",
+            "#[macro_use]\nmod j;\nm!();\n".to_owned(),
+            vec![("j/mod.rs", k_twice), ("j/k.rs", three.to_owned())],
+        ),
+    ] {
+        let dir = crate_of("macro-use-mod-twice", &[("lib.rs", &lib)]);
+        for (path, text) in files {
+            let p = dir.join("crates/a/src").join(path);
+            fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+            fs::write(p, text).expect("write");
+        }
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 1 && err.contains("m! could be any of 2 definitions"),
+            "declared twice, {case}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// Two more shapes of a carried definition (#134). A file `mod` inside an
+/// inline `#[macro_use]` module carries its definition out through that
+/// module too, so it shadows an earlier one after the module; inside an
+/// inline module without `#[macro_use]` it does not. A `macro_rules!` an
+/// expansion writes at the top of a carried file is carried as one
+/// written there; when the counter reads that file after the declaring
+/// one, an invocation it may reach fails the run.
+#[test]
+fn a_carried_definition_passes_inline_macro_use_modules_and_expansions() {
+    let one = "macro_rules! m { () => { pub fn a() {} }; }\n";
+    let three = "macro_rules! m { () => { pub fn a() {} pub fn b() {} pub fn c() {} }; }\n";
+    let gen_three = "macro_rules! gen { () => { macro_rules! m { () => { pub fn a() {} pub fn b() {} pub fn c() {} }; } }; }\ngen!();\n";
+    // A `gen` that writes the three-function `m` inside `mod inner`, with
+    // `attr` on it.
+    let gen_in_inner = |attr: &str| {
+        format!(
+            "macro_rules! gen {{ () => {{ {attr} mod inner {{ macro_rules! m {{ () => {{ pub fn a() {{}} pub fn b() {{}} pub fn c() {{}} }}; }} }} }}; }}\n"
+        )
+    };
+    let in_outer = |macro_use: &str| {
+        format!("{one}{macro_use}mod outer {{\n#[macro_use]\nmod j;\n}}\nm!();\n")
+    };
+    for (case, lib, files, want) in [
+        (
+            "through an inline #[macro_use] module",
+            in_outer("#[macro_use]\n"),
+            vec![("outer/j.rs", three)],
+            &["a", "b", "c"][..],
+        ),
+        (
+            "not through an inline module without #[macro_use]",
+            in_outer(""),
+            vec![("outer/j.rs", three)],
+            &["a"][..],
+        ),
+        (
+            "through an inline #[macro_use] module of a carried file",
+            format!("{one}#[macro_use]\nmod j;\nm!();\n"),
+            vec![
+                (
+                    "j/mod.rs",
+                    "#[macro_use]\nmod inner {\n#[macro_use]\nmod k;\n}\n",
+                ),
+                ("j/inner/k.rs", three),
+            ],
+            &["a", "b", "c"][..],
+        ),
+        (
+            "emitted at the top of a carried file read first",
+            format!("{one}#[macro_use]\nmod j;\nm!();\n"),
+            vec![("j.rs", gen_three)],
+            &["a", "b", "c"][..],
+        ),
+        (
+            "emitted in a carried file read later, after the invocation",
+            format!("{one}m!();\n#[macro_use]\nmod z;\n"),
+            vec![("z.rs", gen_three)],
+            &["a"][..],
+        ),
+        (
+            "emitted in a carried file read later, outside its scope",
+            format!("{one}mod outer {{\n#[macro_use]\nmod z;\n}}\nm!();\n"),
+            vec![("outer/z.rs", gen_three)],
+            &["a"][..],
+        ),
+        // One an expansion writes in an inline `#[macro_use]` module is
+        // carried out of it, as one written there is; without the
+        // attribute its scope ends with the module.
+        (
+            "emitted in an inline #[macro_use] module",
+            format!("{one}{}gen!();\nm!();\n", gen_in_inner("#[macro_use]")),
+            vec![],
+            &["a", "b", "c"][..],
+        ),
+        (
+            "emitted in an inline module without #[macro_use]",
+            format!("{one}{}gen!();\nm!();\n", gen_in_inner("")),
+            vec![],
+            &["a"][..],
+        ),
+    ] {
+        let dir = crate_of("carried-shapes", &[("lib.rs", &lib)]);
+        let src = dir.join("crates/a/src");
+        for (path, text) in files {
+            let p = src.join(path);
+            fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+            fs::write(p, text).expect("write");
+        }
+        let (got, out, err) = count(&dir, &["--list"]);
+        let names: Vec<String> = list_rows(&out).into_iter().map(|r| r.2).collect();
+        assert!(
+            got == 0 && names == want,
+            "{case}: got = exit {got}, {names:?}, {err:?}; wanted = exit 0, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // The carried file is read after the declaring one: the definition its
+    // expansion writes is not known when the invocation resolves. A `mod`
+    // on the invocation's line may carry it in too.
+    for (case, lib, line) in [
+        (
+            "after the mod",
+            format!("{one}#[macro_use]\nmod z;\nm!();\n"),
+            4,
+        ),
+        (
+            "on the mod's line",
+            format!("{one}#[macro_use] mod z; m!();\n"),
+            2,
+        ),
+    ] {
+        let dir = crate_of(
+            "carried-shapes-late",
+            &[("lib.rs", &lib), ("z.rs", gen_three)],
+        );
+        let (got, out, err) = count(&dir, &[]);
+        let want = format!(
+            "lib.rs:{line}: m! may expand the `macro_rules! m` that an expansion writes at crates/a/src/z.rs:2"
+        );
+        assert!(
+            got == 1 && err.contains(&want),
+            "read later, {case}: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    // An invocation in a sibling file the `mod` after it declares, read
+    // before the carried file: the resolution would reach the emitted
+    // definition as one of the others, so the run fails there too.
+    let dir = crate_of(
+        "carried-shapes-sibling",
+        &[
+            ("lib.rs", &format!("{one}#[macro_use]\nmod z;\nmod y;\n")),
+            ("y.rs", "m!();\n"),
+            ("z.rs", gen_three),
+        ],
+    );
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains(
+                "y.rs:1: m! may expand the `macro_rules! m` that an expansion writes at crates/a/src/z.rs:2"
+            ),
+        "sibling read earlier: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // Not carried at all: one an expansion writes at the top of z/mod.rs
+    // is in scope in z/a.rs, which `mod a;` after it declares and the
+    // counter reads first.
+    let dir = crate_of(
+        "carried-shapes-child",
+        &[("lib.rs", &format!("{one}mod z;\n"))],
+    );
+    fs::create_dir_all(dir.join("crates/a/src/z")).expect("mkdir");
+    fs::write(
+        dir.join("crates/a/src/z/mod.rs"),
+        format!("{gen_three}mod a;\n"),
+    )
+    .expect("write");
+    fs::write(dir.join("crates/a/src/z/a.rs"), "m!();\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains(
+                "z/a.rs:1: m! may expand the `macro_rules! m` that an expansion writes at crates/a/src/z/mod.rs:2"
+            ),
+        "child read earlier: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    // An inline module declared twice under `cfg`s, with `#[macro_use]`
+    // in one build only: the file `mod` both hold is declared twice, so
+    // its definition is a candidate that ends no chain.
+    let lib = format!(
+        "{one}#[cfg(verus_keep_ghost)]\n#[macro_use]\nmod outer {{\n#[macro_use]\nmod j;\n}}\n#[cfg(not(verus_keep_ghost))]\nmod outer {{\n#[macro_use]\nmod j;\n}}\nm!();\n"
+    );
+    let dir = crate_of("carried-shapes-inline-twice", &[("lib.rs", &lib)]);
+    fs::create_dir_all(dir.join("crates/a/src/outer")).expect("mkdir");
+    fs::write(dir.join("crates/a/src/outer/j.rs"), three).expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("m! could be any of 2 definitions"),
+        "inline module declared twice: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -3823,7 +6294,7 @@ fn a_definition_reaches_an_invocation_as_rustc_resolves_it() {
             ][..],
             1,
             &[
-                "m! could be any of 2 definitions (crates/a/src/defs.rs:1, crates/a/src/defs.rs:2), and one of them does not count",
+                "m! could be any of 2 definitions (crates/a/src/defs.rs:2, crates/a/src/defs.rs:1), and one of them does not count",
             ][..],
         ),
         (
@@ -5243,6 +7714,1271 @@ fn verus_atoms_must_be_atoms_and_settled_once() {
         assert!(
             got == 2 && err.contains(want),
             "{keys:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 2, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A file's inner `#![verifier::exec_allows_no_decreases_clause]` makes
+/// its exec functions trusted. In a file that declares a module out of
+/// line, whose file the counter reads on its own, it fails the run (exit
+/// 1), naming the file.
+#[test]
+fn a_file_without_decreases_is_trusted() {
+    let dir = repository("no-decreases");
+    let lib = dir.join("crates/a/src/lib.rs");
+    fs::write(
+        &lib,
+        "#![verifier::exec_allows_no_decreases_clause]\nverus! { fn f() {} fn g() {} }\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0 && out.contains("\nshipped\t0\t2\t0\t0\t"),
+        "a leaf file: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, 0 verified and 2 trusted"
+    );
+    fs::write(
+        &lib,
+        "#![verifier::exec_allows_no_decreases_clause]\nmod m;\nverus! { fn f() {} }\n",
+    )
+    .expect("write");
+    fs::write(dir.join("crates/a/src/m.rs"), "verus! { fn h() {} }\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    let want = "crates/a/src/lib.rs:2: #[verifier::exec_allows_no_decreases_clause] covers `mod m;`, a module the counter reads file by file";
+    assert!(
+        got == 1 && err.contains(want),
+        "a file declaring mod m;: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A member with `skip_packages = true` (#198) leaves out of its walk each
+/// directory below its `src/` that holds a Cargo.toml (another package's
+/// sources, at any depth), and reads the rest: its own files, and a
+/// directory without one. Without the key, or with it false, or for a
+/// crate of `dir`, every file counts. Negative: a module declaration (a
+/// `#[path]`) or a target's root file in a left-out directory fails the
+/// run, since rustc compiles that file as part of the crate; without the
+/// key both pass, the file read.
+#[test]
+fn skip_packages_leaves_other_packages_out_of_the_walk() {
+    let lib = "pub fn f() {}\npub fn c_mint() {}\n";
+    let dir = crate_of("skip-packages", &[("lib.rs", lib)]);
+    let src = dir.join("crates/a/src");
+    let package = |name: &str| format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\n");
+    for (path, text) in [
+        ("uu/x/Cargo.toml", package("x")),
+        (
+            "uu/x/src/lib.rs",
+            "pub fn g() {}\npub fn h() {}\n".to_owned(),
+        ),
+        ("uu/deep/y/Cargo.toml", package("y")),
+        ("uu/deep/y/src/main.rs", "fn main() {}\n".to_owned()),
+        ("own/k.rs", "pub fn k() {}\n".to_owned()),
+    ] {
+        let p = src.join(path);
+        fs::create_dir_all(p.parent().expect("a parent")).expect("mkdir");
+        fs::write(p, text).expect("write");
+    }
+    // Each left-out directory is a configured crate of its own.
+    let member = |skip: &str| {
+        format!(
+            "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"x\", path = \"crates/a/src/uu/x\" }}, {{ name = \"y\", path = \"crates/a/src/uu/deep/y\" }}]\n"
+        )
+    };
+    let row = |outside: usize| format!("a\t0\t0\t0\t{outside}\t");
+    let shown = [
+        "crate a leaves out crates/a/src/uu/deep/y (counted as crate y)",
+        "crate a leaves out crates/a/src/uu/x (counted as crate x)",
+    ];
+    for (config, want) in [
+        (PLAIN.to_owned(), 6),
+        (member(""), 6),
+        (member(", skip_packages = false"), 6),
+        (member(", skip_packages = true"), 3),
+    ] {
+        fs::write(dir.join("verus/count.toml"), &config).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        let lines = shown.iter().filter(|l| out.contains(*l)).count();
+        let wanted_lines = if want == 3 { 2 } else { 0 };
+        assert!(
+            got == 0 && out.lines().any(|l| l.starts_with(&row(want))) && lines == wanted_lines,
+            "{config:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0, {want} outside, {wanted_lines} leaves-out lines"
+        );
+    }
+    // A left-out directory no configured crate reads would count nowhere,
+    // so the run fails, naming it.
+    fs::write(
+        dir.join("verus/count.toml"),
+        "[crates]\nmembers = [{ name = \"a\", path = \"crates/a\", skip_packages = true }, { name = \"x\", path = \"crates/a/src/uu/x\" }]\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    let want = "FAIL skip_packages: crate a leaves out crates/a/src/uu/deep/y, which holds a Cargo.toml, but no configured crate reads it";
+    assert!(
+        got == 1 && err.contains(want) && !err.contains("src/uu/x,"),
+        "y unread: got = exit {got}, {out:?}, {err:?}; wanted = exit 1, {want:?}"
+    );
+    // Fail closed: what the crate itself compiles from a left-out
+    // directory: a `#[path]` module, a target's root, and an `include!`
+    // of a literal path (resolved from the including file's directory).
+    // An `include!` of a path the counter cannot resolve fails nothing.
+    let manifest = fs::read_to_string(dir.join("crates/a/Cargo.toml")).expect("read");
+    std::os::unix::fs::symlink("src/uu/x/src/lib.rs", dir.join("crates/a/z.rs")).expect("ln");
+    for (lib, bin, want) in [
+        (
+            "#[path = \"uu/x/src/lib.rs\"]\nmod x;\npub fn f() {}\n",
+            "",
+            "uu/x/src/lib.rs, which the counter does not read",
+        ),
+        (
+            lib,
+            "[[bin]]\nname = \"y\"\npath = \"src/uu/deep/y/src/main.rs\"\n",
+            "a target's root file is",
+        ),
+        // A root outside src/ that links into a left-out directory.
+        (
+            lib,
+            "[[bin]]\nname = \"z\"\npath = \"z.rs\"\n",
+            "a target's root file is",
+        ),
+        (
+            "include!(\"uu/x/src/lib.rs\");\npub fn f() {}\n",
+            "",
+            "include!(\"uu/x/src/lib.rs\") names",
+        ),
+        // The raw identifier is the same macro.
+        (
+            "r#include!(\"uu/x/src/lib.rs\");\npub fn f() {}\n",
+            "",
+            "include!(\"uu/x/src/lib.rs\") names",
+        ),
+        (
+            "mod own;\n",
+            "",
+            "include!(\"../uu/deep/y/src/main.rs\") names",
+        ),
+    ] {
+        if lib == "mod own;\n" {
+            fs::write(
+                src.join("own/mod.rs"),
+                "pub mod k;\nfn wrap() { include!(\"../uu/deep/y/src/main.rs\"); }\n",
+            )
+            .expect("write");
+        } else {
+            let _ = fs::remove_file(src.join("own/mod.rs"));
+        }
+        fs::write(src.join("lib.rs"), lib).expect("write");
+        fs::write(dir.join("crates/a/Cargo.toml"), format!("{manifest}{bin}")).expect("write");
+        for (skip, code) in [(", skip_packages = true", 1), ("", 0)] {
+            fs::write(dir.join("verus/count.toml"), member(skip)).expect("write");
+            let (got, out, err) = count(&dir, &[]);
+            assert!(
+                got == code && (code == 0 || err.contains(want)),
+                "{lib:?} {bin:?} {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+            );
+        }
+    }
+    let _ = fs::remove_file(src.join("own/mod.rs"));
+    fs::write(dir.join("crates/a/Cargo.toml"), &manifest).expect("write");
+    fs::write(
+        dir.join("verus/count.toml"),
+        member(", skip_packages = true"),
+    )
+    .expect("write");
+    // Neither an include! the counter cannot resolve, nor one of a path
+    // outside src/ (through `..` to a file that is not there), is in a
+    // left-out directory.
+    for lib in [
+        "include!(concat!(env!(\"OUT_DIR\"), \"/uu/x/src/lib.rs\"));\npub fn f() {}\n",
+        "include!(\"../nowhere.rs\");\npub fn f() {}\n",
+    ] {
+        fs::write(src.join("lib.rs"), lib).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == 0,
+            "{lib:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// In a crate with `skip_packages = true`, an `include!` whose argument
+/// the counter cannot resolve fails the run (#198): `uu/x/gen.rs` sits in
+/// package `x`'s directory, outside `x`'s own `src/`, so an include of it
+/// through `concat!` of literals, or through a `macro_rules!` forwarding
+/// `$p` to `include!($p)`, would count it in no row. `x` is a configured
+/// member, so the every-left-out-directory check passes and the include
+/// check alone decides. Negative: `concat!(env!("OUT_DIR"), ..)`, which
+/// is outside `src/`, and `include_str!`, which reads no code, pass; and
+/// without the key every case passes.
+#[test]
+fn skip_packages_fails_an_include_it_cannot_resolve() {
+    let dir = crate_of("skip-include", &[("lib.rs", "pub fn f() {}\n")]);
+    let src = dir.join("crates/a/src");
+    fs::create_dir_all(src.join("uu/x/src")).expect("mkdir");
+    fs::write(
+        src.join("uu/x/Cargo.toml"),
+        "[package]\nname = \"x\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(src.join("uu/x/src/lib.rs"), "pub fn g() {}\n").expect("write");
+    fs::write(src.join("uu/x/gen.rs"), "pub fn hidden() {}\n").expect("write");
+    let config = |skip: &str| {
+        format!(
+            "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"x\", path = \"crates/a/src/uu/x\" }}]\n"
+        )
+    };
+    let unresolved = "names a file the counter cannot resolve in a crate with skip_packages";
+    let in_macro = "is inside a macro_rules! definition, so rustc resolves its path from wherever the macro is invoked";
+    let imported = "imports `include`, and the counter cannot follow a renamed or imported include in a crate with skip_packages";
+    let forwarded = "name include outside an include! invocation, which the macro may forward to one, and the counter cannot follow that in a crate with skip_packages";
+    for (lib, code, want) in [
+        // `include` handed to a macro as an identifier it may invoke, as
+        // written or raw: no `include !` pair, no `use`.
+        (
+            "macro_rules! call { ($m:ident, $p:literal) => { $m!($p); }; }\ncall!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        (
+            "macro_rules! call { ($m:ident, $p:literal) => { $m!($p); }; }\ncall!(r#include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        // A single `:` is no path separator (`$m:ident : $p:literal`).
+        (
+            "macro_rules! call { ($m:ident : $p:literal) => { $m!($p); }; }\ncall!(include: \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        // Nor are two `:` with space between them.
+        (
+            "macro_rules! call { ($m:ident : : $p:literal) => { $m!($p); }; }\ncall!(include : : \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        // A path through a module named `include` in a macro body passes.
+        (
+            "mod include { pub fn g() {} }\nmacro_rules! p { () => { include::g() }; }\npub fn f() { p!() }\n",
+            0,
+            "",
+        ),
+        // An invocation spliced from a macro's input in its body, with no
+        // group after `!` (`include!$g`), or no `!` at all.
+        (
+            "macro_rules! m { ($g:tt) => { include!$g; }; }\nm!((\"uu/x/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include !$ g is inside a macro_rules! definition",
+        ),
+        (
+            "macro_rules! m { ($b:tt $g:tt) => { include $b $g; }; }\nm!(! (\"uu/x/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include $ b $ is inside a macro_rules! definition",
+        ),
+        // A matcher reaches into groups, so the rule holds at any depth.
+        (
+            "macro_rules! call { ([$m:ident] $p:literal) => { $m!($p); }; }\ncall!([include] \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        // A std macro's name the crate defines for itself is held as any
+        // other macro is.
+        (
+            "macro_rules! println { ($m:ident, $p:literal) => { $m!($p); }; }\nprintln!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        // So is one a `use` brings in from another crate, or renames
+        // anything to: it outranks the prelude's.
+        (
+            "use dep::vec;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::call as println;\nprintln!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        // So is one invoked through another crate's path; one through
+        // std's path is std's.
+        (
+            "dep::vec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:1: a macro invocation's arguments name include",
+        ),
+        (
+            "::dep::println!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:1: a macro invocation's arguments name include",
+        ),
+        // A std name the crate rebinds is another crate's: a path through
+        // it, or an import through it, is held.
+        (
+            "use dep as core;\ncore::vec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep as core;\nuse core::vec;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:3: a macro invocation's arguments name include",
+        ),
+        (
+            "extern crate dep as std;\nstd::vec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        (
+            "extern crate dep as std;\nuse std::vec;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:3: a macro invocation's arguments name include",
+        ),
+        // An import of a std name, not renamed, rebinds it too.
+        (
+            "use dep::core;\ncore::vec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::{core, other};\nuse core::vec;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:3: a macro invocation's arguments name include",
+        ),
+        // A `#[macro_use] extern crate` of another crate, crate-wide, or
+        // a glob of another crate's in the file, may bring in a macro of
+        // any name, which outranks the std prelude's: a std value macro's
+        // arguments, and the OUT_DIR form, are held.
+        (
+            "#[macro_use]\nextern crate dep;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:3: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::*;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:2: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::*;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:2: include!(concat",
+        ),
+        (
+            "#[macro_use]\nextern crate dep;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:3: include!(concat",
+        ),
+        // Under a `cfg_attr` too, whatever its condition.
+        (
+            "#[cfg_attr(all(), macro_use)]\nextern crate dep;\nvec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:3: a macro invocation's arguments name include",
+        ),
+        (
+            "#[cfg_attr(all(), macro_use)]\nextern crate dep;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:3: include!(concat",
+        ),
+        // A glob at a std root leaves std's macros std's.
+        (
+            "use std::collections::*;\npub fn f() -> bool { let include = true; assert!(include); include }\n",
+            0,
+            "",
+        ),
+        // A rebinding of another name leaves a std path std's.
+        (
+            "use dep as other;\npub fn f() -> bool { let include = true; core::assert!(include); include }\n",
+            0,
+            "",
+        ),
+        (
+            "pub fn f() -> bool { let include = true; std::assert!(include); include }\n",
+            0,
+            "",
+        ),
+        // A field, method or variable named `include`, also one passed to
+        // std's formatting macros, is not handed to an invocation.
+        (
+            "pub struct S { pub include: bool }\nimpl S { pub fn include(&self) -> bool { self.include } }\npub fn f(s: &S) -> S {\n    let include = s.include();\n    println!(\"{}\", include);\n    assert!(include || !include);\n    S { include }\n}\n",
+            0,
+            "",
+        ),
+        // A path through a module named `include`, handed to a macro.
+        (
+            "mod include { pub fn g() {} }\nmacro_rules! run { ($e:path) => { $e() }; }\npub fn f() { run!(include::g) }\n",
+            0,
+            "",
+        ),
+        // `include` imported under another name, alone, grouped, from
+        // std, or from inside a function: an invocation through the new
+        // name is not one the scan sees, so the import fails.
+        (
+            "use core::include as inc;\ninc!(\"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:1: `use core :: include as inc`",
+        ),
+        (
+            "use ::core::{include as inc, primitive};\ninc!(\"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:1: `use :: core :: { include as inc , primitive }`",
+        ),
+        // The raw identifier `r#include` is the same macro to rustc,
+        // invoked or imported.
+        (
+            "r#include!(concat!(\"uu/x/\", \"gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (\"uu/x/\" , \"gen.rs\"))",
+        ),
+        (
+            "use core::r#include as inc;\ninc!(\"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:1: `use core :: r#include as inc`",
+        ),
+        (
+            "pub fn f() {\n    use std::include as inc;\n    inc!(\"uu/x/gen.rs\");\n}\n",
+            1,
+            "lib.rs:2: `use std :: include as inc`",
+        ),
+        // A glob names no `include` leaf, nor does a path through a
+        // module of that name.
+        (
+            "use std::prelude::v1::*;\nuse self::include::g;\nmod include { pub fn g() {} }\npub fn f() {}\n",
+            0,
+            "",
+        ),
+        (
+            "include!(concat!(\"uu/x/\", \"gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (\"uu/x/\" , \"gen.rs\"))",
+        ),
+        (
+            "macro_rules! inc { ($p:literal) => { include!($p); }; }\ninc!(\"uu/x/gen.rs\");\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!($ p) is inside a macro_rules! definition",
+        ),
+        // Only `OUT_DIR`, and only through `concat!`, is outside src/.
+        (
+            "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/uu/x/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (env ! (\"CARGO_MANIFEST_DIR\")",
+        ),
+        // The OUT_DIR form's tail must be string literals that climb out
+        // of OUT_DIR nowhere: any build.rs sets OUT_DIR, and a `..` tail
+        // can reach back into a left-out directory.
+        (
+            "include!(concat!(env!(\"OUT_DIR\"), \"/../../../../../crates/a/src/uu/x/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (env ! (\"OUT_DIR\") , \"/../",
+        ),
+        (
+            "include!(concat!(env!(\"OUT_DIR\"), \"/a/\", \"..\", \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (env ! (\"OUT_DIR\") , \"/a/\"",
+        ),
+        (
+            "include!(concat!(env!(\"OUT_DIR\"), other!()));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (env ! (\"OUT_DIR\") , other !",
+        ),
+        (
+            "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\",));\npub fn f() {}\n",
+            0,
+            "",
+        ),
+        (
+            "include!(concat!(dir!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(concat ! (dir !",
+        ),
+        (
+            "include!(joined!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: include!(joined !",
+        ),
+        (
+            "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            0,
+            "",
+        ),
+        // A `concat` or `env` the crate defines, or renames a macro to,
+        // shadows the builtin, so the OUT_DIR form could name any file.
+        (
+            "macro_rules! concat { ($($t:tt)*) => { \"uu/x/tests/gen.rs\" }; }\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:2: include!(concat ! (env ! (\"OUT_DIR\") , \"/gen.rs\"))",
+        ),
+        (
+            "macro_rules! env { ($v:literal) => { \"uu/x/tests\" }; }\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:2: include!(concat ! (env ! (\"OUT_DIR\") , \"/gen.rs\"))",
+        ),
+        (
+            "use crate::p as env;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: `use crate :: p as env`",
+        ),
+        // An explicit import of another crate's `concat` or `env`, plain
+        // or grouped, outranks the prelude too.
+        (
+            "use dep::concat;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: `use dep :: concat`",
+        ),
+        (
+            "use dep::{env};\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            1,
+            "lib.rs:1: `use dep :: { env }`",
+        ),
+        // A plain `use std::env;` imports the module and shadows nothing.
+        (
+            "use std::env;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+            0,
+            "",
+        ),
+        (
+            "pub const S: &str = include_str!(concat!(\"uu/x/\", \"gen.rs\"));\npub fn f() {}\n",
+            0,
+            "",
+        ),
+    ] {
+        fs::write(src.join("lib.rs"), lib).expect("write");
+        // uu/x/gen.rs, which no row counts, fails the run by itself (the
+        // coverage backstop), so it is there only where the include check
+        // is to fail too, and the passing cases have no such file.
+        if code == 1 {
+            fs::write(src.join("uu/x/gen.rs"), "pub fn hidden() {}\n").expect("write");
+        } else {
+            let _ = fs::remove_file(src.join("uu/x/gen.rs"));
+        }
+        for (skip, code) in [(", skip_packages = true", code), ("", 0)] {
+            fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+            let (got, out, err) = count(&dir, &[]);
+            let failed = err.contains(unresolved)
+                || err.contains(in_macro)
+                || err.contains(imported)
+                || err.contains(forwarded);
+            let named = code == 0 || (err.contains(want) && failed);
+            assert!(
+                got == code && named && (code == 1 || !failed),
+                "{lib:?} {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+            );
+        }
+    }
+    // A glob binds names in its own module only: one in another file of
+    // the crate leaves the OUT_DIR form trusted here (uutils' uucore has
+    // `pub use uucore_procs::*;` at its root and the form in a module).
+    fs::write(src.join("m.rs"), "pub use dep::*;\npub fn h() {}\n").expect("write");
+    fs::write(
+        src.join("lib.rs"),
+        "mod m;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn f() {}\n",
+    )
+    .expect("write");
+    let _ = fs::remove_file(src.join("uu/x/gen.rs"));
+    fs::write(
+        dir.join("verus/count.toml"),
+        config(", skip_packages = true"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "a glob in another module: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    fs::remove_file(src.join("m.rs")).expect("rm");
+    // A Cargo dependency of a renamed to a std name rebinds it in a's own
+    // walk: a path through it is held, though no file binds the name.
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[package.metadata.verus]\nverify = true\n[dependencies]\ncore = { package = \"dep\", path = \"../dep\" }\n",
+    )
+    .expect("write");
+    fs::write(
+        src.join("lib.rs"),
+        "core::vec!(include, \"uu/x/gen.rs\");\npub fn f() {}\n",
+    )
+    .expect("write");
+    fs::write(src.join("uu/x/gen.rs"), "pub fn hidden() {}\n").expect("write");
+    for (skip, code) in [(", skip_packages = true", 1), ("", 0)] {
+        fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        let named = err.contains("lib.rs:1: a macro invocation's arguments name include")
+            && err.contains(forwarded);
+        assert!(
+            got == code && (code == 0) != named,
+            "renamed dependency {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// rustc resolves a relative `include!` path written in a `macro_rules!`
+/// body from the file that invokes the macro (#198): `inc!()`, defined in
+/// lib.rs with `include!("x/gen.rs")` and invoked in uu/mod.rs, reads
+/// uu/x/gen.rs, in package `x`'s directory and outside `x`'s src/, so no
+/// row would count it. With `skip_packages = true`, an `include!` inside
+/// any `macro_rules!` definition (nested ones too) fails the run, its
+/// literal path notwithstanding. Negative: one of the
+/// `concat!(env!("OUT_DIR"), ..)` form there passes; without the key
+/// every case passes.
+#[test]
+fn skip_packages_fails_an_include_in_a_macro_body() {
+    let dir = crate_of("skip-include-macro", &[]);
+    let src = dir.join("crates/a/src");
+    fs::create_dir_all(src.join("uu/x/src")).expect("mkdir");
+    fs::write(
+        src.join("uu/x/Cargo.toml"),
+        "[package]\nname = \"x\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(src.join("uu/x/src/lib.rs"), "pub fn g() {}\n").expect("write");
+    fs::write(src.join("uu/x/gen.rs"), "pub fn hidden() {}\n").expect("write");
+    fs::write(src.join("uu/mod.rs"), "inc!();\n").expect("write");
+    let config = |skip: &str| {
+        format!(
+            "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"x\", path = \"crates/a/src/uu/x\" }}]\n"
+        )
+    };
+    let in_macro = "is inside a macro_rules! definition, so rustc resolves its path from wherever the macro is invoked";
+    for (lib, code) in [
+        (
+            "macro_rules! inc { () => { include!(\"x/gen.rs\"); }; }\nmod uu;\n",
+            1,
+        ),
+        (
+            "macro_rules! outer { () => { macro_rules! inc { () => { include!(\"x/gen.rs\"); }; } }; }\nouter!();\nmod uu;\n",
+            1,
+        ),
+        (
+            "macro_rules! inc { () => { include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\")); }; }\nmod uu;\n",
+            0,
+        ),
+    ] {
+        fs::write(src.join("lib.rs"), lib).expect("write");
+        // As above: uu/x/gen.rs fails by the coverage backstop alone.
+        if code == 1 {
+            fs::write(src.join("uu/x/gen.rs"), "pub fn hidden() {}\n").expect("write");
+        } else {
+            let _ = fs::remove_file(src.join("uu/x/gen.rs"));
+        }
+        for (skip, code) in [(", skip_packages = true", code), ("", 0)] {
+            fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+            let (got, out, err) = count(&dir, &[]);
+            let named = err.contains("lib.rs:1: include!(\"x/gen.rs\")") && err.contains(in_macro);
+            assert!(
+                got == code && (code == 0) != named,
+                "{lib:?} {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}"
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The crate counting a left-out directory reads its own src/ alone
+/// (#198), so a library or binary root it declares outside its src/
+/// (`[lib] path = "lib.rs"`, `[[bin]] path = "tool.rs"`) would count in
+/// no row once the outer crate leaves the directory out: with
+/// `skip_packages = true` the run fails, naming the root and the
+/// directory. `x` is a configured member with a src/, so the earlier
+/// checks pass. Negative: roots under src/, and a test target outside it
+/// (which ships nothing), pass; without the key every case passes.
+#[test]
+fn skip_packages_fails_a_counting_crate_s_root_outside_its_src() {
+    let dir = crate_of("skip-counting-root", &[("lib.rs", "pub fn f() {}\n")]);
+    let x = dir.join("crates/a/src/uu/x");
+    fs::create_dir_all(x.join("src")).expect("mkdir");
+    fs::create_dir_all(x.join("tests")).expect("mkdir");
+    fs::write(x.join("src/main.rs"), "fn main() {}\n").expect("write");
+    fs::write(x.join("src/lib.rs"), "pub fn g() {}\n").expect("write");
+    fs::write(x.join("tests/t.rs"), "#[test]\nfn t() {}\n").expect("write");
+    let config = |skip: &str| {
+        format!(
+            "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"x\", path = \"crates/a/src/uu/x\" }}]\n"
+        )
+    };
+    let package = "[package]\nname = \"x\"\nversion = \"0.0.0\"\n";
+    for (targets, code, root) in [
+        ("[lib]\npath = \"lib.rs\"\n", 1, "crates/a/src/uu/x/lib.rs"),
+        (
+            "[[bin]]\nname = \"tool\"\npath = \"tool.rs\"\n",
+            1,
+            "crates/a/src/uu/x/tool.rs",
+        ),
+        (
+            "[lib]\npath = \"src/../lib.rs\"\n",
+            1,
+            "crates/a/src/uu/x/src/../lib.rs",
+        ),
+        ("[lib]\npath = \"src/lib.rs\"\n", 0, ""),
+        ("[[test]]\nname = \"t\"\npath = \"tests/t.rs\"\n", 0, ""),
+    ] {
+        fs::write(x.join("Cargo.toml"), format!("{package}{targets}")).expect("write");
+        // x/lib.rs and x/tool.rs, which no row counts, fail by the
+        // coverage backstop alone, so they are there only for the roots
+        // that are to fail.
+        for f in ["lib.rs", "tool.rs"] {
+            if code == 1 {
+                fs::write(x.join(f), "fn main() {}\npub fn hidden() {}\n").expect("write");
+            } else {
+                let _ = fs::remove_file(x.join(f));
+            }
+        }
+        for (skip, code) in [(", skip_packages = true", code), ("", 0)] {
+            fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+            let (got, out, err) = count(&dir, &[]);
+            let want = format!(
+                "FAIL skip_packages: crate a leaves out crates/a/src/uu/x, and crate x, which counts it, does not read its target root {root}, which lies outside its src/"
+            );
+            assert!(
+                got == code && (code == 0) != err.contains(&want),
+                "{targets:?} {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+            );
+        }
+    }
+    // A root written outside src/ that links to a file in it, which x
+    // reads, passes. (Without the key, `a` refuses the link as one under
+    // its own src/.)
+    std::os::unix::fs::symlink("src/lib.rs", x.join("linked.rs")).expect("ln");
+    fs::write(
+        x.join("Cargo.toml"),
+        format!("{package}[lib]\npath = \"linked.rs\"\n"),
+    )
+    .expect("write");
+    fs::write(
+        dir.join("verus/count.toml"),
+        config(", skip_packages = true"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "linked root: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    // Nor does x's walk read a file x includes from outside its src/:
+    // with the key, x is held as a crate with skip_packages is, against
+    // all of its src/. Negative: an include within x/src, and the OUT_DIR
+    // form, pass; without the key every case passes.
+    fs::remove_file(x.join("linked.rs")).expect("rm");
+    fs::write(
+        x.join("Cargo.toml"),
+        format!("{package}[lib]\npath = \"src/lib.rs\"\n"),
+    )
+    .expect("write");
+    fs::write(x.join("src/gen.rs"), "pub fn shown() {}\n").expect("write");
+    let includes = "FAIL skip_packages: crate a leaves out crates/a/src/uu/x, and crate x, which counts it, does not read what crates/a/src/uu/x/src/lib.rs:";
+    for (lib, code, want) in [
+        (
+            "include!(\"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "include!(\"../gen.rs\") names crates/a/src/uu/x/src/../gen.rs, outside its src/",
+        ),
+        // The raw identifier is the same macro.
+        (
+            "r#include!(\"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "include!(\"../gen.rs\") names crates/a/src/uu/x/src/../gen.rs, outside its src/",
+        ),
+        (
+            "include!(concat!(\"../\", \"gen.rs\"));\npub fn g() {}\n",
+            1,
+            "names a file the counter cannot resolve",
+        ),
+        // x's own `concat` shadows the builtin: the OUT_DIR form is no
+        // longer trusted in the counting crate either.
+        (
+            "macro_rules! concat { ($($t:tt)*) => { \"../gen.rs\" }; }\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn g() {}\n",
+            1,
+            "names a file the counter cannot resolve",
+        ),
+        // Another crate's macro imported under a std name is held in the
+        // counting crate too.
+        (
+            "use dep::vec;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "dep::vec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:1 includes: a macro invocation's arguments name include",
+        ),
+        // So is one through a std name the crate rebinds, by path or
+        // import.
+        (
+            "use dep as core;\ncore::vec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep as core;\nuse core::vec;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:3 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "extern crate dep as std;\nstd::vec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "extern crate dep as std;\nuse std::vec;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:3 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::core;\nuse core::vec;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:3 includes: a macro invocation's arguments name include",
+        ),
+        // So is one a `#[macro_use]` or a foreign glob may bring in, and
+        // the OUT_DIR form beside such a glob.
+        (
+            "#[macro_use]\nextern crate dep;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:3 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::*;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "use dep::*;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: include!(concat",
+        ),
+        (
+            "#[cfg_attr(all(), macro_use)]\nextern crate dep;\nvec!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:3 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "#[cfg_attr(all(), macro_use)]\nextern crate dep;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn g() {}\n",
+            1,
+            "src/lib.rs:3 includes: include!(concat",
+        ),
+        (
+            "use core::include as inc;\ninc!(\"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "`use core :: include as inc` imports `include`, and the counter cannot follow a renamed or imported include in the crate counting a left-out directory",
+        ),
+        (
+            "macro_rules! call { ($m:ident : $p:literal) => { $m!($p); }; }\ncall!(include: \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: a macro invocation's arguments name include",
+        ),
+        (
+            "macro_rules! m { ($g:tt) => { include!$g; }; }\nm!((\"../gen.rs\"));\npub fn g() {}\n",
+            1,
+            "src/lib.rs:1 includes: include !$ g is inside a macro_rules! definition",
+        ),
+        (
+            "macro_rules! m { ($b:tt $g:tt) => { include $b $g; }; }\nm!(! (\"../gen.rs\"));\npub fn g() {}\n",
+            1,
+            "src/lib.rs:1 includes: include $ b $ is inside a macro_rules! definition",
+        ),
+        (
+            "macro_rules! call { ($m:ident, $p:literal) => { $m!($p); }; }\ncall!(include, \"../gen.rs\");\npub fn g() {}\n",
+            1,
+            "src/lib.rs:2 includes: a macro invocation's arguments name include outside an include! invocation, which the macro may forward to one, and the counter cannot follow that in the crate counting a left-out directory",
+        ),
+        (
+            "macro_rules! m { () => { include!(\"gen.rs\"); }; }\nm!();\npub fn g() {}\n",
+            1,
+            "is inside a macro_rules! definition",
+        ),
+        ("include!(\"gen.rs\");\npub fn g() {}\n", 0, ""),
+        // A field, method or variable named `include` is not handed to an
+        // invocation.
+        (
+            "pub struct S { pub include: bool }\nimpl S { pub fn include(&self) -> bool { self.include } }\npub fn g(s: &S) -> S {\n    let include = s.include();\n    println!(\"{}\", include);\n    S { include }\n}\n",
+            0,
+            "",
+        ),
+        // A file that is not there (rustc fails the build) is judged by
+        // its path as written: under src/.
+        ("include!(\"missing.rs\");\npub fn g() {}\n", 0, ""),
+        (
+            "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\npub fn g() {}\n",
+            0,
+            "",
+        ),
+    ] {
+        fs::write(x.join("src/lib.rs"), lib).expect("write");
+        // x/gen.rs fails by the coverage backstop alone: there only where
+        // the include check is to fail too.
+        if code == 1 {
+            fs::write(x.join("gen.rs"), "pub fn hidden() {}\n").expect("write");
+        } else {
+            let _ = fs::remove_file(x.join("gen.rs"));
+        }
+        for (skip, code) in [(", skip_packages = true", code), ("", 0)] {
+            fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+            let (got, out, err) = count(&dir, &[]);
+            let named = err.contains(includes) && err.contains(want);
+            assert!(
+                got == code && (code == 0) != named,
+                "{lib:?} {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+            );
+        }
+    }
+    // A Cargo dependency renamed to a std name rebinds it too: a path
+    // through it is held, though no file of the crate binds the name.
+    fs::write(
+        x.join("Cargo.toml"),
+        format!("{package}[lib]\npath = \"src/lib.rs\"\n[dependencies]\ncore = {{ package = \"dep\", path = \"../dep\" }}\n"),
+    )
+    .expect("write");
+    fs::write(
+        x.join("src/lib.rs"),
+        "core::vec!(include, \"../gen.rs\");\npub fn g() {}\n",
+    )
+    .expect("write");
+    fs::write(x.join("gen.rs"), "pub fn hidden() {}\n").expect("write");
+    for (skip, code) in [(", skip_packages = true", 1), ("", 0)] {
+        fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        let named = err.contains(includes)
+            && err.contains("src/lib.rs:1 includes: a macro invocation's arguments name include");
+        assert!(
+            got == code && (code == 0) != named,
+            "renamed dependency {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The coverage backstop (#198): with `skip_packages = true`, every `*.rs`
+/// file under a left-out directory is one the crate counting it reads
+/// (under its src/), or one cargo builds apart from its shipped targets
+/// (under tests/, benches/, examples/, or build.rs). Any other, with no
+/// include of it anywhere, fails the run: no row counts it, and an
+/// include! the scan does not see could compile it into a crate.
+/// Negative: tests/, benches/, examples/ and build.rs pass; without the
+/// key every case passes.
+#[test]
+fn skip_packages_fails_a_file_no_row_counts() {
+    let dir = crate_of("skip-coverage", &[("lib.rs", "pub fn f() {}\n")]);
+    let x = dir.join("crates/a/src/uu/x");
+    for d in ["src", "tests", "benches", "examples", "other"] {
+        fs::create_dir_all(x.join(d)).expect("mkdir");
+    }
+    fs::write(
+        x.join("Cargo.toml"),
+        "[package]\nname = \"x\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(x.join("src/lib.rs"), "pub fn g() {}\n").expect("write");
+    for f in ["tests/t.rs", "benches/b.rs", "examples/e.rs", "build.rs"] {
+        fs::write(x.join(f), "fn main() {}\n").expect("write");
+    }
+    let config = |skip: &str| {
+        format!(
+            "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"x\", path = \"crates/a/src/uu/x\" }}]\n"
+        )
+    };
+    for (stray, code) in [(None, 0), (Some("gen.rs"), 1), (Some("other/m.rs"), 1)] {
+        for f in ["gen.rs", "other/m.rs"] {
+            let _ = fs::remove_file(x.join(f));
+        }
+        if let Some(f) = stray {
+            fs::write(x.join(f), "pub fn hidden() {}\n").expect("write");
+        }
+        for (skip, code) in [(", skip_packages = true", code), ("", 0)] {
+            fs::write(dir.join("verus/count.toml"), config(skip)).expect("write");
+            let (got, out, err) = count(&dir, &[]);
+            let want = format!(
+                "FAIL skip_packages: crate a leaves out crates/a/src/uu/x, where crates/a/src/uu/x/{} is a `*.rs` file that crate x, which counts it, does not read",
+                stray.unwrap_or("")
+            );
+            assert!(
+                got == code && (code == 0) != err.contains(&want),
+                "{stray:?} {skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+            );
+        }
+    }
+    // Directory links that form cycles: two under tests/ (never entered)
+    // and one elsewhere (walked once). The run ends and passes.
+    for f in ["gen.rs", "other/m.rs"] {
+        let _ = fs::remove_file(x.join(f));
+    }
+    std::os::unix::fs::symlink(".", x.join("tests/left")).expect("ln");
+    std::os::unix::fs::symlink(".", x.join("tests/right")).expect("ln");
+    std::os::unix::fs::symlink("..", x.join("other/up")).expect("ln");
+    fs::write(
+        dir.join("verus/count.toml"),
+        config(", skip_packages = true"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "cycle links: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    // A package nested in x outside its src/ (`x/derive`): a configured
+    // crate counts it, so the backstop passes it; unconfigured, no row
+    // counts its files and the run fails.
+    fs::create_dir_all(x.join("derive/src")).expect("mkdir");
+    fs::write(
+        x.join("derive/Cargo.toml"),
+        "[package]\nname = \"derive\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(x.join("derive/src/lib.rs"), "pub fn d() {}\n").expect("write");
+    let nested = "[crates]\nmembers = [{ name = \"a\", path = \"crates/a\", skip_packages = true }, { name = \"x\", path = \"crates/a/src/uu/x\" }, { name = \"derive\", path = \"crates/a/src/uu/x/derive\" }]\n";
+    fs::write(dir.join("verus/count.toml"), nested).expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "configured nested package: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    fs::write(
+        dir.join("verus/count.toml"),
+        config(", skip_packages = true"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains("crates/a/src/uu/x/derive/src/lib.rs is a `*.rs` file that crate x"),
+        "unconfigured nested package: got = exit {got}, {out:?}, {err:?}; wanted = exit 1 naming x/derive/src/lib.rs"
+    );
+    // Configured, the nested package's own tests are built apart, but a
+    // file of it outside its src/ (a `[lib] path = "lib.rs"`, or a file
+    // its src includes from `..`) is counted by no row and fails.
+    fs::create_dir_all(x.join("derive/tests")).expect("mkdir");
+    fs::write(x.join("derive/tests/t.rs"), "fn main() {}\n").expect("write");
+    fs::write(dir.join("verus/count.toml"), nested).expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "configured nested package with tests: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    fs::write(x.join("derive/lib.rs"), "pub fn hidden() {}\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("crates/a/src/uu/x/derive/lib.rs is a `*.rs` file that crate x"),
+        "configured nested package, a file outside its src/: got = exit {got}, {out:?}, {err:?}; wanted = exit 1 naming x/derive/lib.rs"
+    );
+    // Its includes are held as the counting crate's are: a file in its
+    // own tests/ (built apart, so the backstop passes it) that its src
+    // includes is counted by no row and fails.
+    fs::remove_file(x.join("derive/lib.rs")).expect("rm");
+    fs::write(x.join("derive/tests/gen.rs"), "pub fn hidden() {}\n").expect("write");
+    fs::write(
+        x.join("derive/src/lib.rs"),
+        "include!(\"../tests/gen.rs\");\npub fn d() {}\n",
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains("and crate derive, which counts it, does not read what crates/a/src/uu/x/derive/src/lib.rs:1 includes"),
+        "configured nested package including from its tests/: got = exit {got}, {out:?}, {err:?}; wanted = exit 1 naming derive's include"
+    );
+    // Its target roots are held as the counting crate's are: a library
+    // root in its own tests/ (`[lib] path = "tests/lib.rs"`) is read by
+    // no row and fails.
+    fs::write(x.join("derive/src/lib.rs"), "pub fn d() {}\n").expect("write");
+    fs::write(
+        x.join("derive/Cargo.toml"),
+        "[package]\nname = \"derive\"\nversion = \"0.0.0\"\n[lib]\npath = \"tests/lib.rs\"\n",
+    )
+    .expect("write");
+    fs::write(x.join("derive/tests/lib.rs"), "pub fn hidden() {}\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains("and crate derive, which counts it, does not read its target root crates/a/src/uu/x/derive/tests/lib.rs"),
+        "configured nested package, a root in its tests/: got = exit {got}, {out:?}, {err:?}; wanted = exit 1 naming derive's root"
+    );
+    fs::remove_dir_all(x.join("derive")).expect("rm");
+    // A package under x's tests/ (`x/tests/fixture`) may be a shipped
+    // crate's path dependency: unconfigured, it fails; configured, it
+    // passes, and its files outside its src/ are held all the same.
+    fs::create_dir_all(x.join("tests/fixture/src")).expect("mkdir");
+    fs::write(
+        x.join("tests/fixture/Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(x.join("tests/fixture/src/lib.rs"), "pub fn fx() {}\n").expect("write");
+    fs::write(
+        dir.join("verus/count.toml"),
+        config(", skip_packages = true"),
+    )
+    .expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains("where crates/a/src/uu/x/tests/fixture holds a Cargo.toml, but no configured crate reads it"),
+        "unconfigured package under tests/: got = exit {got}, {out:?}, {err:?}; wanted = exit 1 naming x/tests/fixture"
+    );
+    let fixture = "[crates]\nmembers = [{ name = \"a\", path = \"crates/a\", skip_packages = true }, { name = \"x\", path = \"crates/a/src/uu/x\" }, { name = \"fixture\", path = \"crates/a/src/uu/x/tests/fixture\" }]\n";
+    fs::write(dir.join("verus/count.toml"), fixture).expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 0,
+        "configured package under tests/: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    fs::write(x.join("tests/fixture/gen.rs"), "pub fn hidden() {}\n").expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1
+            && err.contains("crates/a/src/uu/x/tests/fixture/gen.rs is a `*.rs` file that crate x"),
+        "configured package under tests/, a file outside its src/: got = exit {got}, {out:?}, {err:?}; wanted = exit 1 naming x/tests/fixture/gen.rs"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A target root reached through a link under `src/` into another
+/// package's directory (`src/bin` a link to `../../tool`, which holds a
+/// Cargo.toml, with autobins finding `src/bin/x.rs`) fails the run with
+/// `skip_packages = true`: the walk leaves the directory out, while cargo
+/// builds `x.rs` as the crate's binary. Without the key the link is
+/// refused, as one the walk reads through.
+#[test]
+fn skip_packages_fails_a_root_through_a_link() {
+    let dir = crate_of("skip-root-link", &[("lib.rs", "pub fn f() {}\n")]);
+    fs::create_dir_all(dir.join("crates/tool/src")).expect("mkdir");
+    fs::write(
+        dir.join("crates/tool/Cargo.toml"),
+        "[package]\nname = \"tool\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write");
+    fs::write(dir.join("crates/tool/src/lib.rs"), "pub fn t() {}\n").expect("write");
+    fs::write(
+        dir.join("crates/tool/x.rs"),
+        "fn main() {}\npub fn hidden() {}\n",
+    )
+    .expect("write");
+    std::os::unix::fs::symlink("../../tool", dir.join("crates/a/src/bin")).expect("ln");
+    for (skip, code, want) in [
+        (", skip_packages = true", 1, "a target's root file is"),
+        ("", 2, "[crates] crate a reads crates/a/src/bin, a symlink"),
+    ] {
+        fs::write(
+            dir.join("verus/count.toml"),
+            format!(
+                "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"tool\", path = \"crates/tool\" }}]\n"
+            ),
+        )
+        .expect("write");
+        let (got, out, err) = count(&dir, &[]);
+        assert!(
+            got == code && err.contains(want) && (code != 1 || err.contains("src/bin/x.rs")),
+            "{skip:?}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The base revision's walk leaves out the directories the head's does
+/// (#198), so the head and the base count alike: a file of another
+/// package under `src/` that invokes `dep::bin!()`, a macro crate `a`
+/// also defines, is an error only when read as part of `a` (its own
+/// crate `x` defines no `bin`), and with `skip_packages = true` neither
+/// the walk nor the base's (read for its rlimits with `--base-rev`)
+/// reads it as `a`'s. Negative: without the key the walk fails on it.
+#[test]
+fn skip_packages_holds_for_every_reader_of_the_sources() {
+    let config = |skip: &str| {
+        format!(
+            "[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}, {{ name = \"x\", path = \"crates/a/src/uu/x\" }}]\n[rlimit]\npath = \"verus/RLIMIT\"\n"
+        )
+    };
+    let skipped = config(", skip_packages = true");
+    let (top, dir) = sub_repository(
+        "skip-packages",
+        &[
+            (
+                b"crates/a/Cargo.toml",
+                "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[package.metadata.verus]\nverify = true\n",
+            ),
+            (
+                b"crates/a/src/lib.rs",
+                "::vstd::prelude::verus! {\n#[verifier::rlimit(10)]\npub fn f() {}\n}\n#[macro_export]\nmacro_rules! bin { () => {} }\n",
+            ),
+            (
+                b"crates/a/src/uu/x/Cargo.toml",
+                "[package]\nname = \"x\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+            ),
+            (
+                b"crates/a/src/uu/x/src/lib.rs",
+                "dep::bin!();\npub fn g() {}\n",
+            ),
+            (b"verus/count.toml", &skipped),
+            (b"verus/RLIMIT", "max-share 65\n"),
+        ],
+    );
+    let stats = top.join("stats.json");
+    fs::write(&stats, ratchet_stats(3_000_000).replace("a::v", "a::f")).expect("write");
+    let s = stats.to_string_lossy().into_owned();
+    let (got, out, err) = count(&dir, &["--rlimit", &s, "--base-rev", "base"]);
+    assert!(
+        got == 0 && out.contains("ok rlimit headroom") && !err.contains("bin!"),
+        "skipped: got = exit {got}, {out:?}, {err:?}; wanted = exit 0"
+    );
+    fs::write(dir.join("verus/count.toml"), config("")).expect("write");
+    let (got, out, err) = count(&dir, &[]);
+    assert!(
+        got == 1 && err.contains("crates/a/src/uu/x/src/lib.rs:1: bin! resolves to none"),
+        "read: got = exit {got}, {out:?}, {err:?}; wanted = exit 1"
+    );
+    let _ = fs::remove_dir_all(&top);
+}
+
+/// Turning `skip_packages` on for a crate the base read narrows what it
+/// counts (#198), so with `--base-rev` it fails without a new
+/// `[[narrowed]]` line naming it, and passes with one. Negative: turning
+/// it off is no narrowing.
+#[test]
+fn skip_packages_turned_on_is_a_narrowing() {
+    let dir = repository("skip-narrowed");
+    let member = |skip: &str| {
+        format!("[crates]\nmembers = [{{ name = \"a\", path = \"crates/a\"{skip} }}]\n")
+    };
+    let on = member(", skip_packages = true");
+    for (tag, text) in [("member", member("")), ("skipping", on.clone())] {
+        fs::write(dir.join("verus/count.toml"), text).expect("write");
+        git(&dir, &["add", "verus/count.toml"]);
+        git(&dir, &["commit", "-q", "-m", tag]);
+        git(&dir, &["tag", tag]);
+    }
+    let change = "[crates] member \"a\" changes skip_packages from false to true";
+    let line = format!(
+        "[[narrowed]]\nchange = {change:?}\nreason = \"src/uu holds the utilities' own packages\"\n"
+    );
+    for (text, base, code, want) in [
+        (
+            on.clone(),
+            "member",
+            1,
+            format!(
+                "FAIL configuration: verus/count.toml: {change}, so the directories under its src/ that hold a Cargo.toml are no longer read"
+            ),
+        ),
+        (
+            format!("{on}{line}"),
+            "member",
+            0,
+            format!(
+                "ok configuration: verus/count.toml: {change}, so the directories under its src/ that hold a Cargo.toml are no longer read, with a reason: src/uu holds the utilities' own packages"
+            ),
+        ),
+        (
+            member(""),
+            "skipping",
+            0,
+            "ok configuration: verus/count.toml keeps every gate skipping:verus/count.toml runs"
+                .to_owned(),
+        ),
+    ] {
+        fs::write(dir.join("verus/count.toml"), &text).expect("write");
+        let (got, out, err) = count(&dir, &["--base-rev", base]);
+        assert!(
+            got == code && (out.contains(&want) || err.contains(&want)),
+            "{text:?} against {base}: got = exit {got}, {out:?}, {err:?}; wanted = exit {code}, {want:?}"
         );
     }
     let _ = fs::remove_dir_all(&dir);

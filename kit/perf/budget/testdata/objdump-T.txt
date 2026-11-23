@@ -1,0 +1,12 @@
+
+libpbfixture.so:     file format elf64-x86-64
+
+DYNAMIC SYMBOL TABLE:
+0000000000000000  w   D  *UND*	0000000000000000              _ITM_deregisterTMCloneTable
+0000000000000000  w   D  *UND*	0000000000000000              __gmon_start__
+0000000000000000  w   D  *UND*	0000000000000000              _ITM_registerTMCloneTable
+0000000000000000  w   DF *UND*	0000000000000000 (GLIBC_2.2.5) __cxa_finalize
+0000000000001140 g    DF .text	0000000000000013  Base        fx_pick
+0000000000001160 g    DF .text	0000000000000008  Base        fx_set
+0000000000001120 g    DF .text	000000000000001b  Base        fx_load
+

@@ -18,8 +18,15 @@
 //! - unchecked otherwise.
 //!
 //! The combined share counts verified and discharged functions; partly
-//! checked ones are shown apart and not counted. A trusted function with
-//! no ledger entry is a warning; a discharged function seam that matches
+//! checked ones are shown apart and not counted. A `no_decreases` seam at
+//! the `fn` line of a function that `exec_allows_no_decreases_clause`
+//! alone makes trusted, with no function seam there, is its entry and
+//! counts it unchecked. A function seam at the `fn` line of a trusted
+//! function the attribute covers does not make it discharged or partly
+//! checked, since nothing checks that it ends: it counts unchecked, and
+//! the run warns when that seam's status says otherwise. A trusted
+//! function with no ledger entry
+//! is a warning; a discharged function seam that matches
 //! no trusted function, or a seam of a kind the counter does not know,
 //! fails the run. An `unsupported-attribute` seam (an item with
 //! `#[verifier::assume_unsupported_attributes]`) is the item's linkage
@@ -102,10 +109,23 @@ const FN_KINDS: &[&str] = &["external_body", "external_body proof", "axiom"];
 /// `trusted`.
 pub(crate) const UNSUPPORTED_ATTRIBUTE: &str = "unsupported-attribute";
 
+/// The kind of the seam a generator writes where
+/// `exec_allows_no_decreases_clause` is written. On a function it sits at
+/// the `fn` line and is that function's ledger entry when no [`FN_KINDS`]
+/// seam is there and the attribute alone makes the function trusted: the
+/// function counts unchecked whatever the status, since nothing outside
+/// Verus checks that it ends. A function trusted for another reason too
+/// (`external_body`, an `assume`, an unsure `cfg` on a shipped one), or
+/// at a macro invocation's line with one that is, still warns without a
+/// seam of that. On
+/// an `impl`, trait or module it matches no function, and each exec
+/// function the attribute covers with no seam at its own `fn` line warns.
+const NO_DECREASES: &str = "no_decreases";
+
 /// The other kinds a generator writes: items that are not functions, or
-/// that sit elsewhere than a trusted function's `fn` line (a
-/// `no_decreases` function counts as verified; an `assume_new` seam is the
-/// line of the call, inside a function that counts as trusted).
+/// that sit elsewhere than a trusted function's `fn` line (an
+/// `assume_new` seam is the line of the call, inside a function that
+/// counts as trusted), and [`NO_DECREASES`].
 const OTHER_KINDS: &[&str] = &[
     "external_body type",
     "external_body const",
@@ -113,7 +133,7 @@ const OTHER_KINDS: &[&str] = &[
     "ext_type_spec",
     "ext_trait_spec",
     "spec_impl",
-    "no_decreases",
+    NO_DECREASES,
     "assume_new",
     "ghost_assume_new",
     UNSUPPORTED_ATTRIBUTE,
@@ -455,13 +475,21 @@ impl Checked {
 }
 
 /// Classes each trusted function (`FILE:LINE`, its crate, lines) by the
-/// status of the function seam (`FN_KINDS`) at its location. Returns the
-/// tally by crate, warnings (a trusted function with no seam) and errors
-/// (a seam of an unknown kind, two function seams on one line, or a
-/// discharged function seam that matches no trusted function, whose
-/// coverage would otherwise drop out of the combined share unnoticed).
+/// status of the function seam (`FN_KINDS`) at its location, or, for one
+/// in `termination_only` (trusted only because of
+/// `exec_allows_no_decreases_clause`), as unchecked by a [`NO_DECREASES`]
+/// seam there. A function in `covered` (every trusted exec function the
+/// attribute covers) counts unchecked whatever its function seam's
+/// status. Returns the tally by crate, warnings (a trusted function
+/// with neither, or a function in `covered` whose function seam is
+/// discharged or partly checked) and errors (a seam of an unknown kind, two function
+/// seams on one line, or a discharged function seam that matches no
+/// trusted function, whose coverage would otherwise drop out of the
+/// combined share unnoticed).
 pub(crate) fn match_ledger(
     trusted: &[(String, String, usize)],
+    termination_only: &BTreeSet<String>,
+    covered: &BTreeSet<String>,
     seams: &[Seam],
 ) -> (BTreeMap<String, Checked>, Vec<String>, Vec<String>) {
     let mut checked: BTreeMap<String, Checked> = BTreeMap::new();
@@ -475,12 +503,47 @@ pub(crate) fn match_ledger(
             errors.push(format!("{}: two function seams on one line", s.loc));
         }
     }
+    // A `no_decreases` seam at a `fn` line is that function's entry when
+    // no function seam is there and the attribute alone makes it trusted,
+    // and it counts unchecked. A function trusted for another reason as
+    // well (`external_body`, an `assume`) still needs a seam of that.
+    let no_decreases: BTreeSet<&str> = seams
+        .iter()
+        .filter(|s| s.kind == NO_DECREASES)
+        .map(|s| s.loc.as_str())
+        .collect();
+    // A function seam at a function the attribute covers does not make it
+    // discharged or partly checked: nothing checks that it ends. Warned
+    // once per line (one macro invocation's functions share its line).
+    let mut overridden: BTreeSet<&str> = BTreeSet::new();
     for (krate, loc, lines) in trusted {
         let c = checked.entry(krate.clone()).or_default();
-        let slot = match by_loc.get(loc.as_str()).map(|s| s.status) {
+        let seam = by_loc.get(loc.as_str());
+        if covered.contains(loc) {
+            if let Some(s) = seam.filter(|s| s.status != Status::Unchecked)
+                && overridden.insert(loc.as_str())
+            {
+                let status = if s.status == Status::Discharged {
+                    "discharged"
+                } else {
+                    "partly checked"
+                };
+                warnings.push(format!(
+                    "{loc}: #[verifier::exec_allows_no_decreases_clause] covers the trusted function here, so its {status} {} seam counts it unchecked: nothing checks that it ends",
+                    s.kind
+                ));
+            }
+            if seam.is_some() {
+                continue;
+            }
+        }
+        let slot = match seam.map(|s| s.status) {
             Some(Status::Discharged) => &mut c.discharged,
             Some(Status::Partly) => &mut c.partly,
             Some(Status::Unchecked) => continue,
+            None if no_decreases.contains(loc.as_str()) && termination_only.contains(loc) => {
+                continue;
+            }
             None => {
                 warnings.push(format!("trusted function at {loc} has no ledger entry"));
                 continue;
@@ -1002,7 +1065,8 @@ See README.md:3. Kind: of a note. Status: discharged
             // Another kind on a function's line does not class it.
             seam("src/a.rs:40", "assume_new", Status::Discharged),
         ];
-        let (checked, warnings, errors) = match_ledger(&trusted, &seams);
+        let (checked, warnings, errors) =
+            match_ledger(&trusted, &BTreeSet::new(), &BTreeSet::new(), &seams);
         let want: BTreeMap<String, Checked> = [(
             "k".to_owned(),
             Checked {
@@ -1029,7 +1093,7 @@ See README.md:3. Kind: of a note. Status: discharged
             seam("src/a.rs:13", "external_body", Status::Partly),
             seam("src/a.rs:14", "macro_seam", Status::Unchecked),
         ];
-        let (_, _, errors) = match_ledger(&trusted, &seams);
+        let (_, _, errors) = match_ledger(&trusted, &BTreeSet::new(), &BTreeSet::new(), &seams);
         assert_eq!(
             errors,
             vec![
@@ -1044,12 +1108,138 @@ See README.md:3. Kind: of a note. Status: discharged
             seam("src/a.rs:10", "axiom", Status::Unchecked),
             seam("src/a.rs:10", "external_body", Status::Discharged),
         ];
-        let (_, _, errors) = match_ledger(&trusted, &seams);
+        let (_, _, errors) = match_ledger(&trusted, &BTreeSet::new(), &BTreeSet::new(), &seams);
         assert_eq!(
             errors,
             vec!["src/a.rs:10: two function seams on one line".to_owned()],
             "errors: got = {errors:?}"
         );
+    }
+
+    #[test]
+    fn no_decreases_seams_are_entries_that_count_unchecked() {
+        // The ledger entry as challoc's seams.sh writes it, at the `fn`
+        // line of a function that carries the attribute.
+        let text = "src/a.rs:10. Kind: no_decreases. Category: termination.\n\
+                    Tool: none (assumption). Status: trusted.\n";
+        let got = parse_ledger(text, &Premises::default());
+        let want = Ok(vec![seam("src/a.rs:10", "no_decreases", Status::Unchecked)]);
+        assert_eq!(got, want, "entry: got = {got:?}, want = {want:?}");
+
+        let t = |loc: &str, lines| ("k".to_owned(), loc.to_owned(), lines);
+        let trusted = vec![
+            t("src/a.rs:10", 5),
+            t("src/a.rs:20", 7),
+            t("src/a.rs:30", 11),
+            t("src/a.rs:60", 13),
+            t("src/a.rs:70", 17),
+        ];
+        // The functions the attribute alone makes trusted: not 70, which
+        // is trusted for another reason too (`external_body`, an
+        // `assume`).
+        let termination_only: BTreeSet<String> =
+            ["src/a.rs:10", "src/a.rs:20", "src/a.rs:30", "src/a.rs:60"]
+                .map(str::to_owned)
+                .into();
+        let seams = vec![
+            // The function's entry: no warning, and it counts unchecked.
+            seam("src/a.rs:10", "no_decreases", Status::Unchecked),
+            // Whatever its status: nothing checks that the function ends.
+            seam("src/a.rs:20", "no_decreases", Status::Discharged),
+            // Beside a function seam, the function seam is its entry, and
+            // the two are not two function seams on one line. The
+            // attribute covers the function, so it counts unchecked
+            // though the seam says discharged, and the run warns.
+            seam("src/a.rs:30", "external_body", Status::Discharged),
+            seam("src/a.rs:30", "no_decreases", Status::Unchecked),
+            // On an `impl` line: it matches no function, and is no error;
+            // a function the `impl`'s attribute covers (src/a.rs:60) with
+            // no seam of its own still warns.
+            seam("src/a.rs:50", "no_decreases", Status::Discharged),
+            // A function trusted for another reason too: the row does not
+            // stand for that reason's seam, so it still warns.
+            seam("src/a.rs:70", "no_decreases", Status::Unchecked),
+        ];
+        // Every function the attribute covers: those, and 70.
+        let mut covered = termination_only.clone();
+        covered.insert("src/a.rs:70".to_owned());
+        let (checked, warnings, errors) =
+            match_ledger(&trusted, &termination_only, &covered, &seams);
+        let want: BTreeMap<String, Checked> = [("k".to_owned(), Checked::default())].into();
+        assert_eq!(checked, want, "checked: got = {checked:?}, want = {want:?}");
+        assert_eq!(
+            warnings,
+            vec![
+                "src/a.rs:30: #[verifier::exec_allows_no_decreases_clause] covers the trusted function here, so its discharged external_body seam counts it unchecked: nothing checks that it ends".to_owned(),
+                "trusted function at src/a.rs:60 has no ledger entry".to_owned(),
+                "trusted function at src/a.rs:70 has no ledger entry".to_owned(),
+            ],
+            "warnings: got = {warnings:?}"
+        );
+        assert!(errors.is_empty(), "errors: got = {errors:?}, want = none");
+    }
+
+    #[test]
+    fn function_seams_do_not_check_functions_the_termination_attribute_covers() {
+        let t = |loc: &str, lines| ("k".to_owned(), loc.to_owned(), lines);
+        let trusted = vec![
+            t("src/a.rs:10", 5),
+            t("src/a.rs:20", 7),
+            t("src/a.rs:30", 11),
+            // Two functions one macro invocation writes.
+            t("src/a.rs:40", 13),
+            t("src/a.rs:40", 17),
+            t("src/a.rs:50", 19),
+            t("src/a.rs:60", 23),
+        ];
+        // Each trusted for another reason as well (`external_body`), so
+        // none is in termination_only; 50 is not covered.
+        let covered: BTreeSet<String> = [
+            "src/a.rs:10",
+            "src/a.rs:20",
+            "src/a.rs:30",
+            "src/a.rs:40",
+            "src/a.rs:60",
+        ]
+        .map(str::to_owned)
+        .into();
+        let seams = vec![
+            seam("src/a.rs:10", "external_body", Status::Discharged),
+            seam("src/a.rs:20", "axiom", Status::Partly),
+            // Unchecked already: no warning.
+            seam("src/a.rs:30", "external_body", Status::Unchecked),
+            // One warning for the line.
+            seam("src/a.rs:40", "external_body", Status::Discharged),
+            seam("src/a.rs:50", "external_body", Status::Discharged),
+            // Not the function seam it needs: it still warns.
+            seam("src/a.rs:60", "no_decreases", Status::Unchecked),
+        ];
+        let (checked, warnings, errors) =
+            match_ledger(&trusted, &BTreeSet::new(), &covered, &seams);
+        let want: BTreeMap<String, Checked> = [(
+            "k".to_owned(),
+            Checked {
+                discharged: (1, 19),
+                partly: (0, 0),
+            },
+        )]
+        .into();
+        assert_eq!(checked, want, "checked: got = {checked:?}, want = {want:?}");
+        let over = |loc: &str, status: &str, kind: &str| {
+            format!(
+                "{loc}: #[verifier::exec_allows_no_decreases_clause] covers the trusted function here, so its {status} {kind} seam counts it unchecked: nothing checks that it ends"
+            )
+        };
+        let want = vec![
+            over("src/a.rs:10", "discharged", "external_body"),
+            over("src/a.rs:20", "partly checked", "axiom"),
+            over("src/a.rs:40", "discharged", "external_body"),
+            "trusted function at src/a.rs:60 has no ledger entry".to_owned(),
+        ];
+        assert_eq!(warnings, want, "warnings: got = {warnings:?}");
+        // A discharged seam at a covered function matches a trusted one:
+        // it is no stale seam.
+        assert!(errors.is_empty(), "errors: got = {errors:?}, want = none");
     }
 
     #[test]
@@ -1075,7 +1265,8 @@ See README.md:3. Kind: of a note. Status: discharged
             // A `static`'s.
             seam("src/a.rs:30", "unsupported-attribute", Status::Unchecked),
         ];
-        let (checked, warnings, errors) = match_ledger(&trusted, &seams);
+        let (checked, warnings, errors) =
+            match_ledger(&trusted, &BTreeSet::new(), &BTreeSet::new(), &seams);
         let want: BTreeMap<String, Checked> = [(
             "k".to_owned(),
             Checked {

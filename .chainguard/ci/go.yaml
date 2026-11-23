@@ -1,0 +1,166 @@
+# The kit's Go checks. PLAN.md (2026-11-08) writes the kit's stats tool
+# (step 6) and codegen comparer (step 7) in Go; their vet and test
+# checks go here, in this file's environment. Toolchain: the newest
+# Wolfi go-1.NN stream, pinned by stream as count.yaml pins rust-1.NN;
+# the go-toolchain entry of .chainguard/deps.yaml moves it here and in
+# .chainguard/develop.yaml together. GOTOOLCHAIN=local keeps go from
+# fetching another toolchain a go.mod asks for. binutils puts c++filt
+# on PATH, so fncmp-test runs the comparer's demangled rename key, the
+# path a port's codegen checks take. apk-tools and
+# wolfi-keys let the deps agent's guest, which runs in this
+# environment, install a new stream and read Wolfi's index.
+# codegen-test also builds a fixture library, so its own environment
+# adds count.yaml's rust-1.NN stream and build-base: the go-toolchain
+# entry moves its go stream with this file's, and the toolchain entry
+# its rust stream with count.yaml's.
+version: 1
+
+environment:
+  packages: [go-1.27, busybox, git, apk-tools, wolfi-keys, binutils]
+
+checks:
+  go-toolchain:
+    description: >-
+      The Go toolchain is the stream this file's environment names
+      (go env GOVERSION), and .chainguard/develop.yaml and count.yaml
+      (its environment and its count-installed check, which build the Go
+      tools through kit/install.sh) install the same stream.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd:
+      - sh
+      - -c
+      - >-
+        export GOTOOLCHAIN=local;
+        s=$(sed -n 's/^  packages: \[\(go-1\.[0-9]*\),.*/\1/p' .chainguard/ci/go.yaml);
+        v=$(go env GOVERSION);
+        echo "go.yaml: $s; go env GOVERSION: $v";
+        [ -n "$s" ] || { echo "FAIL: go.yaml names no go-1.NN stream first in its packages"; exit 1; };
+        case $v in "go${s#go-}" | "go${s#go-}".*) ;; *) echo "FAIL: $v is not $s"; exit 1 ;; esac;
+        grep -qx "    - $s" .chainguard/develop.yaml || { echo "FAIL: .chainguard/develop.yaml does not install $s"; exit 1; };
+        c=$(sed -n '/^  count-installed:/,/^  [a-z]/s/^      packages: \[.*\(go-1\.[0-9]*\).*\]$/\1/p' .chainguard/ci/count.yaml);
+        [ "$c" = "$s" ] || { echo "FAIL: count.yaml's count-installed installs '$c', not $s"; exit 1; };
+        c=$(sed -n 's/^  packages: \[.*\(go-1\.[0-9]*\).*\]$/\1/p' .chainguard/ci/count.yaml);
+        [ "$c" = "$s" ] || { echo "FAIL: count.yaml's environment installs '$c', not $s"; exit 1; };
+        echo PASS
+
+  fncmp-test:
+    description: >-
+      kit/perf/codegen/fncmp, the codegen comparer (PLAN step 7, the Go
+      port of challoc's scripts/codegen-fncmp.py): gofmt lists no file,
+      go vet passes, and go test passes (challoc's 16 fixture cases,
+      each report compared whole with the Python's, the immediate mask,
+      Python's UTF-8 replacement decoding, and difflib's ratio and
+      unified diff). FNCMP_REQUIRE_CXXFILT=1 makes a missing c++filt a
+      failure rather than a skip.
+    trigger: [presubmit, postsubmit]
+    timeout: 10m
+    cmd:
+      - sh
+      - -c
+      - >-
+        export GOTOOLCHAIN=local GOFLAGS=-mod=mod FNCMP_REQUIRE_CXXFILT=1;
+        cd kit/perf/codegen/fncmp;
+        f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
+        go vet ./... && go test -count=1 ./...
+
+  stats-test:
+    description: >-
+      kit/perf/stats, the bench stats tool (PLAN step 6, the Go
+      replacement for a port's awk medians, comparison and tallies, and
+      its pull's relabel, output, counter and md5 checks, and the
+      sanity gate before a full run): gofmt lists no file, go vet
+      passes, and go test passes (its medians, comparisons, tallies,
+      relabelling and findings against goldens the reference awk in
+      testdata/ref wrote, hand-worked bands, comparison lines and
+      findings, hand-worked gate lines with exact bounds, and the input
+      and usage it refuses).
+    trigger: [presubmit, postsubmit]
+    timeout: 10m
+    cmd:
+      - sh
+      - -c
+      - >-
+        export GOTOOLCHAIN=local GOFLAGS=-mod=mod;
+        cd kit/perf/stats;
+        f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
+        go vet ./... && go test -count=1 ./...
+
+  seams-test:
+    description: >-
+      kit/verus/seams, the seam ledger generator (PLAN step 3, the Go
+      port of challoc's verus/seams.sh core): gofmt lists no file, go vet
+      passes, and go test passes (seams.sh's hash and claims nothing
+      self-tests, scanner cases, the ledger file written whole, -check's
+      stale, leftover and drift cases, -entries, -cites and the citation
+      rules (challoc's golden cites too), the Kani, callers and const
+      assert citation checks on a fixture tree, the rules file's errors,
+      the template rules file, and the cksum CRC against the system's
+      cksum).
+    trigger: [presubmit, postsubmit]
+    timeout: 10m
+    cmd:
+      - sh
+      - -c
+      - >-
+        export GOTOOLCHAIN=local GOFLAGS=-mod=mod;
+        cd kit/verus/seams;
+        f=$(gofmt -l .); [ -z "$f" ] || { echo "FAIL: gofmt lists $f"; exit 1; };
+        go vet ./... && go test -count=1 ./...
+
+  seams-mutants:
+    description: >-
+      kit/verus/seams/mutants.sh: every hand mutant in
+      kit/verus/seams/testdata/mutants.txt is killed by the generator's
+      go test, or is marked equivalent with its reason and survives; a
+      mutant whose text no longer occurs once in its file fails (PLAN
+      step 3's seams-mutants.sh row). kit/seams-mutants-test.sh tests
+      the runner first on a stand-in package (killed, survived, marked
+      equivalent, the list's errors, usage).
+    trigger: [presubmit, postsubmit]
+    timeout: 20m
+    cmd:
+      - sh
+      - -c
+      - >-
+        sh kit/seams-mutants-test.sh && sh kit/verus/seams/mutants.sh
+
+  box-test:
+    description: >-
+      kit/box-test.sh: kit/perf/box (PLAN step 6, the bench box's run
+      skeleton), with stand-in perf and taskset scripts and no box:
+      rounds.sh's -n order against a hand-worked rotation, its raw lines
+      (exact first-match counts, empty and not-counted counts, output
+      flattening and -w, ARM and ROUND, -g, -c), a failing command's
+      line and exit, its refusals, the lines through stats relabel,
+      check and gate, -E's event lists per arch (events.tsv's aarch64 frontend
+      list, a file of its own with -f and -a, uname -m by a stand-in,
+      and the lookup's refusals; -g with other than two events is
+      refused), and md5.sh's bracket, missing-file
+      line and refusals through stats md5. It builds stats with this
+      file's go.
+    trigger: [presubmit, postsubmit]
+    timeout: 10m
+    cmd: [sh, kit/box-test.sh]
+
+  codegen-test:
+    description: >-
+      kit/codegen-test.sh: kit/make/codegen.sh (make codegen,
+      codegen-capture and codegen-compare). Its notices on challoc's
+      saved reports, base with a stand-in compare, the settings it
+      refuses, and a fixture library built twice through base with fncmp
+      built here: no change is .text identical, a moved table is
+      reloc-only with changed 0, a changed function is changed 1 and
+      exits 2, a feature's function changes one build only, and a
+      missing comparer fails; a failing objcopy or sha256sum, a missing
+      capture or build, an unwritten library and a failed build each
+      fail with no verdict, and a --target build compares its own
+      library. The fixture has no dependencies, so it
+      needs no network.
+    trigger: [presubmit, postsubmit]
+    timeout: 15m
+    environment:
+      # The file's go stream, and count.yaml's rust stream with
+      # build-base for the fixture's build.
+      packages: [go-1.27, rust-1.100, build-base, busybox, git, binutils]
+    cmd: [sh, kit/codegen-test.sh]

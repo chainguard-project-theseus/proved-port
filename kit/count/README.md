@@ -23,7 +23,9 @@ executable function before the table, and changes nothing else: every
 check the other options name still runs; `--floor` holds the `shipped` row to the FLOOR
 file; `--base-rev` also holds FLOOR (and REACH, RLIMIT and the
 configuration) to that revision's copies, and fails when the revision
-does not resolve. `--floor` needs one of the two base flags: with
+does not resolve. Each copy is read at its path relative to ROOT, also
+when ROOT is below the repository's top level (`REV:./PATH`, run in
+ROOT). `--floor` needs one of the two base flags: with
 neither the run fails (exit 1), so a CI run that loses its base fails
 rather than skip every base comparison. `--no-base` says there is no
 base to compare with: a local or development run, or the proof PR that
@@ -58,12 +60,13 @@ unknown option or a second ROOT fails the run (exit 2), so a misspelt
 an error. A check whose section is left out does not run, and prints
 nothing. So with `--base-rev REV` the run fails (exit 1) when the
 configuration turns off or narrows a gate `REV`'s copy runs: a
-`[recursion]`, `[reach]`, `[inputs]`, `[mints]` or `[badge]` section
-removed; a `[badge]` `path` moved to another file; a
+`[recursion]`, `[loops]`, `[reach]`, `[inputs]`, `[mints]` or `[badge]`
+section removed; a `[badge]` `path` moved to another file; a
 `[reach]` `exports_macro`, `fn_ptr_macro` or `conversion` removed or
 renamed; an `[inputs]` crate or root removed or `lazy` turned off; a
 `[crates]` `dir` removed or changed, a member removed, moved to another
-`path`, or its `ships` changed to anything but `true` (each compared on
+`path`, its `ships` changed to anything but `true`, or its
+`skip_packages` turned on (each compared on
 its own, so a member that moves and unships makes two narrowings, and
 also by path: whatever the head reads at a crate the base read, a
 member under any name or a `dir` it sits in, which reads it with
@@ -78,6 +81,8 @@ configuration does not compare;
 a `test_cfgs`, `test_features`
 or `verus_features` name added; a `verus_sets` or `verus_never_sets`
 atom added (compared as atoms, so respacing one is not a change); a
+`[[runs]]` run added, removed or renamed, an atom added to a run, or
+`[[runs]]` replacing the shorthand (#21); a
 `stand_ins` pair added; or a crate
 whose own Cargo.toml gains `publish = false`, where the base read it
 with its Cargo.toml deciding whether it ships (a `dir` crate, or a
@@ -88,15 +93,34 @@ under no name and at no directory is new, with nothing to compare: so a
 and a new crate, as a member renamed to a new path is. Renaming a table
 or a mint is not a narrowing. The base's
 copy is read at the configuration's path under ROOT, as the repository
-names it (`verus/count.toml` when `--config` names a file outside ROOT);
-a base with none, the change that adopts the counter, prints `ok
-configuration: REV has no ... to compare with`, and one that does not
-parse fails the run (exit 2). A configuration under ROOT reached through
-a symlink, the file or a directory above it, fails the run (exit 2),
-since the base would be read at the link's path while the head is read
-through it. An in-ROOT `--config` at a path the base lacks still has
-nothing to compare: that is a Makefile edit, the same file that carries
-`--base-rev`.
+names it, or at `verus/count.toml` when `--config` names a file outside
+ROOT. A base with no copy at that path is read at the one configuration
+file of its tree (a `.toml` other than a `Cargo.toml` with a top-level
+`crates` key, `verus/count.toml` among them), so a head that moves its
+configuration with `--config`, under ROOT or out of it, is held to the
+gates the base ran (`ok configuration: REV has no ..., so ... is held to
+REV:..., the one configuration REV has`). A base with several such
+files fails the run (exit 1), naming them, since which one it ran is
+unknown: a change that moves the configuration keeps the path its base
+reads. A base with none and no FLOOR (at the head's `[floor] path` or
+`verus/FLOOR`), the change that adopts the counter, prints `ok
+configuration: REV has no ... to compare with`; under ROOT, one with a
+FLOOR ran its gates from a configuration the run cannot find, and fails
+the run (exit 1), while a configuration outside ROOT is still compared
+with nothing there, since a port may write its configuration outside
+the tree. A base copy that does not parse, found at the head's path or
+by the search (any candidate that is not TOML included), fails the run
+(exit 2), as does a file the search lists but cannot read back (a name
+that is not UTF-8, or a blob Git cannot read); a base copy at the head's path whose blob Git
+cannot read fails it too, rather than read as absent. One route stays
+open: a head that switches back to a path the base still has, such as
+an older `verus/count.toml` the base kept beside the file it ran, is
+compared with that copy, which may run fewer gates. A port that moves
+its configuration deletes the old copy in the same or the next change,
+and review reads a `--config` change in the Makefile. A configuration under ROOT
+reached through a symlink, the file or a directory above it, fails the
+run (exit 2), since the base would be read at the link's path while the
+head is read through it.
 
 A narrowing made on purpose (a root that moves with its function, a
 crate directory renamed, a gate a port retires) is named the way FLOOR
@@ -144,30 +168,38 @@ path is read, and a base without the file prints `ok ...: REV has no
 ... to compare with`. A crate read twice, under one name or from one
 directory, fails the run (exit 2): the tally goes by name. So does a
 `[crates]` `dir` or member `path` that is not relative, has a `..` or
-passes through a symlink, and a crate whose directory, `src/`, or any
-file or directory under `src/` is a symlink (exit 2), since the base
-comparison matches crates by path and another spelling of a directory,
-or another crate's sources reached through a link, would pass for a new
-crate.
+passes through a symlink, and a crate whose directory or `src/` is a
+symlink, or with a symlink under `src/` that the source walk reads
+through (one named `*.rs`, or one to a directory holding a `.rs` file or
+a cycle at any depth, or one whose target, or anything under it, the
+counter cannot stat, resolve or list, such as a link loop; a dangling
+link is passed over) (exit 2), since the base comparison matches crates
+by path and another spelling of a directory, or another crate's sources
+reached through a link, would pass for a new crate. Any other link
+under `src/` (a `LICENSE`, a `locales` directory of `.ftl` files) is
+not a source and is passed over.
 [configs/pcre2.toml](configs/pcre2.toml) and
 [configs/challoc.toml](configs/challoc.toml) are complete examples.
 
 | section | key | meaning |
 |---|---|---|
 | `[crates]` | `dir` | each subdirectory with a `src/` is a crate, named for it |
-| | `members` | `{ name, path, ships }` crates named explicitly; `ships` overrides the `publish = false` rule (a crate ships unless its Cargo.toml, read as TOML, sets `[package]` `publish = false`; one under `[package.metadata]` does not count) |
+| | `members` | `{ name, path, ships, skip_packages }` crates named explicitly; `ships` overrides the `publish = false` rule (a crate ships unless its Cargo.toml, read as TOML, sets `[package]` `publish = false`; one under `[package.metadata]` does not count) |
+| | `members` `skip_packages` | optional, default `false`: with `true`, the member's source walk leaves out each directory below its `src/` that holds a Cargo.toml, another package's sources, which cargo builds as its own crate (#198; uutils' root `coreutils` crate holds every utility's package under `src/uu/`). Every reader of the crate's sources leaves out the same directories (the walk, the base revision's walk, the symlink check, the token-mint scan), so a link in one is not refused; a module declaration (`#[path]`), a target's root file (by the path cargo names, so through a link under `src/` too) or an `include!` of a string literal (resolved from the including file's directory) in one fails the run (exit 1), since rustc compiles that file as part of the crate. Every other `include!` the crate's files hold fails the run (exit 1), since the counter cannot resolve the file it names, except one of `concat!(env!("OUT_DIR"), ...)` (`include!(concat!(env!("OUT_DIR"), "/uutils_map.rs"))`) whose other arguments are all string literals with no `..` component in their concatenation, while the crate defines no `macro_rules!` named `concat` or `env` and imports neither from outside `std`, `core` or `alloc`, plainly or renamed (`use dep::concat;`, `use crate::p as env;`), since that would shadow the builtins, while no `#[macro_use] extern crate` in the crate (the attribute under a `cfg_attr` too, whatever its condition) loads a crate other than std's or Verus's (or one of those renamed), and no glob import in the including file is of anything but a path at `std`, `core` or `alloc` (not rebound) or Verus's prelude (`use dep::*;`, `use super::*;` count; a glob binds names in its own module, so one in another file does not), since either may bring in another `concat` or `env`, a file of the build's output directory, outside `src/` (a `..` tail could climb back into a left-out directory, and a non-literal tail cannot be read): so a `concat!` of literals, another macro, or a `macro_rules!` body's `include!($p)` fails; give the path as one string literal, or drop `skip_packages`. An `include!` inside a `macro_rules!` definition (nested ones too) fails whatever its argument, but for the `OUT_DIR` form: rustc resolves its path from the file that invokes the macro, not the one that defines it, and the counter does not follow invocations. A `use` anywhere in the crate's files that imports `include` (a use-tree leaf named `include`, renamed or not, from any path: `use core::include as inc;`, `use ::core::{include as inc};`) fails the run too, since an invocation through it does not name `include`; a glob (`use std::prelude::v1::*;`) is not such a leaf, and the bare `include!` is checked as above. So does a bare `include` (or `r#include`) anywhere among a macro invocation's argument tokens, at any depth of groups (a matcher reaches into them: `call!([include] "p")`), that is not itself an `include!` invocation nor a path through a module of that name (`call!(include, "p")`, for a macro that invokes the identifier it is given), unless the macro is one of std's formatting, assertion or collection macros (`println!`, `assert!`, `vec!`, ...) or `verus!`, whose arguments are values or items, and the crate defines no `macro_rules!` of that name, no `use` brings one in from outside `std`, `core` or `alloc` or renames anything to it, and it is not invoked through another crate's path (`dep::vec!`), nor through `std`, `core` or `alloc` where the crate rebinds that name, by path or by import (`use dep as core;` or `use dep::core;` then `core::vec!` or `use core::vec;`; `extern crate dep as std;`; `mod core`; a Cargo dependency renamed to it) and neither such a `#[macro_use] extern crate` nor such a glob import in the file (as for the `OUT_DIR` form above) may bring one in (such a macro is held as any other macro is, as the `thread_local` rule below holds a bare name); a field, method or variable named `include` elsewhere is not checked. Inside a `macro_rules!` body every `include` fails but the `OUT_DIR` form and a path through a module of that name (`include::x`, two joined `:`), since the body can splice an invocation from the macro's input (`include!$g`, `include $b $g`); a single `:` after `include` is no path separator (`call!(include: "p")` fails). `include_str!` and `include_bytes!` read no code and are not checked. Each left-out directory must be its own configured crate (a member at that directory, with `ships = false` if it does not ship, or a crate of `dir` there): one no configured crate reads fails the run (exit 1, `FAIL skip_packages: crate NAME leaves out DIR, ...`), so its code counts in some row (one limit: a file reached only through a macro of another crate, or a proc macro, that wraps `include!` is not seen, since no token of the invoking file names `include`); and that crate's walk reads only its own `src/`, so a library or binary root it declares outside its `src/` (`[lib] path = "lib.rs"`, a `[[bin]] path` beside `src/`) fails the run too (`FAIL skip_packages: crate NAME leaves out DIR, and crate OTHER, which counts it, does not read its target root ROOT, which lies outside its src/`). Tests, benches and examples ship nothing and are not held, but a package inside one of those directories (a directory holding a Cargo.toml, `x/tests/fixture`) may be a shipped crate's path dependency, so it must be a configured crate too, else the run fails (`FAIL skip_packages: crate NAME leaves out DIR, where PKG holds a Cargo.toml, but no configured crate reads it ...`); a configured one is held as a nested configured crate below is, wherever it sits. That crate's `include!`s are held as a crate with `skip_packages` is, against all of its own `src/`: one of a literal path outside its `src/`, one the counter cannot resolve, and one inside a `macro_rules!` body fail the run, and the `OUT_DIR` form passes; a `use` that imports `include` fails as it does in a crate with the key. As a backstop for every form of include at once, each `*.rs` file under a left-out directory must be one that crate's walk reads (under its `src/`), or one cargo builds apart from the shipped targets (under the directory's `tests/`, `benches/` or `examples/`, or its `build.rs`), or, in a package nested under it that is itself a configured crate (`x/derive`, a cargo-fuzz `x/fuzz` listed as a member), one that crate's walk reads or builds apart the same way, its roots and includes held as the counting crate's are: any other fails the run (`FAIL skip_packages: crate NAME leaves out DIR, where FILE is a `*.rs` file that crate OTHER, which counts it, does not read ...`), since no row counts it and an `include!` could compile it into a crate. The run prints a line for each left-out directory, `crate NAME leaves out DIR (counted as crate OTHER)`, before the table, `--list` runs too. With `--base-rev`, turning it on for a crate the base read is a narrowing (`[crates] member "NAME" changes skip_packages from false to true`) |
 | | `test_cfgs` | `cfg` names only test builds set (default `test`, `kani`) |
-| | `test_features` | features only tests enable; a workspace build that enables one fails the run (`cargo tree`) |
+| | `test_features` | features only tests enable; a workspace build that enables one fails the run (read from the manifests and `Cargo.lock`, with no cargo; a form it does not read fails the run) |
 | | `verus_features` | features only Verus's build enables, as `verus_keep_ghost` |
 | | `verus_sets` | `cfg` atoms Verus's build is sure to set, which shipped builds may set too (`'feature = "jit"'` for a default feature the proof run keeps, `"unix"`): "Verus's build", below |
 | | `verus_never_sets` | `cfg` atoms Verus's build never sets (`"miri"`), so `not(miri)` is sure there |
-| | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords that the counter does not handle itself (a Verus keyword naming a field, a parameter or a `let` binding outside `verus!`, such as `exec: u8` or `let tracked = ..`, needs none: it is read as a raw identifier); one that would rewrite a name the counter classes code by (`external_body`, `assume_unsupported_attributes`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, `unsafe`, a test cfg, a configured macro or mint, ...) is refused |
+| | `stand_ins` | `[from, to]` same-length replacements before parsing, for identifiers Verus keeps as keywords that the counter does not handle itself (a Verus keyword naming a field, a parameter or a `let` binding outside `verus!`, such as `exec: u8` or `let tracked = ..`, needs none: it is read as a raw identifier); one that would rewrite a name the counter classes code by (`external_body`, `assume_unsupported_attributes`, `exec_allows_no_decreases_clause`, `assume`, `admit`, `verus_verify`, `discharged_by`, `cfg`, `fn`, `unsafe`, a test cfg, a configured macro or mint, ...) is refused |
 | | `verus_only_ghost` | count the ghost functions of Verus-only code in the ghost column |
-| `[floor]` | `path`, `checked`, `renamed_from` | the FLOOR file (default `verus/FLOOR`); the prefix of the two verified-or-discharged figures (default `checked`); an older prefix the base revision's copy may still give them under, for the change that renames them (challoc's `combined`) |
+| `[floor]` | `path`, `checked`, `renamed_from`, `room_functions`, `room_lines` | the FLOOR file (default `verus/FLOOR`); the prefix of the two verified-or-discharged figures (default `checked`); an older prefix the base revision's copy may still give them under, for the change that renames them (challoc's `combined`); room for unverified code a raise leaves (#100, default 0 each): the `raise FLOOR to` figure the run prints is the share with that many more unverified functions and lines in its denominators, and a share within that room prints no raise. Neither changes whether the run passes. The room is a port's own choice (#100 keeps it per port): the template FLOOR header keeps its rule, so a port that sets the keys states its room in a paragraph of its FLOOR below the header |
+| `[[runs]]` | `name`, `sets`, `never_sets` | each proof run and the atoms it is sure to set and never sets (#21), in place of `verus_sets` and `verus_never_sets`: "Verus's build", below |
 | `[rlimit]` | `path` | the RLIMIT file (default `verus/RLIMIT`) |
 | `[kani]` | `records` | the directory of `kani-*.md` records that cover the `discharged_by = "kani"` marker |
 | `[seams]` | `tables`, `theorems` | the seams tables, and a directory whose every `*.md` holds one |
 | `[recursion]` | `table` | turns the recursion check on; the table that names verified recursion |
+| `[loops]` | `table` | turns the nested-loop check on ("Nested loops"); the work-bound theorem's table that names each function that nests loops |
 | `[reach]` | `path`, `exports_macro`, `fn_ptr_macro`, `conversion` | turns REACH on; the port's exports macro, function-pointer macro and argument conversion, each optional |
 | `[inputs]` | `table`, `crates`, `roots`, `lazy`, `describe` | turns the compile-inputs check on; a root that matches no function of `crates` fails it |
 | `[mints]` | `path`, `mint`, `token_trait`, `home` | turns the token-mint gate on |
@@ -213,16 +245,40 @@ root's, the whole crate). `cfg_attr`s apply as rustc expands them,
 nested to any depth (`cfg_attr(P, cfg_attr(R, ..))` applies under
 `all(P, R)`) and each attribute of `cfg_attr(P, a, b)` under `P`, for
 `cfg`s, `#[path]`s and Verus's attribute form alike: `#[cfg_attr(P,
-cfg(Q))]` counts as the `cfg` `any(not(P), Q)`. Every `cfg` a function is under, its own and those
+cfg(Q))]` counts as the `cfg` `any(not(P), Q)`. A `no_mangle` or
+`export_name` under `cfg_attr(P, ..)` makes the function a C entry
+point for REACH where a shipped build can meet `P` (a feature, in
+`verus_sets` or not), and not where none can (`any()`, `test`, a
+Verus-only feature). Every `cfg` a function is under, its own and those
 around it, is read as one conjunction. A file declared more than once
 (`#[cfg(target_os = "linux")] #[path = "unix.rs"] mod sys;` beside the
-same for macos) is built where any declaration holds. A file a `#[path]`
+same for macos) is built where any declaration holds, under either
+reading of where the declaring file's modules live (a lib.rs that is a
+module, `a::lib`, declares `mod child;` as `a/lib/child.rs`), and a
+root is built by its own target whatever declares it as a module
+(`#[cfg(test)] mod main;` in lib.rs leaves the binary shipped). The
+other reading may be one no target makes (a root lib.rs's `mod foo;`
+read as `src/lib/foo.rs`), so a file it names is unsure through it: it
+counts, but never as verified. Those readings only widen where a file
+is built: one no declaration of the primary reading names is unsure
+as a file nothing declares is (an `include!` may compile it), whatever
+the other reading's declarations need. A file a `#[path]`
 names declares its modules beside it, as a `mod.rs` does. A
 `#[cfg_attr(P, path = "..")]` names the module's file where `P` holds
 and no earlier path attribute applies, as rustc takes the first in
 effect: a bare `#[path]` applies wherever none earlier does and ends the
 list, and the default `name.rs` is the file where none applies. An inline
-module's directory is chosen the same way. A file declared only
+module's directory is chosen the same way. A declaration whose file the
+counter does not read, a `#[path]` to a file not named `*.rs` or to one
+outside the crate's `src/`, fails the run (exit 1), since rustc builds
+its functions and the counts would leave them out; one only tests build
+may name any file. "Only tests" is read by reachability: a declaration
+fails when its declaring file is reachable from a crate root (or from a
+file nothing declares, which may be a target the counter does not
+know) along declarations that are each not test-only on their own, and
+it is not test-only on its own either. That holds under either reading of where a file's
+modules live, so a lib.rs that is a module (`a::lib`, whose modules a
+target reads under `a/lib/`) is checked both ways. A file declared only
 inside another macro's body (`cfg_if! { if #[cfg(windows)] { mod win; }
 }`, or the file a `#[path]` there names) is unsure whatever the
 configuration settles, since the counter does not evaluate the macro.
@@ -265,10 +321,49 @@ with a `[[narrowed]]` line. A feature in `verus_sets` still ships: one
 that only Verus's build enables belongs in `verus_features`, which takes
 its items out of the shipped tally.
 
-A port that runs Verus on several hosts names each run's atoms (challoc,
-which runs it on x86_64 and natively on aarch64: `verus_sets =
-['target_arch = "x86_64"', 'target_arch = "aarch64"']`), since a
-function under either is checked by the run that sets it.
+A port that runs Verus on several hosts declares each run (#21) as a
+`[[runs]]` table, with the atoms that run is sure to set (`sets`) and
+never sets (`never_sets`), written as `verus_sets` writes them; the two
+`[crates]` lists are then left out, as they are one run's shorthand:
+
+```toml
+[[runs]]
+name = "verus"
+sets = ['target_arch = "x86_64"']
+never_sets = ["loom"]
+
+[[runs]]
+name = "verus-arm64"
+sets = ['target_arch = "aarch64"']
+never_sets = ["loom"]
+```
+
+An item is classed in each run as sure, never or unsure, under that
+run's atoms alone; a run that sets one value of a single-valued key
+(below) never sets its other values. It is verified where it is sure in
+at least one run and unsure in none; trusted where some run might ship
+it without compiling it for Verus, or no run compiles it but a shipped
+build may; and left out where no build compiles it. So on challoc's two
+runs, `not(target_arch = "x86_64")` is verified (never in the x86_64
+run, sure in the aarch64 one), and `all(target_arch = "x86_64",
+any(target_arch = "aarch64", unix))` is trusted (the x86_64 run compiles
+it only under `unix`, which it does not settle). An item in a module is
+sure only if each run that may compile the module is sure to compile
+the item there. A run with no name, a name given twice, an entry that is
+not one atom or is settled already, a run that sets two values of one
+single-valued key (a run is one target), or `[[runs]]` beside
+`verus_sets` or `verus_never_sets`, fails the run (exit 2). Under
+`--base-rev`, a run added, removed or renamed (a run removed may be the
+one where an item was unsure), an atom added to a run, or `[[runs]]`
+replacing the shorthand (even with the same atoms, since a run's set
+value of a single-valued key rules out its other values), is a
+narrowing; the base's shorthand is its one run, `verus`.
+
+Without `[[runs]]`, a port that runs Verus on several hosts names every
+run's atoms in the shorthand (challoc, which runs it on x86_64 and
+natively on aarch64: `verus_sets = ['target_arch = "x86_64"',
+'target_arch = "aarch64"']`), since a function under either is checked
+by the run that sets it, and the rules below apply.
 
 A predicate that needs two values of one key rustc gives each target
 one value of (`target_arch`, `target_os`, `target_env`, `target_abi`,
@@ -299,8 +394,8 @@ declared), `#[cfg(target_os = "macos")] mod mac { #[cfg(target_arch =
 "macos"))`; so is a function under `all(target_arch = "x86_64",
 any(target_arch = "aarch64", unix))`. `not(target_arch = "x86_64")`
 stays unsure too: the function counts as trusted though the aarch64 run
-checks it. A model of each run's atoms would credit these where a run
-checks them; the counter has none yet.
+checks it. Declaring the runs (`[[runs]]`, above) credits these where a
+run checks them.
 Since each atom is read on its own, a file declared under `feature =
 "std"` and again under `not(feature = "std")`, which every build
 compiles, stays unsure too, unless the configuration settles `std`.
@@ -320,8 +415,8 @@ fails on that PR.
 - The Expat port and a zlib port: none. Neither has a verified function under an
   unsettled `cfg`, and `--list` is unchanged.
 - challoc: [configs/challoc.toml](configs/challoc.toml)'s declarations,
-  measured on the 11-10 snapshot `0497dc34`; they are re-measured on
-  challoc's own pin move.
+  read from challoc main `09edeb9`: `verus_sets` names both
+  architectures, and `loom` is a test cfg, not a never-set atom.
 
 A function that stays trusted under honest declarations is verified
 more: bring its proof under a `cfg` the proof run settles. Where a
@@ -352,13 +447,45 @@ a run with `--floor FILE` also fails (exit 1) unless the file holds
 exactly one Verus badge, and that line is exactly the one FILE's
 `functions` and `lines` figures give, each with one decimal. A Verus
 badge is any rendered line holding `verus` in any case together with
-`shields.io` or a Markdown image (`![`), so a second badge with a
-lowercase label, another shields.io endpoint or an `<img>` tag counts.
-Lines inside fenced code blocks (```` ``` ```` or `~~~`) and the text
-inside HTML comments (`<!--` to `-->`, across lines) do not render, so
-they are neither the badge nor a second one: an example badge in a
-fence is not counted, and the canonical line only inside a comment or
-a fence fails as no badge. The line FILE's figures give is:
+`shields.io`, a Markdown image (`![`) or an HTML `<img`, so a second
+badge with a lowercase label, another shields.io endpoint, or an
+`<img>` tag from any host counts. Lines inside fenced code blocks
+(```` ``` ```` or `~~~`) and the text inside HTML comments (`<!--` to
+`-->`, across lines; `<!-->` and `<!--->` are whole comments) do not
+render, so they are neither the badge nor a second one: an example
+badge in a fence is not counted, and the canonical line only inside a
+comment or a fence fails as no badge. Since a renderer may end a fence
+or a comment sooner than the scan does, the gate reads the file twice.
+The strict reading hides a fence or a comment the file never closes to
+the end of the file. The lenient reading takes that opener as text,
+takes as text a `<!--` that renders as text (inside a backtick code
+span, escaped as `\<!--`, on a line indented 4 or more spaces, or one
+whose container ends before its `-->`: an inline comment's paragraph
+at a blank line or a line that starts a block, indented up to 3
+columns past where the paragraph's text starts (a heading, a quote, a
+fence, a list item, a thematic break, or a line starting `<` and a
+letter, `</`, `<?` or `<!`, such as `<p align="center">`; the last is
+wider than CommonMark, whose plain tags cannot end a paragraph, so an
+old badge on such a line inside a mid-line comment counts), a list item
+at a line indented less, a block
+quote at a line with fewer `>` than its depth (`> > <!--` ends at
+`> text`), nested ones (`- > <!--`) at either, and an item whose
+ordered marker does not start at 1 (`2. <!--`, which cannot interrupt a
+paragraph, so may continue one) also where a paragraph would end; a
+`<!--` at the start of a line opens an HTML block, which crosses blank
+lines; a tab counts to the next multiple of 4 columns from where it
+sits, and separates a list marker as a space does; the optional space
+after a `>` or a marker takes one column of a tab, the rest counting as
+indent; a `<!--` 4 or more columns past a `>` and its optional space,
+or past a list marker's content, is indented code), and
+ends a fence
+indented by some spaces at the first non-blank line indented less (a
+list item's fence ends with the item). A line that holds a badge in
+either reading counts, so a stale badge after one of these openers is a
+second badge even when a closer comes later in the file. The canonical
+line passes only when it renders in both readings: after an opener the
+file never closes, it fails (exit 1) as a badge that may not render.
+The line FILE's figures give is:
 
 ```markdown
 [![Verus: 86.3% of functions, 94.4% of lines](https://img.shields.io/badge/Verus-86.3%25%20of%20functions%2C%2094.4%25%20of%20lines-blue)](verus/README.md#coverage)
@@ -393,13 +520,160 @@ the file sits, so keep the file at the root.
   `cfg_attr`s as rustc expands them, nested or beside other attributes,
   and counts only where the predicates around it hold in no build
   whatever the configuration declares (`any()`); under one some build may
-  meet (`windows`) the function is not discharged.
+  meet (`windows`) the function is not discharged. A shipped function
+  outside `verus!` with the marker is discharged too: Kani checks
+  it, and Verus checks nothing of it either way. It has no Verus
+  contract, so its record states what the harness checks, and quotes
+  it as it quotes a trusted one. With no contract to compare against,
+  the counter checks three more things, and each failure fails the run
+  (exit 1):
+  - **Its path.** Its record names it in backquotes, exactly: a method
+    with its owner, `A::new` and `B<u8>::new` for inherent `impl`s (the
+    self type as written, generics included), `<A as From<u8>>::from`
+    for a trait `impl`, and `Tr::name` for a trait's default method,
+    with spaces only between two identifier characters (`Box<dyn Tr>`);
+    a free function with the inline modules around it in its file
+    (`a::init` for `mod a { fn init }`), or alone at the file's top
+    (`init`). Plain Rust holds many same-named functions, and a quote of
+    `fn new` alone would cover every marked `new` in the file.
+  - **No shared path.** Two marked functions in one file with the same
+    path (`#[cfg(unix)] fn map` beside `#[cfg(windows)] fn map`, or two
+    `impl A` blocks under different `cfg`s) fail the run, since no
+    record could tell them apart: mark one, or rename one.
+  - **A harness that calls it.** A record that covers it (its file,
+    `fn NAME` and its path) names, each in backquotes, the file
+    (relative to the root, as `crates/ffi/src/proofs.rs`) and the name
+    of a `#[kani::proof]` (or `#[kani::proof_for_contract]`, written so;
+    `#[cfg_attr(kani, kani::proof)]` and a bare `#[proof]` are not
+    read, which fails closed) function of the same crate, in that file,
+    whose body calls it by name: the last identifier before a call's
+    parentheses, through any path, receiver or turbofish (`A::new(..)`,
+    `s.open(..)`). For a method, the body also mentions the owner's
+    last identifier (`A` for `A::new` or `<A as From<u8>>::from`), so
+    that `Vec::new()` alone does not check a marked `A::new`.
+    Harnesses are read from the crate's root files and the files a
+    `mod` declares under `cfg`s cargo kani may meet, `cfg(kani)` ones
+    included, at any depth of inline modules and `impl`s. One `make
+    kani` never runs is left out: under a `cfg` no build meets
+    (`#[cfg(any())]`), under `cfg(test)` (cargo kani sets `test` only
+    with `--tests`), or in a file no `mod` declares. A `fn` declared
+    anywhere in a harness's body, at its top or in an inner block, adds
+    no call and no mention; a function pointer type there
+    (`extern "C" fn(*mut u8)`) is no declaration, and the calls after it
+    count. Harnesses a macro or `verus!` writes are
+    not read (fails closed). The counter does not read `KANI_CRATES` or
+    `KANI_FLAGS`: a harness in a crate `make kani` does not select, or
+    in a test, bench or example root, still counts, so keep harnesses
+    in the crates `make kani` runs. The check is by name: a call of
+    that name counts whoever defines it, so for a free function
+    another crate's or std's of that name does (`mem::drop(x)` for a
+    marked `drop`, a local closure named `init` for `init`), and for a
+    method any call of that name in a body that mentions the owner; it
+    does not follow calls through other functions, function pointers
+    or operators; and it says nothing of how much the harness checks,
+    which the record states and review judges.
+
+  Such a function does not make its
+  crate one Verus checks (`[package.metadata.verus] verify = true`),
+  and REACH takes it as checked, so a REACH row naming it fails. The
+  functions nested in its body (an `extern "C"` one it declares
+  included) stay outside, in the tally and in REACH: its record and
+  harness check none of them. One
+  built only for Verus is left out of the tally, as outside code built
+  only for Verus is: no shipped proof rests on it, so its marker
+  discharges nothing, needs no record, and is not refused with
+  `[ledger]`.
 - **The generated ledger** (challoc, `[ledger]`): `verus/seams.sh`
   writes `verus/ledger/**.rs.md` from the source, and each entry's
   status says whether its seam is discharged, partly checked or
   trusted. The report is challoc's two tables, the second the combined
   share. The marker is refused in this mode, so a function cannot be
-  discharged twice.
+  discharged twice; that includes a function
+  `exec_allows_no_decreases_clause` covers (#169), though it counts as
+  trusted.
+
+## Functions with no termination proof
+
+`#[verifier::exec_allows_no_decreases_clause]` lets Verus check exec
+functions whose loops and recursion have no `decreases`, so nothing
+proves they end. Each exec function it covers counts as trusted, not
+verified, nor discharged even with the Kani marker (a Kani record does
+not prove termination either, so the attribute's waiver stands): one
+that carries it, and each in an
+`impl`, trait or inline module that carries it (outer, or inner `#![..]`
+inside the braces), or in a file whose inner attributes carry it. The counter reads it as it
+reads `assume_unsupported_attributes`: in the path form or as
+`#[verifier(exec_allows_no_decreases_clause)]`, and under a `cfg_attr`
+whatever the predicate. Where it covers an out-of-line `mod x;` (on
+it, on an inline module around it, or atop the file that declares it),
+it fails the run (exit 1), naming the declaration: the counter
+reads each module file on its own, so it would not reach the functions
+it covers; put it on those functions, impls, traits or inline modules.
+Ghost functions and code outside `verus!` keep their classes, so a
+function outside `verus!` with the Kani marker stays discharged under
+it. With a
+generated ledger, a `no_decreases` seam at a function's `fn` line is
+its ledger entry when the attribute alone makes it trusted and no
+`external_body` or `axiom` seam is there, and counts it unchecked
+whatever its status. A function trusted for another reason as well
+(`external_body`, an `assume`, or a shipped function under a `cfg`
+Verus's build might not meet) still needs a seam of that reason, or
+warns, and so does every function at a macro invocation's line when one
+of the functions it writes is. Candidate definitions of a macro that
+differ only in why a function they write is trusted (the attribute
+alone, or `external_body` too) count differently and fail the run. One
+at an `impl`, trait or
+module line matches no function, so each function the attribute covers
+there needs its own entry or warns. A function seam (`external_body`,
+`external_body proof`, `axiom`) at the `fn` line of a trusted function
+the attribute covers is its entry, but does not make it discharged or
+partly checked, whatever its status: the function counts unchecked,
+and the run warns ("FILE:LINE: #[verifier::exec_allows_no_decreases_clause]
+covers the trusted function here, ...") when the seam says discharged
+or partly checked (#169). At a macro invocation's line, that holds for
+every function there when the attribute covers one of them, and the
+warning is printed once. Candidate definitions of a macro that differ
+only in whether the attribute covers an `external_body` function they
+write, or only in the Kani marker on a function the attribute covers,
+count differently and fail the run, with or without a ledger.
+
+## Nested loops
+
+A `decreases` measure bounds each exec loop's iterations, but not the
+product of nested ones: an inner loop with its own `decreases`
+verifies, and the work becomes quadratic. With `[loops] table = FILE`
+(#76), the run fails (exit 1) on each function of a shipped crate (any
+class: verified, trusted, discharged or outside `verus!`) that nests a
+loop (`loop`, `while` or `for`) inside another, or calls, from inside a
+loop's body or header, a function that loops, itself or through what it
+calls, unless FILE's table has a row that names its file in backquotes
+and quotes `fn NAME`, as `[recursion]`'s RN1 table does. That row is
+the work-bound theorem's: it states the bound on the product (a ghost
+work counter spanning both loops, or why the inner one is constant).
+
+Calls are read as the recursion check reads them: by name within the
+function's file, a plain call `g(..)` as the file's free function `g`,
+and `self.g(..)` or `Self::g(..)` as its owner's method. A call across
+files, or through another receiver or path, a call of a closure not
+bound by `let` in the function (one passed in, or stored in a field),
+a function a `macro_rules!` expansion writes (the check reads only the
+code outside expansions, as the other walks do), and a loop inside std
+(an iterator adapter's) are not seen, and the theorem covers them. The body is parsed (Verus's syntax included) and
+read by its structure: a loop's header may hold any expression (an
+`unsafe` block, a `match`); a `while`'s condition runs each iteration
+and counts as inside the loop, a `for`'s iterator runs once and does
+not, but a closure in the iterator (`.map(|b| ..)`) runs per item and
+counts as inside it. A nested item (a function, an `impl`) is its own
+and is left out. A closure's loops count as the body's, and a name a
+`let` binds (with a type too) whose initializer loops, itself, through
+a call of a function that loops, or through another such name, makes a
+call of the name a call that loops, whatever wraps a closure there
+(`Box::new(|..| ..)`, `&`, parentheses). A macro invocation
+in a body is tokens whose expansion the check does not read: one that
+holds `loop`, `while` or `for` counts as a loop at its line, and names
+its function, whatever it nests. So does a body that does not parse,
+and a function that calls such a body's function from inside a loop
+(each fails closed until the table names it).
 
 ## Linkage attributes Verus takes on trust
 
@@ -442,7 +716,12 @@ platform or any other atom the configuration does not settle
 (`target_os = "windows"`, or `all(feature = "verus", unix)`) may leave
 the attribute off where Verus runs, and the function unchecked, so it
 counts as trusted, as a function under a `cfg` Verus might not meet
-does. A predicate Verus's build never meets (`any()`, `test`, a
+does. With `[[runs]]`, the attribute is sure only when every run that
+may compile the function is sure to apply it: on challoc's two runs, an
+unguarded function under `cfg_attr(not(target_arch = "x86_64"),
+verus_verify)` is trusted, since the x86_64 run compiles it without the
+attribute, while the same function under `#[cfg(target_arch =
+"aarch64")]` is verified. A predicate Verus's build never meets (`any()`, `test`, a
 `verus_never_sets` atom) never applies the attribute, so the function is
 outside.
 
@@ -472,10 +751,32 @@ under a `cfg` the counter cannot settle is a candidate. An invocation
 by a bare
 name takes the last definition of that name before it in its file whose
 module the invocation is in (a definition in a module that has closed
-is out of scope, unless `#[macro_use]` carries it out), and, while that
+is out of scope, unless `#[macro_use]` carries it out; one at the top
+of a file a `#[macro_use] mod name;` here declares (directly, or inside
+inline `#[macro_use]` modules), or that such a file carries in the
+same way, one an expansion writes at such a file's top (or in inline
+`#[macro_use]` modules there) included,
+stands at that `mod`'s line, then at each
+inner `mod`'s line along the chain, then at its own, compared in that
+order; the order within one line is not read, so one on the line of
+a `mod` that carries another in, or two carried in by two `mod`s on
+one line, are not ordered against each other, and both are taken; one
+a `mod` on the invocation's own line carries in is taken beside the
+others, and ends none of them, as is one carried in through a module
+several `mod`s declare under `cfg`s, from the first of them on; the
+counter reads files in path order, so an invocation that one an
+expansion writes in a file read after the invocation's may reach (a
+carried one from its `mod` on, or one whose scope holds the
+invocation's module, from any other file) fails the run), and, while
+that
 one is under a `cfg` the counter cannot settle (a platform or a
 feature) and so may not be built, each before it back to the first
-under no such `cfg`. Failing an unconditional one, it also takes each
+under no such `cfg`. In code a shipped build compiles, a definition
+under a `cfg` that a shipped build may not meet where the invocation
+is built (a `verus_sets` atom such as `feature = "jit"`, or one
+`target_arch` of two) is such a one too, though Verus's build is sure
+to compile it: a shipped build without the feature compiles the
+definition before it. Failing an unconditional one, it also takes each
 definition its module imports by `use` under that name (`use w::ex;`,
 or `use w::ex as build;` for `build!`, the imported path read from the
 module), each in another file whose textual scope reaches the
@@ -502,7 +803,7 @@ nested repetitions; `$crate`; a `$name` the rule does not bind written
 through, as a macro that writes a `macro_rules!` needs; an invocation
 the expansion writes is expanded in turn), and each function in it
 counts as outside `verus!`, since `verus!` does not expand the macros it
-holds.
+holds (or as discharged, with the Kani marker).
 
 The fragments match by the crate's edition, as rustc's do. An
 `expr_2021` begins at neither `const` nor `_` (and no `expr` at `let`),
@@ -522,7 +823,8 @@ An expansion is read under its invocation's `cfg`s, as code a
 module holds is: one under a `cfg` Verus's build might not meet
 (`#[cfg(unix)] vone!(v1);`) ships its functions trusted, never
 verified, and a definition under such a `cfg` is a candidate, never
-dropped. The walks (REACH, recursion, compile inputs, mints) read only the
+dropped. The walks (REACH, recursion, nested loops, compile inputs,
+mints) read only the
 code outside expansions, with `[reach]`'s `exports_macro` and
 `fn_ptr_macro` as before. REACH scans every shipped file for the
 exports macro's blocks, found by their tokens (the name, plain or raw,
@@ -591,7 +893,58 @@ to rewrite the macro so it expands as rustc's would within the bounds
 (split a long invocation, keep one definition with the `cfg` inside its
 body). A zlib port, the PCRE2 port and the Expat port come nowhere near the bounds (at most
 41 iterations of one repetition, and an expansion two deep).
-`thread_local!` writes statics, and counts nothing.
+std's `thread_local!` writes statics, and counts nothing. One shown to
+be another macro is read as any macro of its name: the bare name where
+the crate defines a `macro_rules! thread_local` (expanded, and its
+functions counted) or where a `use` imports the name from a path that
+does not start at `std` or `core`, and a path whose first segment is
+neither (`elsewhere::thread_local!`). A `std` or `core` that starts
+such an import or path is that crate's only where no Cargo dependency
+is renamed to it and neither a `use` in the module nor an `extern
+crate elsewhere as core;` gives another crate that name
+(`use elsewhere as core; core::thread_local!` counts); for the
+import, in 2015, a `use` at the crate root or a root glob but std's,
+core's or Verus's rebinds it too (a 2015 `use` path is read from the
+root), while the path is read in its own module in every edition, so
+a root `use` rebinds it only at the root. Nor is an import's `std` or
+`core` that crate where it names a module of the crate as rustc reads
+a `use` path (in 2015 one at the root, from 2018 on one in the
+module): the import is read as any other macro's, and a re-export the
+counter does not follow fails the run. Another crate's counts as one
+function outside `verus!`, `thread_local!`. A bare one beside a `*` or
+a `#[macro_use]` is read the same way when one of them may bring
+another crate's `thread_local`: a `#[macro_use]` of a crate other than
+std's (`std`, `core`, `alloc`) or Verus's (`vstd`, `verus_builtin`,
+`verus_builtin_macros`), or a `*` other than Verus's
+(`vstd::prelude::*`, `verus_builtin_macros::*`), std's or core's, and
+other than one of a module of the crate that imports nothing of the
+name (by a `use` of it or by such a `*` of its own, read through each
+`*` it has). In a `*`, as in the import above, a crate's name is
+exempt only where no Cargo dependency is
+renamed to it and neither a `use` in the module, or in 2015 at the
+crate root, where the path is read from (`use elsewhere as core;`),
+nor an `extern crate elsewhere as core;` gives another crate
+that name; in 2015 any root glob but std's, core's or Verus's (one of
+a module of the crate by any path or alias, or of another crate, or
+one whose first segment a `use`, an `extern crate .. as` or a module
+of the crate takes) may bring a module of that name, so with one the
+name is never exempt. A
+`*` path's plain first segment names a module of the
+crate as rustc reads it, and that module is read whatever its name (a
+`mod core` too): from 2018 on, a module in scope where the `use` is
+(none after a leading `::`), and in 2015, a module at the crate root
+(else, in both, a crate). Where such an alias gives the name too (a
+`cfg` may select either), the alias counts it whatever the module
+holds. A path whose first segment names a module of the crate but
+whose rest names none (`mod core { pub(crate) use elsewhere::cell; }`
+beside `use core::cell::*;`) goes through a re-export the counter does
+not follow, so it counts it too. A module whose `mod` item (or one
+around it on the path) is under a `cfg` of its own, or in a `verus!`
+block that is, or whose file has a `#![cfg]`, may be left out of a
+build, so the path is read as a crate's too, and counts where either
+reading may bring another `thread_local`.
+One beside only those counts nothing, as std's; its
+module's globs place no `impl`'s type, as before.
 
 `compile_error!`, which writes nothing that ships, counts nothing
 either, but only by a rule true by rustc's own semantics. The counter
@@ -641,7 +994,12 @@ change to the port, as functions that were in no denominator join it
 the first pin move fails its FLOOR. A port holds its FLOOR by verifying
 more: it brings the macros' bodies inside `verus!` (below), verified or
 trusted at a seam, and the pin move waits until the port's figures hold
-its FLOOR. Lowering FLOOR is not the way to adopt a counter change.
+its FLOOR. Lowering FLOOR is not the way to adopt a counter change,
+unless the release's notes say otherwise for its counting rule (0.4.5's
+notes 3 and 7: a share the rule drops below FLOOR takes a `lowered` line
+naming what now counts as trusted). Even then verifying more comes
+first: the deps agent's kit entry prepares such a line in a draft that
+names the kit change, and a person chooses between it and more proofs.
 
 To raise the share, put the functions a macro writes inside `verus!`
 by writing them there, or have the macro write a `verus! { .. }` block,
@@ -723,6 +1081,11 @@ the crates and paths named `pcre2-*` here. The port carries its own
 | challoc | challoc main `fcde6b2` | `configs/challoc.toml` | identical | identical (1,674 lines) |
 | challoc | challoc main `39751a02` | `configs/challoc.toml` | identical (also with no flag, and `--list --floor verus/FLOOR --base-rev fcde6b2`) | identical (1,672 lines) |
 
+challoc's rows ran under the copy of `configs/challoc.toml` of their
+time. The copy here is read from challoc main `09edeb9`, where the
+kit's `--list` under it is byte-identical to one under challoc's own
+`verus/count.toml` (1,894 lines).
+
 The kit's `ok compile inputs` line also names each root it resolved
 and where (`(roots Regex::new at FILE:LINE, encode_as at FILE:LINE)`);
 the PCRE2 port's does not name them. The PCRE2 port's `--rlimit` path, with statistics written for the
@@ -756,8 +1119,8 @@ Where the counters still differ, on inputs neither port has today:
   the PCRE2 port's counter's rule gives; without them, 27 verified functions
   of pcre2-capi (exec.rs and tables.rs's `Libc` ctype items) count as
   trusted. On challoc main `0497dc34`, its `target_arch` and
-  `loom` guards are the only ones: with
-  [configs/challoc.toml](configs/challoc.toml)'s declarations `--list`
+  `loom` guards are the only ones: with the declarations of that time
+  (`verus_sets` both architectures, `verus_never_sets = ["loom"]`) `--list`
   is the same as challoc's counter's rule gives, and without them 7
   verified functions count as trusted.
 - With `--base-rev`, the kit also compares `verus/count.toml` with the
@@ -850,7 +1213,12 @@ takes the kit. It installs:
 - `/usr/bin/verus-count`, this crate, whose `--version` prints
   `verus-count X.Y.Z` for release vX.Y.Z;
 - `/usr/share/proved-port/make/`: `proved-port.mk`, `kani.sh`,
-  `headers.sh` and `VERUS-FILES` (`kit/make`);
+  `headers.sh`, `lint-unsafe.sh`, `noalias.sh`, `codegen.sh`,
+  `perf-budget.sh`, `perf-budget.rs`, `skip-summary.sh`,
+  `glibc-max.sh`, `known-failures.sh`, `header-check.sh`, `abi-elf.sh`,
+  `kani-quotes.sh`, `deviations.sh`, `ledger-active.sh`,
+  `known-cites.sh`, `consumers.sh`, `fuzz-diff.h`, `fuzz-diff.c` and
+  `VERUS-FILES` (`kit/make`);
 - `/usr/share/proved-port/templates/`: all of `kit/templates`, under
   their own names;
 - `/usr/share/proved-port/CHANGELOG.md`: `kit/CHANGELOG.md`, each
@@ -860,7 +1228,8 @@ takes the kit. It installs:
 A port takes it this way:
 
 - It pins the package, `theseus-proved-port~X.Y.Z`, in the packages of
-  every check that runs a kit target (`.chainguard/ci/verus.yaml`) and
+  every check that runs a kit target (`.chainguard/ci/verus.yaml`, and
+  lint.yaml's `source-rules`, which runs `make lint-unsafe`) and
   in the environment development sessions and the deps agent install
   (`.chainguard/develop.yaml`, or the file its `from:` names).
 - Its Makefile sets its variables, then names the same release and
@@ -886,7 +1255,7 @@ A port takes it this way:
   ifneq ($(wildcard $(PROVED_PORT_HOME)/make/proved-port.mk),)
   include $(PROVED_PORT_HOME)/make/proved-port.mk
   else
-  PROVED_PORT_TARGETS = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular verify
+  PROVED_PORT_TARGETS = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run verify
   .PHONY: $(PROVED_PORT_TARGETS)
   $(PROVED_PORT_TARGETS):
   	@echo "$@: no proved-port kit at $(PROVED_PORT_HOME): install theseus-proved-port~$(PROVED_PORT_VERSION), or set PROVED_PORT_HOME to a kit install root (make/, templates/ and KIT, as the package lays out /usr/share/proved-port)" >&2; exit 1
@@ -916,7 +1285,8 @@ Where the package is not installed (a Mac, a development host), install
 the kit from a clone of this repository checked out at the pinned tag,
 with one command, `kit/install.sh PREFIX`. It lays the kit out under
 PREFIX as the package does under `/usr`: the counter as
-`PREFIX/bin/verus-count`, and `make/`, `templates/`, `CHANGELOG.md` and
+`PREFIX/bin/verus-count`, the Go tools as `PREFIX/bin/proved-port-fncmp`,
+`proved-port-stats` and `proved-port-seams` (it needs go), and `make/`, `templates/`, `CHANGELOG.md` and
 a `KIT` that records the commit and release in
 `PREFIX/share/proved-port`. Then run
 the port's kit targets with that root and counter:

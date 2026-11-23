@@ -1,6 +1,12 @@
 # proved-port.mk: the proof targets every proved port shares. The
-# theseus-proved-port package installs it, with kani.sh, headers.sh and
-# VERUS-FILES, in /usr/share/proved-port/make/, the kit's templates in
+# theseus-proved-port package installs it, with kani.sh, headers.sh,
+# lint-unsafe.sh, noalias.sh, codegen.sh, perf-budget.sh, perf-budget.rs,
+# skip-summary.sh, glibc-max.sh, known-failures.sh, header-check.sh,
+# abi-elf.sh, kani-quotes.sh, deviations.sh, ledger-active.sh,
+# known-cites.sh, consumers.sh, fuzz-diff.h, fuzz-diff.c (the
+# differential fuzzer's driver shell, which a port compiles into its
+# driver; no target) and VERUS-FILES, in
+# /usr/share/proved-port/make/, the kit's templates in
 # /usr/share/proved-port/templates/, the kit's commit and tag in
 # /usr/share/proved-port/KIT, and the counter as /usr/bin/verus-count.
 # The port pins the package (theseus-proved-port~X.Y.Z) in its check and
@@ -14,7 +20,7 @@
 #
 #   VERUS_CRATES = pcre2-unicode pcre2-syntax pcre2 pcre2-capi
 #   KANI_CRATES  = $(VERUS_CRATES)
-#   PROVED_PORT_VERSION = 0.4.4
+#   PROVED_PORT_VERSION = 0.4.11
 #   PROVED_PORT_HOME ?= /usr/share/proved-port
 #   include $(PROVED_PORT_HOME)/make/proved-port.mk
 #
@@ -57,7 +63,67 @@
 #   kani-regular      kani.sh one harness at a time in regular format
 #                     with CBMC's --verbosity 9, failing on
 #                     KANI_IGNORING_PATTERN (challoc's kani-ignoring).
-#   verify            every target VERIFY_TARGETS lists (by default verus
+#   lint-unsafe       lint-unsafe.sh: every crate but UNSAFE_CRATES
+#                     forbids unsafe code, at its roots and on rustc's
+#                     command line for every target, and with
+#                     UNSAFE_WORKSPACE_LINTS = yes every member inherits
+#                     a workspace lint that denies it.
+#   noalias           noalias.sh: no inherent method of NOALIAS_TYPE
+#                     takes a noalias &mut self in the release
+#                     library's LLVM IR, for each build NOALIAS_BUILDS
+#                     names (challoc's heap-noalias).
+#   codegen           codegen.sh base: capture the base revision's
+#                     release library (CHAINGUARD_BASE_REVISION, else
+#                     CODEGEN_BASE) for each build CODEGEN_BUILDS names,
+#                     compare this tree's with it function by function
+#                     (fncmp), and print the verdicts as ::notice lines;
+#                     exit 2 when a function changed (challoc's codegen
+#                     checks).
+#   codegen-capture   codegen.sh capture CODEGEN_DIR, and
+#   codegen-compare   codegen.sh compare CODEGEN_DIR: the same in two
+#                     steps, around a local change.
+#   perf-budget       perf-budget.sh check: for each build
+#                     PERF_BUDGET_BUILDS names, the hot exports'
+#                     fast-path counts in the x86_64 release library
+#                     against the build's table, after a self-test
+#                     (challoc's perf-budget).
+#   perf-budget-print perf-budget.sh print: the measured table lines.
+#   skip-summary      skip-summary.sh: the test log SKIP_LOG's `SKIP
+#                     <key>` lines against the expected-skips manifest
+#                     SKIP_MANIFEST; a new skip fails, a gone one is a
+#                     notice (challoc's skip-summary).
+#   glibc-max         glibc-max.sh: the library GLIBC_MAX_LIB needs no
+#                     GLIBC_ symbol version above GLIBC_MAX (challoc's
+#                     glibc-max).
+#   known-failures    known-failures.sh: after a failed test run, every
+#                     failure in KNOWN_FAILURES_LOG must be listed in
+#                     KNOWN_FAILURES_LIST (challoc's known-failures).
+#   header-check      header-check.sh: the macros HEADER_CHECK_PREFIXES
+#                     names in the port's headers HEADER_CHECK_HEADERS
+#                     equal the C library's in HEADER_CHECK_UPSTREAM
+#                     (the PCRE2 port's header-check).
+#   abi-elf           abi-elf.sh: the shared library ABI_ELF_LIB's SONAME,
+#                     needs, thread-locals, version nodes and exports
+#                     are the ones its version script ABI_ELF_MAP
+#                     declares (the PCRE2 port's abi checks 1 to 3).
+#   kani-quotes       kani-quotes.sh: each Kani record in KANI_QUOTES_DIR
+#                     still quotes, in its section 1, the source it
+#                     names (under KANI_QUOTES_ROOTS).
+#   deviations        deviations.sh: the failing keys of a run's results
+#                     DEVIATIONS_RESULTS are exactly those the list
+#                     DEVIATIONS_LIST holds, each citing an active entry
+#                     of DEVIATIONS_LEDGER (the PCRE2 port's conformance
+#                     ratchet).
+#   known-cites       known-cites.sh: each row of the known-divergence
+#                     table KNOWN_CITES_FILE cites an active entry of
+#                     KNOWN_CITES_LEDGER or an open issue of
+#                     KNOWN_CITES_REPO (the PCRE2 port's fuzz-diff
+#                     known-citations check).
+#   consumers-run     consumers.sh: each consumer's run.sh in
+#                     CONSUMERS_DIR, against the swap directory
+#                     CONSUMERS_LIB, with the fetch and loaded helpers
+#                     (the PCRE2 port's consumer harness).
+#   verify          every target VERIFY_TARGETS lists (by default verus
 #                     kani), in order: everything the port's checks
 #                     verify, as the one command a package build runs.
 
@@ -261,11 +327,18 @@ KANI_WEIGHTS ?=
 KANI_FAIL_PATTERN ?=
 KANI_VERSION ?=
 KANI_ARGS ?=
+# KANI_MANIFEST: the workspace manifest kani.sh points cargo at, for a
+# port whose workspace is not at its root (a uutils port's crates/uutils).
+# It defaults to the `--manifest-path` VERUS_CARGO_FLAGS gives cargo
+# verus, so one setting covers both; empty runs cargo in make's
+# directory, as before. The recipes pass it to kani.sh when set.
+KANI_MANIFEST ?= $(lastword $(patsubst --manifest-path=%,%,$(verus_manifest_flags)))
+kani_env = $(if $(strip $(KANI_MANIFEST)),KANI_MANIFEST='$(strip $(KANI_MANIFEST))' )
 export KANI_CRATES KANI_FLAGS KANI_LIST_FLAGS KANI_JOBS KANI_FORMAT KANI_CBMC_ARGS \
   KANI_ONLY KANI_EXCLUDE KANI_HARNESS KANI_SHARD KANI_SHARDS KANI_WEIGHTS \
   KANI_FAIL_PATTERN KANI_VERSION KANI_NONE
 
-.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular verify
+.PHONY: verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run verify
 
 verus: ## the Verus proofs, then the coverage floor and rlimit headroom (VERUS_BASE=<rev> or none)
 	$(verus_proofs_recipe)
@@ -287,11 +360,11 @@ verus-headers: ## the kit's Verus files against the installed templates (headers
 
 kani: ## the Kani harnesses, all or a shard (kani.sh; KANI_SHARD/KANI_SHARDS; KANI_NONE=yes for none yet)
 	$(proved_port_version_check)
-	sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
+	$(kani_env)sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
 
 kani-list: ## the Kani harnesses, one CRATE NAME FILE a line
 	$(proved_port_version_check)
-	sh $(PROVED_PORT_MAKE)kani.sh --list $(KANI_ARGS)
+	$(kani_env)sh $(PROVED_PORT_MAKE)kani.sh --list $(KANI_ARGS)
 
 # KANI_IGNORING_PATTERN: what kani-regular fails on. CBMC prints
 # `warning: ignoring` when it leaves an expression unconstrained (Kani
@@ -314,7 +387,357 @@ kani-regular: ## every Kani harness one at a time in regular format with CBMC's 
 	$(proved_port_version_check)
 	$(if $(strip $(KANI_IGNORING_PATTERN)),,$(error $(kani_ignoring_empty)))
 	$(if $(findstring --verbosity,$(KANI_CBMC_ARGS)),$(error $(kani_cbmc_verbosity)))
-	KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='$(strip $(KANI_CBMC_ARGS) --verbosity 9)' KANI_FAIL_PATTERN='$(KANI_IGNORING_PATTERN)' sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
+	KANI_JOBS= KANI_FORMAT=regular KANI_CBMC_ARGS='$(strip $(KANI_CBMC_ARGS) --verbosity 9)' KANI_FAIL_PATTERN='$(KANI_IGNORING_PATTERN)' $(kani_env)sh $(PROVED_PORT_MAKE)kani.sh $(KANI_ARGS)
+
+# --- unsafe code -----------------------------------------------------------
+# lint-unsafe.sh reads these from its environment; its header says what
+# each does. UNSAFE_CRATES names the packages allowed unsafe code (the C
+# API crate, and any other fence crate), and lint-unsafe fails while it
+# is empty. A port whose manifests have no [workspace.lints.rust] sets
+# UNSAFE_WORKSPACE_LINTS = no. UNSAFE_MANIFEST defaults to KANI_MANIFEST
+# (from VERUS_CARGO_FLAGS' --manifest-path), so one setting covers a
+# workspace that is not at the port's root.
+UNSAFE_CRATES ?=
+UNSAFE_WORKSPACE_LINTS ?= yes
+UNSAFE_MANIFEST ?= $(KANI_MANIFEST)
+UNSAFE_CHECK_FLAGS ?=
+unsafe_crates_empty = UNSAFE_CRATES is empty: the port's Makefile names the packages allowed unsafe code (the C API crate)
+
+lint-unsafe: ## every crate but UNSAFE_CRATES forbids unsafe code: roots, workspace lints, cargo check with -Funsafe_code (lint-unsafe.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(UNSAFE_CRATES)),,$(error $(unsafe_crates_empty)))
+	UNSAFE_CRATES='$(strip $(UNSAFE_CRATES))' UNSAFE_WORKSPACE_LINTS='$(strip $(UNSAFE_WORKSPACE_LINTS))' UNSAFE_MANIFEST='$(strip $(UNSAFE_MANIFEST))' UNSAFE_CHECK_FLAGS='$(strip $(UNSAFE_CHECK_FLAGS))' sh $(PROVED_PORT_MAKE)lint-unsafe.sh .
+
+# --- noalias ---------------------------------------------------------------
+# noalias.sh reads these from its environment; its header says what
+# each does. NOALIAS_CRATE is the library's crate name and NOALIAS_TYPE
+# the type whose `&mut self` must not be noalias, with its module path
+# (heap::Heap); noalias fails while either is empty. NOALIAS_BUILDS
+# names the builds (by default one, default), and NOALIAS_FLAGS_<name>
+# holds a build's own cargo flags, so challoc's two quanta are
+#   NOALIAS_BUILDS = q16 q8
+#   NOALIAS_FLAGS_q8 = --no-default-features --features quantum8
+# NOALIAS_CARGO_FLAGS go to every build.
+NOALIAS_CRATE ?=
+NOALIAS_TYPE ?=
+NOALIAS_BUILDS ?= default
+NOALIAS_CARGO_FLAGS ?=
+noalias_crate_empty = NOALIAS_CRATE is empty: the port's Makefile names its library's crate
+noalias_type_empty = NOALIAS_TYPE is empty: the port's Makefile names the type, with its module path (heap::Heap)
+noalias_builds_empty = NOALIAS_BUILDS is empty: the port's Makefile names its builds (by default default)
+
+noalias: ## no method of NOALIAS_TYPE takes a noalias &mut self in the release library's LLVM IR, per build in NOALIAS_BUILDS (noalias.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(NOALIAS_CRATE)),,$(error $(noalias_crate_empty)))
+	$(if $(strip $(NOALIAS_TYPE)),,$(error $(noalias_type_empty)))
+	$(if $(strip $(NOALIAS_BUILDS)),,$(error $(noalias_builds_empty)))
+	NOALIAS_CRATE='$(strip $(NOALIAS_CRATE))' NOALIAS_TYPE='$(strip $(NOALIAS_TYPE))' NOALIAS_BUILDS='$(strip $(NOALIAS_BUILDS))' $(foreach b,$(NOALIAS_BUILDS),NOALIAS_FLAGS_$(b)='$(strip $(NOALIAS_FLAGS_$(b)))' )NOALIAS_CARGO_FLAGS='$(strip $(NOALIAS_CARGO_FLAGS))' NOALIAS_TARGET_DIR='$(or $(CARGO_TARGET_DIR),target)' sh $(PROVED_PORT_MAKE)noalias.sh .
+
+# --- codegen ---------------------------------------------------------------
+# codegen.sh reads these from its environment; its header says what
+# each does. CODEGEN_LIB is the release library's file name
+# (libchalloc.so); every codegen target fails while it is empty.
+# CODEGEN_BUILDS names the builds (by default one, default), and
+# CODEGEN_FLAGS_<name> holds a build's own cargo flags, so challoc's two
+# quanta are
+#   CODEGEN_BUILDS = q16 q8
+#   CODEGEN_FLAGS_q8 = --no-default-features --features quantum8
+# CODEGEN_CARGO_FLAGS go to every build. CODEGEN_FNCMP is the comparer,
+# the kit's kit/perf/codegen/fncmp, which the package (and a checkout's
+# kit/install.sh) installs as proved-port-fncmp (by default that, from
+# PATH). Unlike verus-count, the comparer is not held to KIT's release:
+# the package installs one copy beside its KIT, and the codegen targets'
+# verdicts are advisory notices that hold no FLOOR. A host with several
+# kit/install.sh prefixes (ports on different pins) puts the pinned
+# prefix's bin/ first on PATH, or names its comparer in CODEGEN_FNCMP.
+# codegen compares with
+# CHAINGUARD_BASE_REVISION (a check's base), else CODEGEN_BASE;
+# codegen-capture and codegen-compare keep their capture in CODEGEN_DIR.
+CODEGEN_LIB ?=
+CODEGEN_BUILDS ?= default
+CODEGEN_CARGO_FLAGS ?=
+CODEGEN_FNCMP ?= proved-port-fncmp
+CODEGEN_BASE ?=
+CODEGEN_DIR ?= target/codegen-baseline
+codegen_lib_empty = CODEGEN_LIB is empty: the port's Makefile names its release library's file (libchalloc.so)
+codegen_builds_empty = CODEGEN_BUILDS is empty: the port's Makefile names its builds (by default default)
+codegen_dir_empty = CODEGEN_DIR is empty: name the directory of the capture (by default target/codegen-baseline)
+codegen_env = CODEGEN_LIB='$(strip $(CODEGEN_LIB))' CODEGEN_BUILDS='$(strip $(CODEGEN_BUILDS))' $(foreach b,$(CODEGEN_BUILDS),CODEGEN_FLAGS_$(b)='$(strip $(CODEGEN_FLAGS_$(b)))' )CODEGEN_CARGO_FLAGS='$(strip $(CODEGEN_CARGO_FLAGS))' CODEGEN_TARGET_DIR='$(or $(CARGO_TARGET_DIR),target)' CODEGEN_FNCMP='$(strip $(CODEGEN_FNCMP))'
+define codegen_check
+$(proved_port_version_check)
+$(if $(strip $(CODEGEN_LIB)),,$(error $(codegen_lib_empty)))
+$(if $(strip $(CODEGEN_BUILDS)),,$(error $(codegen_builds_empty)))
+endef
+
+codegen: ## the release library's machine code from the base revision to this tree, function by function, per build in CODEGEN_BUILDS (codegen.sh base)
+	$(codegen_check)
+	$(codegen_env) CODEGEN_BASE='$(strip $(CODEGEN_BASE))' sh $(PROVED_PORT_MAKE)codegen.sh base
+
+codegen-capture: ## save the release library's machine code in CODEGEN_DIR for codegen-compare (codegen.sh capture)
+	$(codegen_check)
+	$(if $(strip $(CODEGEN_DIR)),,$(error $(codegen_dir_empty)))
+	$(codegen_env) sh $(PROVED_PORT_MAKE)codegen.sh capture '$(strip $(CODEGEN_DIR))'
+
+codegen-compare: ## compare the release library's machine code with CODEGEN_DIR's capture, function by function (codegen.sh compare)
+	$(codegen_check)
+	$(if $(strip $(CODEGEN_DIR)),,$(error $(codegen_dir_empty)))
+	$(codegen_env) sh $(PROVED_PORT_MAKE)codegen.sh compare '$(strip $(CODEGEN_DIR))'
+
+# --- perf-budget -----------------------------------------------------------
+# perf-budget.sh reads these from its environment; its header says what
+# each does. PERF_BUDGET_LIB is the release library's file name
+# (libchalloc.so); both targets fail while it is empty. PERF_BUDGET_BUILDS
+# names the builds (by default one, default); each needs its table in
+# PERF_BUDGET_TABLE_<name>, and PERF_BUDGET_FLAGS_<name> holds its own
+# cargo flags, so challoc's two quanta are
+#   PERF_BUDGET_BUILDS = q16 q8
+#   PERF_BUDGET_TABLE_q16 = verus/perf-budget.txt
+#   PERF_BUDGET_TABLE_q8 = verus/perf-budget-q8.txt
+#   PERF_BUDGET_FLAGS_q8 = --no-default-features --features quantum8
+# PERF_BUDGET_CARGO_FLAGS go to every build. PERF_BUDGET_SELFTEST_EXPORT
+# names the export the self-test mutates (by default the table's first).
+PERF_BUDGET_LIB ?=
+PERF_BUDGET_BUILDS ?= default
+PERF_BUDGET_CARGO_FLAGS ?=
+PERF_BUDGET_SELFTEST_EXPORT ?=
+perf_budget_lib_empty = PERF_BUDGET_LIB is empty: the port's Makefile names its release library's file (libchalloc.so)
+perf_budget_builds_empty = PERF_BUDGET_BUILDS is empty: the port's Makefile names its builds (by default default)
+perf_budget_env = PERF_BUDGET_LIB='$(strip $(PERF_BUDGET_LIB))' PERF_BUDGET_BUILDS='$(strip $(PERF_BUDGET_BUILDS))' $(foreach b,$(PERF_BUDGET_BUILDS),PERF_BUDGET_TABLE_$(b)='$(strip $(PERF_BUDGET_TABLE_$(b)))' PERF_BUDGET_FLAGS_$(b)='$(strip $(PERF_BUDGET_FLAGS_$(b)))' )PERF_BUDGET_CARGO_FLAGS='$(strip $(PERF_BUDGET_CARGO_FLAGS))' PERF_BUDGET_TARGET_DIR='$(or $(CARGO_TARGET_DIR),target)' PERF_BUDGET_SELFTEST_EXPORT='$(strip $(PERF_BUDGET_SELFTEST_EXPORT))'
+define perf_budget_check
+$(proved_port_version_check)
+$(if $(strip $(PERF_BUDGET_LIB)),,$(error $(perf_budget_lib_empty)))
+$(if $(strip $(PERF_BUDGET_BUILDS)),,$(error $(perf_budget_builds_empty)))
+endef
+
+perf-budget: ## the hot exports' fast-path counts in the x86_64 release library against each build's table, after a self-test (perf-budget.sh check)
+	$(perf_budget_check)
+	$(perf_budget_env) sh $(PROVED_PORT_MAKE)perf-budget.sh check
+
+perf-budget-print: ## the measured fast-path table lines of each build, to update its table after a deliberate change (perf-budget.sh print)
+	$(perf_budget_check)
+	$(perf_budget_env) sh $(PROVED_PORT_MAKE)perf-budget.sh print
+
+# --- skip-summary ----------------------------------------------------------
+# skip-summary.sh LOG MANIFEST; its header says what it does. SKIP_LOG is
+# the test run's log and SKIP_MANIFEST the expected-skips manifest it is
+# held to (challoc's ci/expected-skips/<cell>.txt); the target fails while
+# either is empty. CI_SKIP_UPDATE=1 in the environment writes the
+# observed keys to SKIP_MANIFEST and passes.
+SKIP_LOG ?=
+SKIP_MANIFEST ?=
+skip_log_empty = SKIP_LOG is empty: name the test run's log (make skip-summary SKIP_LOG=test.log)
+skip_manifest_empty = SKIP_MANIFEST is empty: name the expected-skips manifest the log is held to (ci/expected-skips/<cell>.txt)
+
+skip-summary: ## the SKIP lines of the test log SKIP_LOG against the expected-skips manifest SKIP_MANIFEST: a new skip fails (skip-summary.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(SKIP_LOG)),,$(error $(skip_log_empty)))
+	$(if $(strip $(SKIP_MANIFEST)),,$(error $(skip_manifest_empty)))
+	sh $(PROVED_PORT_MAKE)skip-summary.sh '$(strip $(SKIP_LOG))' '$(strip $(SKIP_MANIFEST))'
+# --- glibc-max -------------------------------------------------------------
+# glibc-max.sh SO MAX; its header says what it does. GLIBC_MAX_LIB is the
+# built library to read (challoc's .ci/target/release/libchalloc.so) and
+# GLIBC_MAX the highest GLIBC_ version it may need (2.44, Wolfi's glibc
+# stream); the target fails while either is empty. The script runs
+# binutils' readelf, which the port's check environment provides.
+GLIBC_MAX_LIB ?=
+GLIBC_MAX ?=
+glibc_max_lib_empty = GLIBC_MAX_LIB is empty: name the built library to read (make glibc-max GLIBC_MAX_LIB=target/release/libfoo.so)
+glibc_max_empty = GLIBC_MAX is empty: name the highest GLIBC_ version the library may need (GLIBC_MAX=2.44)
+
+glibc-max: ## the library GLIBC_MAX_LIB needs no GLIBC_ symbol version above GLIBC_MAX (glibc-max.sh; needs binutils)
+	$(proved_port_version_check)
+	$(if $(strip $(GLIBC_MAX_LIB)),,$(error $(glibc_max_lib_empty)))
+	$(if $(strip $(GLIBC_MAX)),,$(error $(glibc_max_empty)))
+	sh $(PROVED_PORT_MAKE)glibc-max.sh '$(strip $(GLIBC_MAX_LIB))' '$(strip $(GLIBC_MAX))'
+# --- known-failures --------------------------------------------------------
+# known-failures.sh LOG LIST [EXTRA]; its header says what it does.
+# KNOWN_FAILURES_LOG is the failed test run's log and KNOWN_FAILURES_LIST
+# the failures it may have (challoc's ci/known-failures.txt); the target
+# fails while either is empty. KNOWN_FAILURES_EXTRA, optional, is a
+# port's sh script that prints more failure keys from the log (challoc's
+# cgroup verdicts). CI_CELL in the environment names the cell for the
+# list's cell-scoped entries. A test binary that crashed, before or
+# after its result line, is a failure, `crashed: TARGET`; one that never
+# started is not seen, so a port that
+# needs every group to run checks that itself (as challoc's
+# ci/test-cell.sh does). The log holds cargo's stderr too (`2>&1`).
+KNOWN_FAILURES_LOG ?=
+KNOWN_FAILURES_LIST ?=
+KNOWN_FAILURES_EXTRA ?=
+known_failures_log_empty = KNOWN_FAILURES_LOG is empty: name the failed test run's log (make known-failures KNOWN_FAILURES_LOG=test.log)
+known_failures_list_empty = KNOWN_FAILURES_LIST is empty: name the list of failures the run may have (ci/known-failures.txt)
+
+known-failures: ## after a failed test run, every failure in KNOWN_FAILURES_LOG must be listed in KNOWN_FAILURES_LIST (known-failures.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(KNOWN_FAILURES_LOG)),,$(error $(known_failures_log_empty)))
+	$(if $(strip $(KNOWN_FAILURES_LIST)),,$(error $(known_failures_list_empty)))
+	sh $(PROVED_PORT_MAKE)known-failures.sh '$(strip $(KNOWN_FAILURES_LOG))' '$(strip $(KNOWN_FAILURES_LIST))'$(if $(strip $(KNOWN_FAILURES_EXTRA)), '$(strip $(KNOWN_FAILURES_EXTRA))')
+# --- header-check ----------------------------------------------------------
+# header-check.sh UPSTREAM PREFIXES HEADER...; its header says what it
+# does. HEADER_CHECK_HEADERS are the port's public headers
+# (include/foo.h include/foo-posix.h), each compared with the file of its
+# name in HEADER_CHECK_UPSTREAM (the C library's installed headers, by
+# default /usr/include, which the C library's -dev package in the port's
+# check environment fills), for the macros named with a prefix of
+# HEADER_CHECK_PREFIXES (FOO_ REG_); the target fails while the headers
+# or the prefixes are empty.
+HEADER_CHECK_HEADERS ?=
+HEADER_CHECK_PREFIXES ?=
+HEADER_CHECK_UPSTREAM ?= /usr/include
+header_check_headers_empty = HEADER_CHECK_HEADERS is empty: name the port's public headers (make header-check HEADER_CHECK_HEADERS=include/foo.h)
+header_check_prefixes_empty = HEADER_CHECK_PREFIXES is empty: name the prefixes of the C library's macros to compare (HEADER_CHECK_PREFIXES="FOO_ REG_")
+header_check_upstream_empty = HEADER_CHECK_UPSTREAM is empty: name the C library's installed include directory (by default /usr/include)
+
+header-check: ## the macros HEADER_CHECK_PREFIXES names in the port's headers HEADER_CHECK_HEADERS equal the C library's in HEADER_CHECK_UPSTREAM (header-check.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(HEADER_CHECK_HEADERS)),,$(error $(header_check_headers_empty)))
+	$(if $(strip $(HEADER_CHECK_PREFIXES)),,$(error $(header_check_prefixes_empty)))
+	$(if $(strip $(HEADER_CHECK_UPSTREAM)),,$(error $(header_check_upstream_empty)))
+	sh $(PROVED_PORT_MAKE)header-check.sh '$(strip $(HEADER_CHECK_UPSTREAM))' '$(strip $(HEADER_CHECK_PREFIXES))' $(foreach h,$(HEADER_CHECK_HEADERS),'$(h)')
+# --- abi-elf ---------------------------------------------------------------
+# abi-elf.sh SO MAP SONAME NEEDED [TLS_MAX [DEFAULTS]]; its header says
+# what it does.
+# ABI_ELF_LIB is the built shared library (target/release/libfoo.so.1),
+# ABI_ELF_MAP its linker version script (maps/libfoo.map) and
+# ABI_ELF_SONAME the C library's SONAME; the target fails while any is
+# empty. ABI_ELF_NEEDED lists the libraries it may need (by default libc
+# and the x86_64 and aarch64 loaders), and ABI_ELF_TLS_MAX, optional,
+# bounds its thread-locals in bytes (512, glibc's default optional static
+# TLS). ABI_ELF_DEFAULTS, needed only for a name the map lists in more
+# than one node, gives each such name's default version as the C
+# library exports it (foo@V2 for its foo@@V2). Run it once per library.
+# The script runs binutils' readelf, which the port's check environment
+# provides.
+ABI_ELF_LIB ?=
+ABI_ELF_MAP ?=
+ABI_ELF_SONAME ?=
+ABI_ELF_NEEDED ?= libc.so.6 ld-linux-x86-64.so.2 ld-linux-aarch64.so.1
+ABI_ELF_TLS_MAX ?=
+ABI_ELF_DEFAULTS ?=
+abi_elf_lib_empty = ABI_ELF_LIB is empty: name the built shared library (make abi-elf ABI_ELF_LIB=target/release/libfoo.so.1)
+abi_elf_map_empty = ABI_ELF_MAP is empty: name the library's linker version script (ABI_ELF_MAP=maps/libfoo.map)
+abi_elf_soname_empty = ABI_ELF_SONAME is empty: name the C library's SONAME (ABI_ELF_SONAME=libfoo.so.1)
+abi_elf_needed_empty = ABI_ELF_NEEDED is empty: list the libraries the library may need (by default libc and the loaders)
+
+abi-elf: ## the library ABI_ELF_LIB's SONAME, needs, thread-locals, version nodes and exports against its version script ABI_ELF_MAP (abi-elf.sh; needs binutils)
+	$(proved_port_version_check)
+	$(if $(strip $(ABI_ELF_LIB)),,$(error $(abi_elf_lib_empty)))
+	$(if $(strip $(ABI_ELF_MAP)),,$(error $(abi_elf_map_empty)))
+	$(if $(strip $(ABI_ELF_SONAME)),,$(error $(abi_elf_soname_empty)))
+	$(if $(strip $(ABI_ELF_NEEDED)),,$(error $(abi_elf_needed_empty)))
+	sh $(PROVED_PORT_MAKE)abi-elf.sh '$(strip $(ABI_ELF_LIB))' '$(strip $(ABI_ELF_MAP))' '$(strip $(ABI_ELF_SONAME))' '$(strip $(ABI_ELF_NEEDED))'$(if $(strip $(ABI_ELF_TLS_MAX) $(ABI_ELF_DEFAULTS)), '$(strip $(ABI_ELF_TLS_MAX))')$(if $(strip $(ABI_ELF_DEFAULTS)), '$(strip $(ABI_ELF_DEFAULTS))')
+# --- kani-quotes -------------------------------------------------------------
+# kani-quotes.sh DIR ROOTS [SKIP]; its header says what it does.
+# KANI_QUOTES_DIR holds the port's Kani records (kani-*.md, by default
+# verus/seams); KANI_QUOTES_ROOTS are the directories a record's source
+# path is looked up under, in turn (by default the port's tree, `.`; add
+# a vstd source tree for records that quote vstd's std_specs);
+# KANI_QUOTES_SKIP names records it does not read (kani-s3.md). The
+# target fails while the directory or the roots are empty.
+KANI_QUOTES_DIR ?= verus/seams
+KANI_QUOTES_ROOTS ?= .
+KANI_QUOTES_SKIP ?=
+kani_quotes_dir_empty = KANI_QUOTES_DIR is empty: name the directory of the port's Kani records (by default verus/seams)
+kani_quotes_roots_empty = KANI_QUOTES_ROOTS is empty: name the directories a record's source is looked up under (by default .)
+
+kani-quotes: ## each Kani record in KANI_QUOTES_DIR still quotes the source it names, in its section 1 (kani-quotes.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(KANI_QUOTES_DIR)),,$(error $(kani_quotes_dir_empty)))
+	$(if $(strip $(KANI_QUOTES_ROOTS)),,$(error $(kani_quotes_roots_empty)))
+	sh $(PROVED_PORT_MAKE)kani-quotes.sh '$(strip $(KANI_QUOTES_DIR))' '$(strip $(KANI_QUOTES_ROOTS))'$(if $(strip $(KANI_QUOTES_SKIP)), '$(strip $(KANI_QUOTES_SKIP))')
+# --- deviations --------------------------------------------------------------
+# deviations.sh [--update] RESULTS LIST LEDGER; its header says what it
+# does. DEVIATIONS_RESULTS is the port's run's `PASS KEY` / `FAIL KEY`
+# file (the PCRE2 port's conformance run writes one, a key per pattern
+# block), DEVIATIONS_LIST the deviations list it is held to
+# (tests/upstream/deviations.txt), and DEVIATIONS_LEDGER the ABI ledger
+# each reason cites (by default docs/abi, the kit template's directory;
+# or one file of entries); the target fails while any is empty.
+# DEVIATIONS_UPDATE=1 drops the listed keys that pass or are gone, then
+# checks; any other non-blank value (0, no) fails the target, so a value
+# meant as "off" never rewrites the list. DEVIATIONS_OUT, in the environment or on the command line,
+# names a directory for the full lists.
+DEVIATIONS_RESULTS ?=
+DEVIATIONS_LIST ?=
+DEVIATIONS_LEDGER ?= docs/abi
+DEVIATIONS_UPDATE ?=
+deviations_results_empty = DEVIATIONS_RESULTS is empty: name the run's PASS/FAIL results file (make deviations DEVIATIONS_RESULTS=target/conformance/results)
+deviations_list_empty = DEVIATIONS_LIST is empty: name the deviations list the results are held to (tests/upstream/deviations.txt)
+deviations_ledger_empty = DEVIATIONS_LEDGER is empty: name the ABI ledger the reasons cite (by default docs/abi)
+deviations_update_bad = DEVIATIONS_UPDATE is '$(strip $(DEVIATIONS_UPDATE))': set it to 1 to drop the listed keys that pass or are gone, or leave it empty
+
+deviations: ## the failing keys of DEVIATIONS_RESULTS are exactly those DEVIATIONS_LIST lists, each citing an active entry of DEVIATIONS_LEDGER (deviations.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(DEVIATIONS_RESULTS)),,$(error $(deviations_results_empty)))
+	$(if $(strip $(DEVIATIONS_LIST)),,$(error $(deviations_list_empty)))
+	$(if $(strip $(DEVIATIONS_LEDGER)),,$(error $(deviations_ledger_empty)))
+	$(if $(filter-out 1,$(strip $(DEVIATIONS_UPDATE))),$(error $(deviations_update_bad)))
+	sh $(PROVED_PORT_MAKE)deviations.sh $(if $(strip $(DEVIATIONS_UPDATE)),--update )'$(strip $(DEVIATIONS_RESULTS))' '$(strip $(DEVIATIONS_LIST))' '$(strip $(DEVIATIONS_LEDGER))'
+
+# --- known-cites -------------------------------------------------------------
+# known-cites.sh FILE LEDGER REPO; its header says what it does.
+# KNOWN_CITES_FILE is the known-divergence table's source (the PCRE2
+# port's fuzz/diff/known.c), KNOWN_CITES_LEDGER the ABI ledger an
+# `ABI-nnn` cite names (by default docs/abi, the kit template's
+# directory; or one file of entries), and KNOWN_CITES_REPO the
+# repository a `TODO(#n)` cite's issue is in, `owner/name`, then any
+# names it had before it moved; the target fails while any is empty.
+# KNOWN_CITES_MACRO names the row macro (empty: KNOWN). The pull
+# request's description is read from KNOWN_CITES_PR_BODY in the
+# environment, where the port's check binds it. An issue whose live
+# state gh cannot check fails the target; KNOWN_CITES_OFFLINE=1 (a
+# local run without gh) makes it a NOTE, and any other non-blank value
+# fails the target. Both are passed to the script stripped, always: make
+# exports a command-line value to the recipe's environment as given, and
+# the script reads an empty one as unset.
+KNOWN_CITES_OFFLINE ?=
+KNOWN_CITES_FILE ?=
+KNOWN_CITES_LEDGER ?= docs/abi
+KNOWN_CITES_REPO ?=
+KNOWN_CITES_MACRO ?=
+known_cites_file_empty = KNOWN_CITES_FILE is empty: name the known-divergence table's source (make known-cites KNOWN_CITES_FILE=fuzz/diff/known.c)
+known_cites_ledger_empty = KNOWN_CITES_LEDGER is empty: name the ABI ledger the ABI-nnn cites name (by default docs/abi)
+known_cites_repo_empty = KNOWN_CITES_REPO is empty: name the repository the TODO cites' issues are in (owner/name)
+known_cites_offline_bad = KNOWN_CITES_OFFLINE is '$(strip $(KNOWN_CITES_OFFLINE))': set it to 1 for a run without gh, or leave it empty
+
+known-cites: ## each row of the known-divergence table KNOWN_CITES_FILE cites an active entry of KNOWN_CITES_LEDGER or an open issue of KNOWN_CITES_REPO (known-cites.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(KNOWN_CITES_FILE)),,$(error $(known_cites_file_empty)))
+	$(if $(strip $(KNOWN_CITES_LEDGER)),,$(error $(known_cites_ledger_empty)))
+	$(if $(strip $(KNOWN_CITES_REPO)),,$(error $(known_cites_repo_empty)))
+	$(if $(filter-out 1,$(strip $(KNOWN_CITES_OFFLINE))),$(error $(known_cites_offline_bad)))
+	KNOWN_CITES_OFFLINE='$(strip $(KNOWN_CITES_OFFLINE))' KNOWN_CITES_MACRO='$(strip $(KNOWN_CITES_MACRO))' sh $(PROVED_PORT_MAKE)known-cites.sh '$(strip $(KNOWN_CITES_FILE))' '$(strip $(KNOWN_CITES_LEDGER))' '$(strip $(KNOWN_CITES_REPO))'
+
+# --- consumers-run ---------------------------------------------------------
+# consumers.sh run LIB [NAME...]; its header says what it does. The
+# target is consumers-run, not consumers, so a port's own `consumers`
+# target (which builds the port's libraries and fills the swap
+# directory first) can call it. CONSUMERS_LIB is the swap directory
+# (the PCRE2 port's target/consumers/lib), CONSUMERS_DIR the consumer
+# directories (by default tests/consumers), CONSUMERS_WORK the work
+# directory (by default target/consumers); the target fails while any is
+# empty. CONSUMERS_NAMES names the consumers to run (empty: $CONSUMER
+# from the environment, or every one), CONSUMERS_SONAME the default
+# sonames of `loaded` and CONSUMERS_PREFIX the prefix of the names
+# run.sh gets (empty: CONSUMER). All are passed stripped, always: make
+# exports a command-line value to the recipe's environment as given,
+# and the script reads an empty one as unset.
+CONSUMERS_LIB ?=
+CONSUMERS_DIR ?= tests/consumers
+CONSUMERS_WORK ?= target/consumers
+CONSUMERS_NAMES ?=
+CONSUMERS_SONAME ?=
+CONSUMERS_PREFIX ?=
+consumers_lib_empty = CONSUMERS_LIB is empty: name the swap directory that holds only the port's libraries (make consumers-run CONSUMERS_LIB=target/consumers/lib)
+consumers_dir_empty = CONSUMERS_DIR is empty: name the directory of consumer directories (by default tests/consumers)
+consumers_work_empty = CONSUMERS_WORK is empty: name the work directory (by default target/consumers)
+
+consumers-run: ## each consumer in CONSUMERS_DIR, run against the swap directory CONSUMERS_LIB: PASS, FAIL or SKIP and a summary (consumers.sh)
+	$(proved_port_version_check)
+	$(if $(strip $(CONSUMERS_LIB)),,$(error $(consumers_lib_empty)))
+	$(if $(strip $(CONSUMERS_DIR)),,$(error $(consumers_dir_empty)))
+	$(if $(strip $(CONSUMERS_WORK)),,$(error $(consumers_work_empty)))
+	CONSUMERS_DIR='$(strip $(CONSUMERS_DIR))' CONSUMERS_WORK='$(strip $(CONSUMERS_WORK))' CONSUMERS_SONAME='$(strip $(CONSUMERS_SONAME))' CONSUMERS_PREFIX='$(strip $(CONSUMERS_PREFIX))' sh $(PROVED_PORT_MAKE)consumers.sh run '$(strip $(CONSUMERS_LIB))'$(foreach n,$(CONSUMERS_NAMES), '$(n)')
 
 # --- verify ----------------------------------------------------------------
 # VERIFY_TARGETS: every target the port's checks verify with, in the
@@ -339,7 +762,7 @@ kani-regular: ## every Kani harness one at a time in regular format with CBMC's 
 # NAME.c a built-in rule would build it from.
 VERIFY_TARGETS ?= verus kani
 # The kit's targets, .PHONY above (verify aside).
-proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular
+proved_port_phony = verus verus-proofs verus-count verus-count-test verus-headers kani kani-list kani-regular lint-unsafe noalias codegen codegen-capture codegen-compare perf-budget perf-budget-print skip-summary glibc-max known-failures header-check abi-elf kani-quotes deviations known-cites consumers-run
 verify_targets_on_disk = $(wildcard $(filter-out $(proved_port_phony),$(VERIFY_TARGETS)))
 verify_targets_empty = VERIFY_TARGETS is empty: the port's Makefile lists the targets its checks verify with (by default verus kani)
 verify_targets_self = VERIFY_TARGETS names verify, which would run itself without end

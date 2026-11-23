@@ -4,8 +4,17 @@
 # as the package does, with a stub verus-count; shows with `make -n` the
 # commands verus, kani and the other targets run for each port's
 # settings and that the guards fail them; runs kani.sh with a stub cargo
-# and headers.sh over the filled templates. No Verus or Kani runs.
-# busybox for the tools a port's checks have, make (GNU) for the
+# and headers.sh over the filled templates; kit/skip-summary-test.sh,
+# kit/known-failures-test.sh, kit/header-check-test.sh,
+# kit/kani-quotes-test.sh and kit/deviations-test.sh run
+# skip-summary.sh, known-failures.sh, header-check.sh, kani-quotes.sh
+# and deviations.sh on their own, kit/known-cites-test.sh runs
+# known-cites.sh and ledger-active.sh (with git), kit/consumers-test.sh
+# runs consumers.sh (with cc and curl), kit/fuzz-diff-test.sh builds
+# fuzz-diff.c into a test driver (with cc),
+# and kit/glibc-max-test.sh and kit/abi-elf-test.sh run glibc-max.sh
+# and abi-elf.sh on their own, in their own environments. No Verus or Kani
+# runs. busybox for the tools a port's checks have, make (GNU) for the
 # snippet. Blocks.
 version: 1
 
@@ -22,3 +31,185 @@ checks:
     trigger: [presubmit, postsubmit]
     timeout: 5m
     cmd: [sh, kit/make-test.sh]
+
+  skip-summary-test:
+    description: >-
+      kit/skip-summary-test.sh: kit/make/skip-summary.sh (make
+      skip-summary) on hand-written test logs and manifests, each
+      output spelled out: every skip expected, a new skip, a gone one,
+      no skips, the manifest's comments and blanks, the keys it drops,
+      a SKIP after a libtest prefix,
+      bytewise order, a missing manifest, a missing or empty log, a log
+      or manifest it cannot read or a tool that fails on one (stub grep,
+      sed and awk), CI_SKIP_UPDATE=1 and usage, with BusyBox's tools.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [sh, kit/skip-summary-test.sh]
+
+  glibc-max-test:
+    description: >-
+      kit/glibc-max-test.sh: kit/make/glibc-max.sh (make glibc-max) on
+      hand-written readelf listings through a stub readelf, each output
+      spelled out: needs below, at and above the ceiling, version order,
+      the names it does not count, duplicates, no GLIBC_ need, a readelf
+      or grep failure, a missing library and usage; then real shared
+      objects built with cc (libc-linked, linked with no libc, and a
+      file that is not ELF) read with binutils' readelf.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      # BusyBox's tools as a port's checks have, a C compiler for the
+      # real libraries, and binutils for readelf.
+      packages: [busybox, build-base, binutils]
+    cmd: [sh, kit/glibc-max-test.sh]
+
+  abi-elf-test:
+    description: >-
+      kit/abi-elf-test.sh: kit/make/abi-elf.sh (make abi-elf) on shared
+      objects built with cc and a version script, read with binutils'
+      readelf, each output spelled out: a library that matches its map
+      (named nodes with a parent, both comment kinds, each inside the
+      other), a wrong SONAME, a library it may not need, thread-locals
+      past and within TLS_MAX and a size that is not hex (a stub
+      readelf), a leaked symbol, a missing one, one at the wrong
+      version, a name in two nodes (.symver) with its default version
+      at the first or the last node as DEFAULTS gives it, a missing
+      or doubled default, DEFAULTS entries that do not parse or name
+      no listed node, a weak and a unique export,
+      version names that differ by a `.`, absolute symbols (leaked,
+      listed, and one named for a node at another version through a
+      stub readelf), a library with no version definitions, a node with
+      another parent, two parents or missing, the map forms it does not
+      read, a missing library or map, a file readelf cannot read and
+      usage.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      # BusyBox's tools as a port's checks have, a C compiler for the
+      # libraries, and binutils for readelf.
+      packages: [busybox, build-base, binutils]
+    cmd: [sh, kit/abi-elf-test.sh]
+
+  known-failures-test:
+    description: >-
+      kit/known-failures-test.sh: kit/make/known-failures.sh (make
+      known-failures) on hand-written test logs and lists, each output
+      spelled out: every failure known, an unlisted one, none at all,
+      lines that are not failures, names with blanks (should_panic
+      tests and doctests), the failures blocks (a FAILED on a line of
+      its own, fewer names than failures), a test binary that crashed,
+      the list's comments and blanks,
+      cell-scoped entries, an EXTRA command, a missing log or list, a
+      log or list it cannot read or a tool that fails on one (stub grep,
+      sed and awk) and usage, with BusyBox's tools.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [sh, kit/known-failures-test.sh]
+
+  header-check-test:
+    description: >-
+      kit/header-check-test.sh: kit/make/header-check.sh (make
+      header-check) on hand-written upstream and port headers, each
+      output spelled out: matching headers (blanks, comments, directive
+      spacing, order, other prefixes), a continued definition, the value
+      between two comments, a comment marker in a string, comments over
+      lines and `//`, an added `#undef`, a changed value, a dropped suffix
+      or parentheses, a missing or extra definition, a prefix matched
+      only at a name's start, two headers with one differing, no
+      definition under the prefixes, a missing header (ours or
+      upstream's) and usage, with BusyBox's tools.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [sh, kit/header-check-test.sh]
+
+  kani-quotes-test:
+    description: >-
+      kit/kani-quotes-test.sh: kit/make/kani-quotes.sh (make
+      kani-quotes) on hand-written Kani records and sources, each output
+      spelled out: a record that matches (two chunks, other indentation,
+      comments), a changed clause, a chunk past the source's end, an
+      end-of-line comment, which path names the source, a second root,
+      the record parts it needs, every block of section 1 (a drifted
+      second block fails), where a chunk must end (an added
+      trailing clause fails), several records in name order, SKIP (read,
+      a matching skipped record fails), a directory with no record and
+      usage, with BusyBox's tools.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [sh, kit/kani-quotes-test.sh]
+
+  deviations-test:
+    description: >-
+      kit/deviations-test.sh: kit/make/deviations.sh (make deviations)
+      on hand-written results, deviations lists and ABI ledgers (one
+      file, a directory), each output spelled out: a list that matches,
+      a new failure, a listed key that passes or is gone, each kind of
+      unexplained line, the Status forms that count as active, more
+      than 50 of a kind, malformed results, --update (drops, keeps,
+      never adds), DEVIATIONS_OUT's files, names with `|`, `&` and a
+      backslash, missing inputs and usage, with BusyBox's tools.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    cmd: [sh, kit/deviations-test.sh]
+
+  known-cites-test:
+    description: >-
+      kit/known-cites-test.sh: kit/make/known-cites.sh (make known-cites)
+      and kit/make/ledger-active.sh on hand-written tables and ABI
+      ledgers (one file, a directory), each output spelled out: rows
+      citing active entries, entries removed, planned or missing, cites
+      of no known form, the macro in another form, no row, another macro,
+      a cite joined with what follows it, CRLF tables, TODO(#n) cites
+      against a stand-in gh (open, closed, no such issue, unreachable,
+      KNOWN_CITES_OFFLINE),
+      a pull request description's closing keywords and look-alikes,
+      the history in a full clone (a second row, a gap), a shallow one
+      and outside git, a
+      malformed ledger, names with `=`, missing inputs and usage.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      # BusyBox's tools as a port's checks have, and git for the history
+      # part's clones.
+      packages: [busybox, git]
+    cmd: [sh, kit/known-cites-test.sh]
+
+  consumers-test:
+    description: >-
+      kit/consumers-test.sh: kit/make/consumers.sh (make consumers-run)
+      with a shared library built with cc, each output spelled out:
+      loaded on the swap directory's copy (directly, through a child
+      process, under a prefix), a copy from elsewhere or from a
+      subdirectory, no load, the default and bad sonames, an unset
+      environment; fetch over file:// (the cache, a wrong SHA-256 keeps
+      no file, a tampered cached file, bad names, a failed download);
+      run with expected and unexpected failures, a NOTICE, no proof,
+      SKIP, a non-zero exit, a missing run.sh, the environment run.sh
+      gets, packages through a stub apk, every consumer, CONSUMER, bad
+      names, prefixes and swap directories.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      # BusyBox's tools as a port's checks have, a C compiler with
+      # glibc (LD_DEBUG) for the library and programs, and curl for
+      # fetch.
+      packages: [busybox, build-base, curl]
+    cmd: [sh, kit/consumers-test.sh]
+
+  fuzz-diff-test:
+    description: >-
+      kit/fuzz-diff-test.sh: kit/make/fuzz-diff.c, the differential
+      fuzzer's driver shell, in a test driver built with cc over stub
+      shared libraries, each output spelled out: the preflight's
+      refusals (no path, a relative path, a file that does not load, a
+      missing symbol, a symbol from a library the library needs, one
+      object twice or through a link), PREFLIGHT, CONTINUE and the
+      abort, another prefix, the known log, units at 8, 16 and 32 bits,
+      base64 against BusyBox's, and the init refusals.
+    trigger: [presubmit, postsubmit]
+    timeout: 5m
+    environment:
+      # BusyBox's tools as a port's checks have, and a C compiler with
+      # glibc (dladdr1, dlinfo) for the libraries and the driver.
+      packages: [busybox, build-base]
+    cmd: [sh, kit/fuzz-diff-test.sh]

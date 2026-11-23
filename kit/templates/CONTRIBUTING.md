@@ -37,7 +37,8 @@ name, so a Kani bump moves the pins and the records together.
 - **ABI.** {PORT} matches {LIBRARY} {UPSTREAM_VERSION}: the header
   constants, exported names, sonames, version nodes, error codes and
   texts, and the public struct layouts. Any deliberate difference gets a
-  `docs/abi-changes.md` entry in the same PR, in that file's format.
+  ledger entry in the same PR: a file of its own, `docs/abi/ABI-<nnn>.md`,
+  in the format and with the ID rule of `docs/abi/README.md`.
 - **Exports.** Every exported function is a `pub extern "C"` function
   with `#[unsafe(no_mangle)]`, listed in its library's map
   (`{MAP_FILES}`). The ABI check fails if an export set and its map

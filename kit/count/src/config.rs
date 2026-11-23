@@ -28,6 +28,8 @@ pub(crate) struct Config {
     pub(crate) seams: Seams,
     /// The recursion check (`recursive`), on when present.
     pub(crate) recursion: Option<Recursion>,
+    /// The nested-loop check (`nested_loops`, #76), on when present.
+    pub(crate) loops: Option<Loops>,
     /// The entry-point reachability gate ([`crate::reach`]), on when
     /// present.
     pub(crate) reach: Option<Reach>,
@@ -46,6 +48,25 @@ pub(crate) struct Config {
     /// with its reason ([`Config::explain`]).
     #[serde(default)]
     pub(crate) narrowed: Vec<Narrowed>,
+    /// Each proof run and the atoms it is sure to set or never sets (#21):
+    /// a port that runs Verus on several hosts declares one per host, and
+    /// an item is classed in each run and the classes combined. Without
+    /// it, `[crates] verus_sets` and `verus_never_sets` are one run's.
+    #[serde(default)]
+    pub(crate) runs: Vec<Run>,
+}
+
+/// One proof run (`[[runs]]`, #21): its name, and the `cfg` atoms its
+/// Verus build is sure to set and never sets, written as `[crates]
+/// verus_sets` writes them.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Run {
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) sets: Vec<String>,
+    #[serde(default)]
+    pub(crate) never_sets: Vec<String>,
 }
 
 /// The crates the counter reads.
@@ -103,12 +124,19 @@ pub(crate) struct Crates {
 /// crate ships unless its Cargo.toml says `publish = false`, as every
 /// crate `dir` finds; with it, as it says (challoc's one crate is
 /// `publish = false`, since it is not a crates.io crate, and ships).
+/// With `skip_packages = true` (#198), the source walk of the crate
+/// leaves out each directory below its `src/` that holds a Cargo.toml:
+/// another package's sources, which cargo builds as its own crate (the
+/// root `coreutils` crate of uutils holds every utility's package under
+/// `src/uu/`). Off by default.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Member {
     pub(crate) name: String,
     pub(crate) path: String,
     pub(crate) ships: Option<bool>,
+    #[serde(default)]
+    pub(crate) skip_packages: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,6 +155,14 @@ pub(crate) struct Floor {
     /// test takes `checked` alone.
     #[serde(default)]
     pub(crate) renamed_from: Option<String>,
+    /// Room for unverified code a raise leaves (#100): the `raise FLOOR
+    /// to` figure the run prints is the share with this many more
+    /// unverified functions, and `room_lines` more unverified lines. It
+    /// changes no pass or failure. Default 0: the share itself.
+    #[serde(default)]
+    pub(crate) room_functions: usize,
+    #[serde(default)]
+    pub(crate) room_lines: usize,
     /// Whether the configuration has a `[floor]` table: a base revision
     /// whose copy has one must hold the FLOOR file it names.
     #[serde(skip_deserializing, default = "present")]
@@ -139,6 +175,8 @@ impl Default for Floor {
             path: default_floor(),
             checked: default_checked(),
             renamed_from: None,
+            room_functions: 0,
+            room_lines: 0,
             declared: false,
         }
     }
@@ -196,6 +234,15 @@ pub(crate) struct Seams {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Recursion {
     /// The file whose table names each verified recursive function.
+    pub(crate) table: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Loops {
+    /// The file whose table names each shipped function that nests a loop
+    /// in a loop, or calls one that loops from inside a loop (a work-bound
+    /// theorem's, which bounds the product).
     pub(crate) table: String,
 }
 
@@ -325,10 +372,11 @@ impl Config {
     /// still passes. The configured macro, conversion and mint names are
     /// among them.
     fn read_names(&self) -> Vec<String> {
-        const FIXED: [&str; 26] = [
+        const FIXED: [&str; 27] = [
             "external_body",
             "external",
             "assume_unsupported_attributes",
+            "exec_allows_no_decreases_clause",
             "assume",
             "admit",
             "assume_new",
@@ -370,9 +418,11 @@ impl Config {
             .chain(self.crates.test_features.iter().cloned())
             .chain(self.crates.verus_features.iter().cloned())
             .chain(
-                self.verus_set_atoms()
+                // Every proof run's atoms: the `[[runs]]` tables, or the
+                // shorthand's one run (#21).
+                self.proof_runs()
                     .into_iter()
-                    .chain(self.verus_never_atoms())
+                    .flat_map(|(_, sets, never)| sets.into_iter().chain(never))
                     .flat_map(|a| {
                         a.split('=')
                             .map(|p| p.trim_matches('"').to_owned())
@@ -415,7 +465,93 @@ impl Config {
                 seen.push((a, what));
             }
         }
+        self.check_runs()
+    }
+
+    /// Fails on a `[[runs]]` table beside `[crates] verus_sets` or
+    /// `verus_never_sets` (the shorthand is one run's, so the two cannot
+    /// both say what the proof runs set), on a run with no name or a name
+    /// given twice, and on a run's entry that is not one `cfg` atom, that
+    /// the configuration already settles, or that the run names twice.
+    fn check_runs(&self) -> Result<(), String> {
+        if self.runs.is_empty() {
+            return Ok(());
+        }
+        if !self.crates.verus_sets.is_empty() || !self.crates.verus_never_sets.is_empty() {
+            return Err("[[runs]] and [crates] verus_sets or verus_never_sets both name the proof runs' atoms: move the shorthand's atoms into each [[runs]] table".into());
+        }
+        let settled: Vec<(String, &str)> = self
+            .test_atoms()
+            .into_iter()
+            .map(|a| (a, "a test atom"))
+            .chain(self.verus_atoms().into_iter().map(|a| (a, "a Verus atom")))
+            .collect();
+        let mut names: Vec<&str> = Vec::new();
+        for r in &self.runs {
+            let name = r.name.trim();
+            if name.is_empty() {
+                return Err("a [[runs]] table needs a name".into());
+            }
+            if names.contains(&name) {
+                return Err(format!("[[runs]] names the run {name:?} twice"));
+            }
+            names.push(name);
+            let mut seen = settled.clone();
+            for (key, list, what) in [
+                ("sets", &r.sets, "in its sets"),
+                ("never_sets", &r.never_sets, "in its never_sets"),
+            ] {
+                for n in list {
+                    let a = atom(n).ok_or_else(|| {
+                        format!(
+                            "run {name:?} {key} entry {n:?} is not one cfg atom: give a name (`miri`) or `name = \"value\"` (`feature = \"jit\"`)"
+                        )
+                    })?;
+                    if let Some((_, was)) = seen.iter().find(|(s, _)| *s == a) {
+                        return Err(format!("run {name:?} {key} entry {n:?} is already {was}"));
+                    }
+                    // A run is one target: it sets one value of a key
+                    // rustc gives each target one value of.
+                    if key == "sets"
+                        && let Some((k, _)) = a.split_once('=')
+                        && crate::SINGLE_VALUED.contains(&k)
+                        && r.sets
+                            .iter()
+                            .filter_map(|s| atom(s))
+                            .any(|s| s != a && s.split_once('=').is_some_and(|(sk, _)| sk == k))
+                    {
+                        return Err(format!(
+                            "run {name:?} sets two values of {k}, which a target has one of: declare a run per target"
+                        ));
+                    }
+                    seen.push((a, what));
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// Each proof run's name and atoms (`sets`, `never`), as `cfg_eval`
+    /// compares them: the `[[runs]]` tables, or, without any, one run
+    /// named `verus` holding `[crates] verus_sets` and `verus_never_sets`.
+    pub(crate) fn proof_runs(&self) -> Vec<(String, Vec<String>, Vec<String>)> {
+        if self.runs.is_empty() {
+            return vec![(
+                "verus".to_owned(),
+                self.verus_set_atoms(),
+                self.verus_never_atoms(),
+            )];
+        }
+        self.runs
+            .iter()
+            .map(|r| {
+                (
+                    r.name.trim().to_owned(),
+                    r.sets.iter().filter_map(|n| atom(n)).collect(),
+                    r.never_sets.iter().filter_map(|n| atom(n)).collect(),
+                )
+            })
+            .collect()
     }
 
     /// The `cfg` atoms that only Verus's build meets, as `cfg_eval`
@@ -485,7 +621,8 @@ impl Config {
     /// renamed (each adds entry points); an `[inputs]` crate or root
     /// removed, or `lazy` turned off (each narrows the walk); a `[crates]`
     /// `dir` removed or changed, a member removed or its `path` changed,
-    /// or a crate's `ships` changed to anything but `true`, compared by
+    /// or a crate's `ships` changed to anything but `true` or its
+    /// `skip_packages` turned on (it leaves files out of the walk), compared by
     /// member name and by path, with whatever reads a crate the base read
     /// (a member under any name, or a `dir`, which reads with `ships`
     /// unset), so a rename, a move onto a crate of the base's `dir` and a
@@ -523,6 +660,7 @@ impl Config {
         }
         let ships = |s: Option<bool>| s.map_or("unset".to_owned(), |s| s.to_string());
         let unshipped = |was: Option<bool>, now: Option<bool>| was != now && now != Some(true);
+        let skips = "so the directories under its src/ that hold a Cargo.toml are no longer read";
         for m in &b.members {
             let Some(n) = h.members.iter().find(|n| n.name == m.name) else {
                 push(
@@ -551,6 +689,15 @@ impl Config {
                     "so it may no longer count as shipped",
                 );
             }
+            if !m.skip_packages && n.skip_packages {
+                push(
+                    format!(
+                        "[crates] member {:?} changes skip_packages from false to true",
+                        m.name
+                    ),
+                    skips,
+                );
+            }
         }
         // A crate is also compared by its path, with whatever reads it now
         // under any name: a member there, or a `dir` it sits in, which
@@ -574,8 +721,12 @@ impl Config {
             {
                 continue;
             }
-            let (who, now) = match h.members.iter().find(|n| normal(&n.path) == at) {
-                Some(n) => (format!("member {:?} at {:?}", n.name, n.path), n.ships),
+            let (who, now, skip) = match h.members.iter().find(|n| normal(&n.path) == at) {
+                Some(n) => (
+                    format!("member {:?} at {:?}", n.name, n.path),
+                    n.ships,
+                    n.skip_packages,
+                ),
                 None if in_dir(&h.dir, &at) => (
                     format!(
                         "crate at {:?} through dir {:?}",
@@ -583,6 +734,7 @@ impl Config {
                         h.dir.as_deref().unwrap_or_default()
                     ),
                     None,
+                    false,
                 ),
                 None => continue,
             };
@@ -594,6 +746,12 @@ impl Config {
                         ships(now)
                     ),
                     effect,
+                );
+            }
+            if !m.skip_packages && skip {
+                push(
+                    format!("[crates] {who} changes skip_packages from false to true"),
+                    skips,
                 );
             }
         }
@@ -611,6 +769,15 @@ impl Config {
                         ships(n.ships)
                     ),
                     effect,
+                );
+            }
+            if n.skip_packages {
+                push(
+                    format!(
+                        "[crates] member {:?} at {:?} changes skip_packages from false to true",
+                        n.name, n.path
+                    ),
+                    skips,
                 );
             }
         }
@@ -651,12 +818,57 @@ impl Config {
                 );
             }
         }
+        // Per run (#21), once either side declares [[runs]]: a run added
+        // or renamed, or an atom added to a run, is a narrowing. The base's
+        // shorthand is its one run, `verus`.
+        if !self.runs.is_empty() || !base.runs.is_empty() {
+            let there = base.proof_runs();
+            let here = self.proof_runs();
+            // Declared runs read a set value of a single-valued key as
+            // ruling out its other values, which the shorthand does not, so
+            // adopting them is a narrowing even with the same atoms.
+            if base.runs.is_empty() && !self.runs.is_empty() {
+                push(
+                    "[[runs]] replaces the [crates] verus_sets shorthand".to_owned(),
+                    "so a run's set value of a single-valued key rules out its other values, and the functions under those may count as verified",
+                );
+            }
+            // A run removed may be the one where an item was unsure, so
+            // its other runs then verify it.
+            for (name, _, _) in there
+                .iter()
+                .filter(|(n, _, _)| here.iter().all(|(h, _, _)| h != n))
+            {
+                push(
+                    format!("[[runs]] removes the run {name:?}"),
+                    "so the functions only it left unsure may count as verified",
+                );
+            }
+            for (name, sets, never) in here {
+                let Some((_, bs, bn)) = there.iter().find(|(n, _, _)| *n == name) else {
+                    push(
+                        format!("[[runs]] adds the run {name:?}"),
+                        "so the functions only it settles may count as verified",
+                    );
+                    continue;
+                };
+                for (key, here, was) in [("sets", &sets, bs), ("never_sets", &never, bn)] {
+                    for a in here.iter().filter(|a| !was.contains(a)) {
+                        push(
+                            format!("run {name:?} {key} adds {a:?}"),
+                            "so the counter takes that run to settle it, and the functions it guards may count as verified",
+                        );
+                    }
+                }
+            }
+        }
         for (section, here, there) in [
             (
                 "recursion",
                 self.recursion.is_some(),
                 base.recursion.is_some(),
             ),
+            ("loops", self.loops.is_some(), base.loops.is_some()),
             ("reach", self.reach.is_some(), base.reach.is_some()),
             ("inputs", self.inputs.is_some(), base.inputs.is_some()),
             ("mints", self.mints.is_some(), base.mints.is_some()),
@@ -1100,6 +1312,14 @@ mod tests {
                 "missing field",
             ),
             ("[crates", "TOML parse error"),
+            (
+                "[crates]\nmembers = [{ name = \"a\", path = \"a\", skip_packages = \"yes\" }]\n",
+                "invalid type: string \"yes\", expected a boolean",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"a\", path = \"a\", skip_packages = 1 }]\n",
+                "invalid type: integer `1`, expected a boolean",
+            ),
         ] {
             let got = Config::parse(text).map(|_| ()).unwrap_err();
             assert!(got.contains(want), "{text:?}: got = {got}, want = {want}");
@@ -1143,6 +1363,11 @@ mod tests {
                 "",
                 "assume_unsupported_attributes",
             ),
+            (
+                r#"["decreases_clause]", "decreases_clausx]"]"#,
+                "",
+                "exec_allows_no_decreases_clause",
+            ),
             (r#"["body]", "bodx]"]"#, "", "external_body"),
             (r#"["y]", "x]"]"#, "", "external_body"),
             (r##"["#[cfg(", "#[cfx("]"##, "", "cfg"),
@@ -1165,6 +1390,18 @@ mod tests {
                 r#"["\"linux\"", "\"linuz\""]"#,
                 "verus_sets = ['target_os = \"linux\"']\n",
                 "linux",
+            ),
+            // A `[[runs]]` table's atoms are read as the shorthand's are.
+            (
+                r#"["\"jit\"", "\"jix\""]"#,
+                "[[runs]]\nname = \"verus\"\nsets = ['feature = \"jix\"']\nnever_sets = ['feature = \"jit\"']\n",
+                "jit",
+            ),
+            (
+                r#"["(loom)", "(looz)"]"#,
+                "[[runs]]\nname = \"a\"\nsets = ['target_arch = \"x86_64\"']\n\
+                 [[runs]]\nname = \"b\"\nnever_sets = [\"loom\"]\n",
+                "loom",
             ),
             (
                 r#"["c_mint(", "c_minx("]"#,
@@ -1196,6 +1433,8 @@ verus_never_sets = ["miri"]
 stand_ins = [["assert::", "assrtx::"]]
 [recursion]
 table = "verus/theorems/RN1.md"
+[loops]
+table = "verus/theorems/WORK1.md"
 [reach]
 path = "verus/REACH"
 exports_macro = "exports"
@@ -1229,6 +1468,155 @@ home = "crates/pcre2-capi/src/object.rs"
     /// `verus_features` name, a `verus_sets` or `verus_never_sets` atom,
     /// or a `stand_ins` pair, each names what it turned off. Removing or
     /// respacing a `verus_sets` or `verus_never_sets` atom is not.
+    /// `[[runs]]` (#21): two runs read, each with its own atoms, and the
+    /// shorthand is their one run, `verus`. Negative: a run beside the
+    /// shorthand, without a name, named twice, with an entry that is not
+    /// one atom, settled already, or named twice in it, is refused.
+    #[test]
+    fn proof_runs_read_and_bad_runs_fail() {
+        const RUNS: &str = "[crates]\ndir = \"c\"\n\
+            [[runs]]\nname = \"verus\"\nsets = ['target_arch = \"x86_64\"']\nnever_sets = [\"loom\"]\n\
+            [[runs]]\nname = \"verus-arm64\"\nsets = ['target_arch = \"aarch64\"']\n";
+        let c = Config::parse(RUNS).expect("parses");
+        assert_eq!(
+            c.proof_runs(),
+            vec![
+                (
+                    "verus".to_owned(),
+                    vec!["target_arch=\"x86_64\"".to_owned()],
+                    vec!["loom".to_owned()],
+                ),
+                (
+                    "verus-arm64".to_owned(),
+                    vec!["target_arch=\"aarch64\"".to_owned()],
+                    vec![],
+                ),
+            ]
+        );
+        let short = Config::parse("[crates]\ndir = \"c\"\nverus_never_sets = [\"miri\"]\n")
+            .expect("parses");
+        assert_eq!(
+            short.proof_runs(),
+            vec![("verus".to_owned(), vec![], vec!["miri".to_owned()])]
+        );
+        for (text, want) in [
+            (
+                "[crates]\ndir = \"c\"\nverus_sets = [\"unix\"]\n[[runs]]\nname = \"a\"\n",
+                "both name the proof runs' atoms",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \" \"\n",
+                "needs a name",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\n[[runs]]\nname = \"a\"\n",
+                "names the run \"a\" twice",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nsets = [\"all(unix)\"]\n",
+                "is not one cfg atom",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nnever_sets = [\"test\"]\n",
+                "is already a test atom",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nsets = [\"verus_keep_ghost\"]\n",
+                "is already a Verus atom",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nsets = [\"unix\"]\nnever_sets = [\"unix\"]\n",
+                "is already in its sets",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nsetz = [\"unix\"]\n",
+                "unknown field",
+            ),
+            (
+                "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nsets = ['target_arch = \"x86_64\"', 'target_arch = \"aarch64\"']\n",
+                "sets two values of target_arch",
+            ),
+        ] {
+            let got = Config::parse(text).map(|_| ()).unwrap_err();
+            assert!(got.contains(want), "{text:?}: got = {got}, want = {want}");
+        }
+        // Two runs may each set an atom: it is one run's, not both's.
+        Config::parse(
+            "[crates]\ndir = \"c\"\n[[runs]]\nname = \"a\"\nsets = [\"unix\"]\n[[runs]]\nname = \"b\"\nsets = [\"unix\"]\n",
+        )
+        .expect("parses");
+    }
+
+    /// Under `--base-rev`, a run added, removed or renamed, an atom added
+    /// to a run, or `[[runs]]` replacing the shorthand, is a narrowing
+    /// (#21); the shorthand is the base's one run, `verus`. Removing an
+    /// atom is not.
+    #[test]
+    fn a_run_added_or_widened_is_a_narrowing() {
+        const BASE: &str = "[crates]\ndir = \"c\"\n\
+            [[runs]]\nname = \"verus\"\nsets = ['target_arch = \"x86_64\"']\nnever_sets = [\"loom\"]\n";
+        let shown = |head: &str, base: &str| {
+            Config::parse(head)
+                .expect("parses")
+                .narrowed_from(&Config::parse(base).expect("parses"))
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(shown(BASE, BASE), "");
+        assert_eq!(
+            shown(
+                &BASE.replace("sets = ['target_arch = \"x86_64\"']\n", ""),
+                BASE
+            ),
+            ""
+        );
+        for (head, base, want) in [
+            (
+                format!("{BASE}[[runs]]\nname = \"verus-arm64\"\n"),
+                BASE.to_owned(),
+                "[[runs]] adds the run \"verus-arm64\"",
+            ),
+            (
+                BASE.replace("name = \"verus\"", "name = \"verus-x86\""),
+                BASE.to_owned(),
+                "[[runs]] adds the run \"verus-x86\"",
+            ),
+            (
+                BASE.replace("[\"loom\"]", "[\"loom\", \"miri\"]"),
+                BASE.to_owned(),
+                "run \"verus\" never_sets adds \"miri\"",
+            ),
+            (
+                BASE.to_owned(),
+                format!("{BASE}[[runs]]\nname = \"verus-arm64\"\n"),
+                "[[runs]] removes the run \"verus-arm64\"",
+            ),
+            (
+                "[crates]\ndir = \"c\"\nverus_never_sets = [\"loom\"]\n".to_owned(),
+                format!("{BASE}[[runs]]\nname = \"verus-arm64\"\n"),
+                "[[runs]] removes the run \"verus-arm64\"",
+            ),
+            (
+                BASE.to_owned(),
+                "[crates]\ndir = \"c\"\nverus_never_sets = [\"loom\"]\n".to_owned(),
+                "run \"verus\" sets adds \"target_arch=\\\"x86_64\\\"\"",
+            ),
+            // The shorthand's atoms moved into one run of its name: the
+            // run's single-valued inference is new.
+            (
+                BASE.to_owned(),
+                "[crates]\ndir = \"c\"\nverus_sets = ['target_arch = \"x86_64\"']\nverus_never_sets = [\"loom\"]\n"
+                    .to_owned(),
+                "[[runs]] replaces the [crates] verus_sets shorthand",
+            ),
+        ] {
+            let got = shown(&head, &base);
+            assert!(got.contains(want), "{head:?}: got = {got}, want = {want}");
+        }
+    }
+
     #[test]
     fn a_gate_removed_or_narrowed_since_the_base_fails() {
         let shown = |n: &[Narrowing]| n.iter().map(ToString::to_string).collect::<Vec<_>>();
@@ -1286,7 +1674,7 @@ home = "crates/pcre2-capi/src/object.rs"
         // No base gate: nothing to narrow.
         let bare = Config::parse(&section("crates")).expect("parses");
         assert!(base.narrowed_from(&bare).is_empty());
-        for name in ["recursion", "reach", "inputs", "mints", "badge"] {
+        for name in ["recursion", "loops", "reach", "inputs", "mints", "badge"] {
             let got = shown(&edit(&section(name), "").narrowed_from(&base));
             let want = format!("the [{name}] section is gone, so its gate no longer runs");
             assert_eq!(
@@ -1517,6 +1905,92 @@ home = "crates/pcre2-capi/src/object.rs"
                     "[crates] member \"extra\" changes ships from unset to false",
                     "[crates] member \"extra\" at \"a\" changes ships from true to false",
                 ][..],
+            ),
+        ] {
+            let got = shown(&crates(head).narrowed_from(&crates(base)));
+            let changes: Vec<&str> = got
+                .iter()
+                .map(|g| g.split(", so ").next().unwrap_or_default())
+                .collect();
+            assert_eq!(
+                changes, want,
+                "{base:?} to {head:?}: got = {got:?}, wanted = {want:?}"
+            );
+        }
+    }
+
+    /// `skip_packages` turned on for a crate the base read (#198) narrows
+    /// what it counts: compared by member name, and by path under any
+    /// name, with a member at a base member's path or at a crate of the
+    /// base's `dir`. Negative: turning it off, keeping it, a member new in
+    /// the head that sets it, and an unread key's default, are none.
+    #[test]
+    fn skip_packages_turned_on_is_a_narrowing() {
+        let shown = |n: &[Narrowing]| n.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let crates = |text: &str| Config::parse(&format!("[crates]\n{text}")).expect("parses");
+        let on = "[crates] member \"a\" changes skip_packages from false to true";
+        for (base, head, want) in [
+            (
+                "members = [{ name = \"a\", path = \"a\" }]\n",
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                &[on][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\", skip_packages = false }]\n",
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                &[on][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\" }]\n",
+                "members = [{ name = \"a\", path = \"moved\", skip_packages = true }]\n",
+                &["[crates] member \"a\" moves from \"a\" to \"moved\"", on][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\" }]\n",
+                "members = [{ name = \"b\", path = \"./a/\", skip_packages = true }]\n",
+                &[
+                    "[crates] members drops \"a\"",
+                    "[crates] member \"b\" at \"./a/\" changes skip_packages from false to true",
+                ][..],
+            ),
+            (
+                "dir = \"crates\"\n",
+                "members = [{ name = \"a\", path = \"crates/a\", skip_packages = true }]\n",
+                &[
+                    "[crates] dir is no longer \"crates\"",
+                    "[crates] member \"a\" at \"crates/a\" changes skip_packages from false to true",
+                ][..],
+            ),
+            // None.
+            (
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                "members = [{ name = \"a\", path = \"a\" }]\n",
+                &[][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                "members = [{ name = \"a\", path = \"a\", skip_packages = false }]\n",
+                &[][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                &[][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\", skip_packages = true }]\n",
+                "members = [{ name = \"b\", path = \"a\", skip_packages = true }]\n",
+                &["[crates] members drops \"a\""][..],
+            ),
+            (
+                "members = [{ name = \"a\", path = \"a\" }]\n",
+                "members = [{ name = \"a\", path = \"a\" }, { name = \"b\", path = \"b\", skip_packages = true }]\n",
+                &[][..],
+            ),
+            (
+                "dir = \"crates\"\n",
+                "dir = \"crates\"\nmembers = [{ name = \"b\", path = \"vendor/b\", skip_packages = true }]\n",
+                &[][..],
             ),
         ] {
             let got = shown(&crates(head).narrowed_from(&crates(base)));

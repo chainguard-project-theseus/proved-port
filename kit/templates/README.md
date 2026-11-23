@@ -66,10 +66,12 @@ pull request that lands that share lower (FLOOR's header).
 | `verus/MINTS` | `verus/MINTS` | the C caller's token kinds and mints, for a port that mints tokens through one trusted function |
 | `verus/README.md` | `verus/README.md` | the sections the headers cite: Coverage (the run commands, the `shipped` row, FLOOR and the badge, which links to `verus/README.md#coverage`) and Counter in prose, shaped on pcre3, expat-rs and chainz; the rest as headings |
 | `verus/SEAMS.md` | `verus/SEAMS.md` | the core-library seams table and its columns, for hand-written seams tables. A port on the counter's generated-ledger back end (`[ledger]`) keeps a SEAMS.md that defines the ledger's kinds, categories, tools and statuses, with a "Status" section, which verus/FLOOR's header cites (challoc's; kit step 3 templates it) |
-| `verus/THEOREMS.md` | `verus/THEOREMS.md` | the trusted base and the theorem index |
+| `verus/seams.rules` | `verus/seams.rules` | the rules of the kit's seam ledger generator (`kit/verus/seams`, PLAN step 3): ledger and source paths, tools, categories, category heuristics, cited-check tags; a starting point (challoc's lists) that the port reshapes, which no kit check compares. The package installs the generator as `proved-port-seams` (a checkout's `kit/install.sh` too), which the template's `command` names; a port that runs it another way sets `command` to how. `-check` fails on a discharged status that cites no check, on a `TAG: ` that names nothing, and on a discharged status citing a tag marked `partial`, and resolves the citations of tags with `cite-fn` (Kani harnesses, guard tests), `cite-assert` (labeled assertions) and `cite-row` (table rows) lines; the port's own script resolves the other tags' citations (challoc's Isla, emptyasm, loom and GenMC) from `seams -cites` (one line per citation). With a `notcopy FILE TAG` line (challoc's, commented in the template), `-check` also fails a `tracked struct` or `tracked enum` with no not-Copy check in FILE (`<T as NotCopy<_>>::HOLDS` and `<T as NotClone<_>>::HOLDS` under a `` `T` `` label, FILE holding the second impls), a second tracked type of a name, a tracked type whose name it cannot read (a macro's `$n`), and a tracked-type seam whose TAG citations hold no not-Copy check of its type; write a generic type's check at Copy arguments (`K<u8>`) |
+| `verus/THEOREMS.md` | `verus/THEOREMS.md` | the trusted base; each theorem file's first line is its index entry |
 | `verus/theorems/TEMPLATE.md` | `verus/theorems/<ID>.md` | one theorem: statement, mutants, checks, what it does not say, seams |
-| `verus/seams/kani-TEMPLATE.md` | `verus/seams/kani-<seam id>.md` | one Kani record: contract, statement, translation, review, tests |
-| `docs/abi-changes.md` | `docs/abi-changes.md` | the `ABI-nnn` known-differences ledger |
+| `verus/seams/kani-TEMPLATE.md` | `verus/seams/kani-<seam id>.md`, or `verus/seams/kani-<crate>-<path under src/, / as ->.md`, one per source file, for functions outside `verus!` | one Kani record: contract, statement, translation, review, tests |
+| `docs/abi/README.md` | `docs/abi/README.md` | the `ABI-nnn` known-differences ledger: entry format, ID rules, the check |
+| `docs/abi/ABI-001.md` | `docs/abi/ABI-<nnn>.md` | one ledger entry, a file of its own whose first line is its heading |
 | `AGENTS.md` | `AGENTS.md` | outline: non-negotiables, workflow, proofs |
 | `CONTRIBUTING.md` | `CONTRIBUTING.md` | outline: hard rules, tests, FLOOR and rlimit, sending a change |
 
@@ -91,7 +93,7 @@ pull request that lands that share lower (FLOOR's header).
    finds none:
 
    ```sh
-   grep -rnE '\{[A-Z][A-Z_]*[}:]|\{[A-Z][a-z]' README.md AGENTS.md CONTRIBUTING.md docs/abi-changes.md verus/
+   grep -rnE '\{[A-Z][A-Z_]*[}:]|\{[A-Z][a-z]' README.md AGENTS.md CONTRIBUTING.md docs/abi/ verus/
    ```
 3. Start FLOOR at the counter's first run: record the figures its
    `shipped` row names, rounded down, as the check prints them. A port
@@ -107,8 +109,8 @@ pull request that lands that share lower (FLOOR's header).
    for a port without an exports macro, the unwinding rule's allocator
    variant for a port that returns error codes.
 5. Keep the files true from then on: a change that adds a theorem adds
-   its file and index row, a seam its row, a Kani-discharged seam its
-   record.
+   its file, headed `# <ID>. <title>`, a seam its row, a Kani-discharged
+   seam its record.
 
 The coverage counter that reads FLOOR, RLIMIT, REACH, MINTS, the seams
 tables and the Kani records is kit step 2 (`kit/PLAN.md`).
@@ -127,7 +129,7 @@ developed in private repositories.
 
 | template | what it holds | shaped on |
 |---|---|---|
-| `.chainguard/ci/lint.yaml` | rustfmt, clippy, the source rules (`ci/lint-unsafe.sh`, `ci/header-check.sh`), shellcheck from the packaged `shellcheck~` | pcre3, expat-rs; shellcheck as chainz |
+| `.chainguard/ci/lint.yaml` | rustfmt, clippy, the source rules (`make lint-unsafe`, `ci/header-check.sh`), shellcheck from the packaged `shellcheck~` | pcre3, expat-rs; shellcheck as chainz |
 | `.chainguard/ci/test.yaml` | cargo test and `ci/abi.sh` on amd64 and arm64; msrv on the `rust-version` toolchain | pcre3, expat-rs, chainz |
 | `.chainguard/ci/verus.yaml` | `verus` and `kani` against the pull request's base; `verus-main` and `kani-main` on main, `verus-main` against the start of the push; one architecture (large-arm64, 60 and 30 minutes) by default, with a commented `verus-amd64` for proved code that differs by target | pcre3, challoc, expat-rs; `verus-amd64` as challoc's `verus-arm64` |
 | `.chainguard/ci/fuzz.yaml` | `fuzz`, `fuzz-diff` and `fuzz-abi` on request, each fuzzer after its self-test; `known-citations` on every pull request | pcre3, expat-rs |
@@ -135,10 +137,10 @@ developed in private repositories.
 | `.chainguard/ci/consumers.yaml` | one instance per consumer, on request | pcre3, chainz, expat-rs |
 | `.chainguard/ci/env/default.yaml` | the empty default environment | all four |
 | `.chainguard/ci/env/dev.yaml` | the union of the checks' packages (consumers.yaml's apk-tools and wolfi-keys included), for sessions and the deps agent | pcre3, chainz, challoc#688 |
-| `.chainguard/develop.yaml` | sessions `from: .chainguard/ci/env/dev.yaml` | pcre3, chainz, challoc#688 |
+| `.chainguard/develop.yaml` | sessions `from: .chainguard/ci/env/dev.yaml`, plus `claude` (Claude Code for owner agents in sessions), which no check installs | pcre3, chainz, challoc#688 |
 | `.chainguard/deps.yaml` | the Checks deps agent: crates, toolchain (Rust, Verus with vstd, and Kani as one set), msrv (rust-version with the msrv check's toolchain), kit (the theseus-proved-port pin with `PROVED_PORT_VERSION` and the held headers), tools, the reference library, consumers | pcre3, challoc#689, chainz, expat-rs |
 | `.chainguard/reviewers.yaml` | the Checks reviewer `{PORT}`: `approve: true`, the read limits, no `diff_lines` (deprecated), and `rerun_on_checks` on the presubmit aggregate, since the reviewer reads its results | chainz and challoc |
-| `.chainguard/review-prompt.md` | the sections the four prompts share, plus the runtime-costs-of-proof check that cites AGENTS.md; the port writes its own checks. Evidence reads the presubmit results, as chainz's does; the kit rule holds the kit's pins to one release, moved as one | all four; Evidence from chainz, the kit rule from pcre3's counter rule, the check from proved-c-port's "Prove the producer, not its output" (#13) |
+| `.chainguard/review-prompt.md` | the sections the four prompts share, plus the runtime-costs-of-proof check (with the coverage-first rule) and the shared-coverage-lines check, which cite AGENTS.md; the port writes its own checks. Evidence reads the presubmit results, as chainz's does; the kit rule holds the kit's pins to one release, moved as one | all four; Evidence from chainz, the kit rule from pcre3's counter rule, the check from proved-c-port's "Prove the producer, not its output" (#13) |
 | `.github/codeowners.yaml` | the codeowners-gate sidecar: one gated `*` entry, the maintainers and `bot:{PORT}` | pcre3, challoc, chainz |
 | `.github/CODEOWNERS` | the sidecar's rendering, without the `bot:` owner | pcre3, challoc, chainz |
 | `.claude/settings.json` | the proved-port plugin marketplace (chainguard-project-theseus/proved-port) at `v{KIT_VERSION}`, the release the package pin names, and the `proved-c-port` plugin enabled | pcre3, with the public repository and the release's ref |
@@ -216,6 +218,28 @@ VERIFY_TARGETS = verus verus-q8 notcopy-control kani-boolcmp kani kani-q8 kani-r
 A check that adds verification adds its target to the list in the same
 pull request.
 
+lint.yaml's `source-rules` check runs `make lint-unsafe`, which fails
+until the Makefile names the packages allowed unsafe code. A port sets
+them before the include, and `UNSAFE_WORKSPACE_LINTS = no` too if its
+root manifest has no `[workspace.lints.rust]` denying `unsafe_code`:
+
+```make
+UNSAFE_CRATES = {CAPI_CRATE}
+```
+
+`make lint-unsafe` does not check `SAFETY:` comments. The clippy check
+(`-D warnings`) holds them once `{CAPI_CRATE}` has clippy's
+`undocumented_unsafe_blocks` on. It is a restriction lint, off by
+default. So a port turns it on where `{CAPI_CRATE}`'s lints come from:
+`undocumented_unsafe_blocks = "deny"` under `[workspace.lints.clippy]`
+if `{CAPI_CRATE}` inherits the workspace lints (`[lints] workspace =
+true`, possible with `unsafe_code = "deny"`), or under its own
+`[lints.clippy]` if it does not (needed with `unsafe_code = "forbid"`,
+which `lint-unsafe.sh`'s header covers). A port that keeps its own
+`SAFETY:` check, or any other rule of its own (a budget of unsafe
+blocks), adds it as a script under `ci/` and a step of `source-rules`
+after `make lint-unsafe`.
+
 Where the ports differ, a template takes the shape most of them share,
 and its comments say what a port may change: a second architecture for
 the proofs (verus.yaml's `verus-amd64`), a larger class with its reason,
@@ -224,18 +248,23 @@ packages that run on every pull request. Check keys are
 the ones the ports use, so the `ci/run:<check>` labels carry over. The
 deps entries each repeat the rules the agent must keep, since it sees
 only its entry's prompt: FLOOR never goes down and gains no `lowered`
-line, the kit's pin (`theseus-proved-port~`, `PROVED_PORT_VERSION`, and
+line (but in the kit entry, where a release's notes say a share its
+counting rule drops takes a `lowered` line: the entry checks the drop
+against `verus-count --list`, prepares the line naming the release and
+change, moves README.md's badge, and leaves the bump a draft for a
+person, who may verify more instead), the
+kit's pin (`theseus-proved-port~`, `PROVED_PORT_VERSION`, and
 the proved-port marketplace ref in `.claude/settings.json`) moves only
 through the kit entry, and a reference bump
-updates `docs/abi-changes.md`, the deviations lists and the
+updates the `docs/abi/` entries, the deviations lists and the
 known-differences rows in the same pull request. The kit entry moves
 every kit pin together to the newest release, with no waiting period
 (the kit is first-party), takes the kit's header text where `make
 verus-headers` reports drift, applies what the release's CHANGELOG asks
 of ports that is new since the old pin, within the entry's paths only
 (the rest is listed for a person; with no CHANGELOG, only its
-`make verify` example), and leaves a bump whose counter fails a gate
-the old one passed for a person. The toolchain entry
+`make verify` example), and leaves a bump whose counter fails any
+other gate the old one passed for a person. The toolchain entry
 commits the pin moves before it runs any suite, so a run that outlasts
 the deps agent's two-hour budget still pushes a draft, then runs every
 suite in the guest, Kani included, as pcre3's does. A port whose

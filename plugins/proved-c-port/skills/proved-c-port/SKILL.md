@@ -97,10 +97,12 @@ Wrong: adding a trusted seam to make a proof pass. The spellings are
 `assume`, `admit`, `Tracked::assume_new`, `assume_specification`,
 `external_body`, `external_fn_specification`,
 `external_type_specification`, `external_trait_specification`,
-`#[verifier::external]`, `axiom fn` and
+`#[verifier::external]`, `axiom fn`,
 `#[verifier::assume_unsupported_attributes]` (the linkage of a
 `no_mangle`, `export_name` or `link_section` item; the body stays
-verified).
+verified) and `#[verifier::exec_allows_no_decreases_clause]` (no proof
+that the exec functions it covers terminate; the counter classes them
+trusted).
 
 ### Prove the producer, not its output
 
@@ -125,7 +127,11 @@ of a one-pass native build) and only catches a bad output; a proved
 producer never makes one. Equally wrong: an allocation, copy or pass
 added only to make a property provable where a ghost or spec route
 exists. Where none exists, the cost is measured (`references/proofs.md`,
-"Writing verifiable Rust").
+"Writing verifiable Rust") and, coverage first, accepted by default: the
+PR records the bench table, a cost above about 2% on a hot path gets an
+"optimize within proof bounds" follow-up issue, and one above about 10%
+on a real workload goes to the maintainers before merge (the template
+AGENTS.md, "Coverage first for the runtime cost of a proof").
 
 ### Fast paths are proved equal, not checked
 
@@ -140,7 +146,9 @@ whose equality is "tested on the corpus".
 
 Correct: a PR that drops a share closes the gap by verifying more code;
 a `lowered FIGURE P REASON` line is the last resort and names exactly
-what became trusted.
+what became trusted or outside, or, when verified code was deleted
+(whole functions or lines of one), the functions removed or shortened
+and that nothing became trusted or outside.
 
 Wrong: asking a maintainer to lower the floor when more verification is
 possible.
@@ -198,7 +206,7 @@ Before calling a phase done, check:
   in the rule above: every new hit has a seam row and a reason.
 
   ```
-  grep -rnE 'assume\(|admit\(|assume_new|assume_specification|assume_unsupported_attributes|external_body|external_(fn|type|trait)_specification|verifier::external\]|axiom fn' --include=*.rs
+  grep -rnE 'assume\(|admit\(|assume_new|assume_specification|assume_unsupported_attributes|exec_allows_no_decreases_clause|external_body|external_(fn|type|trait)_specification|verifier::external\]|axiom fn' --include=*.rs
   ```
 - A FLOOR raise replaces the README's Verus badge in the same PR
   (`references/proofs.md`, "The FLOOR ratchet").

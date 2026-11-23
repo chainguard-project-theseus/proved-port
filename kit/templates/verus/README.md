@@ -31,7 +31,11 @@ a percent, rounded down: `verified%` is Verus's alone, and `checked%`
 adds the functions Kani discharges ("Kani").
 
 [FLOOR](FLOOR) holds the `shipped` row's four shares. `make verus` fails
-below any figure, and above one names the figure to record. With
+below any figure, and above one names the figure to record: the share,
+or, where count.toml's `[floor]` sets `room_functions` or `room_lines`
+(a port's own choice, which a paragraph of FLOOR's below its header
+states), the share with that room for unverified code, and none while
+the share is within it. With
 `VERUS_BASE=REV` (both verus checks pass the base Checks sets: the pull
 request's base, or on main the start of the push the run covers) it
 also fails a figure set below
@@ -65,7 +69,8 @@ main later. verus/RLIMIT cites this section.}
 
 ## Kani
 
-{Which trusted functions Kani discharges, the `discharged_by = "kani"`
+{Which trusted functions, and functions outside `verus!`, Kani
+discharges, the `discharged_by = "kani"`
 marker, the records under verus/seams/, and how `make kani` runs them.
 verus/FLOOR cites this section.}
 

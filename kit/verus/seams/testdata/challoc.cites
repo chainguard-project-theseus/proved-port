@@ -1,0 +1,41 @@
+verus/ledger/src/heap/slotstate.rs.overrides	src/heap/slotstate.rs	120	NO_ARRAYS	Kani	heap::slotstate::kani_arrays::no_arrays_are_zero
+verus/ledger/src/heap/slotstate.rs.overrides	src/heap/slotstate.rs	733	byte_at	Kani	heap::slotstate::kani_byte_at::byte_at_is_the_byte
+verus/ledger/src/heap/thread.rs.overrides	src/heap/thread.rs	130	HeapPerm	const assert	`HeapPerm` in src/vspec/notcopy.rs
+verus/ledger/src/heap/thread.rs.overrides	src/heap/thread.rs	165	HeapPerm::assemble	Kani	heap::fresh::kani_assemble::writers_store_the_assembled_fields
+verus/ledger/src/heap/thread.rs.overrides	src/heap/thread.rs	217	slot_heap_ref	Kani	heap::tcaches::kani_slot_heap_ref::slot_heap_ref_is_the_heap
+verus/ledger/src/sys/pac.rs.overrides	src/sys/pac.rs	71	axiom_auth_sign	Isla	verus/isla/seams.md
+verus/ledger/src/sys/pac.rs.overrides	src/sys/pac.rs	199	sign	Isla	verus/isla/seams.md
+verus/ledger/src/sys/pac.rs.overrides	src/sys/pac.rs	245	auth	Isla	verus/isla/seams.md
+verus/ledger/src/sys/pac.rs.overrides	src/sys/pac.rs	285	strip	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	37	syscall0#1	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	52	syscall1#1	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	67	syscall2#1	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	82	syscall3#1	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	99	syscall4#1	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	115	syscall5#1	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	138	syscall6#1	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	172	syscall0#2	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	186	syscall1#2	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	200	syscall2#2	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	215	syscall3#2	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	232	syscall4#2	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	247	syscall5#2	Isla	verus/isla/seams.md
+verus/ledger/src/sys/raw.rs.overrides	src/sys/raw.rs	269	syscall6#2	Isla	verus/isla/seams.md
+verus/ledger/src/vspec/fmt.rs.overrides	src/vspec/fmt.rs	24	core::fmt::Formatter::<'a>::write_str	Kani	kani_proofs::misc::formatter_write_str
+verus/ledger/src/vspec/fmt.rs.overrides	src/vspec/fmt.rs	27	core::fmt::Formatter::<'a>::write_fmt	Kani	kani_proofs::misc::formatter_write_fmt
+verus/ledger/src/vspec/fmt.rs.overrides	src/vspec/fmt.rs	40	DisplaySpecImpl for sys::Errno	Kani	kani_proofs::fmt::display_errno
+verus/ledger/src/vspec/fmt.rs.overrides	src/vspec/fmt.rs	56	DebugSpecImpl for slab::State	Kani	kani_proofs::fmt::debug_slab_state
+verus/ledger/src/vspec/misc.rs.overrides	src/vspec/misc.rs	22	PartialEqSpecImpl for config::Thp	Kani	kani_proofs::eq::eq_config_thp
+verus/ledger/src/vspec/misc.rs.overrides	src/vspec/misc.rs	32	PartialEqSpecImpl for sys::thp_host::ThpSetting	Kani	kani_proofs::eq::eq_thp_setting
+verus/ledger/src/vspec/misc.rs.overrides	src/vspec/misc.rs	42	PartialEqSpecImpl for huge::RunState	Kani	kani_proofs::eq::eq_run_state
+verus/ledger/src/vspec/misc.rs.overrides	src/vspec/misc.rs	52	PartialEqSpecImpl for slab::State	Kani	kani_proofs::eq::eq_slab_state
+verus/ledger/src/vspec/misc.rs.overrides	src/vspec/misc.rs	62	PartialEqSpecImpl for thp::Mode	Kani	kani_proofs::eq::eq_thp_mode
+verus/ledger/src/vspec/misc.rs.overrides	src/vspec/misc.rs	76	core::sync::atomic::fence	Kani	kani_proofs::atomic::fence
+verus/ledger/src/vspec/misc.rs.overrides	src/vspec/misc.rs	85	str::as_ptr	Kani	kani_proofs::misc::str_as_ptr
+verus/ledger/src/vspec/misc.rs.overrides	src/vspec/misc.rs	92	core::hint::assert_unchecked	Kani	kani_proofs::misc::hint_assert_unchecked
+verus/ledger/src/vspec/misc.rs.overrides	src/vspec/misc.rs	103	core::hint::black_box	Kani	kani_proofs::misc::hint_black_box
+verus/ledger/src/vspec/misc.rs.overrides	src/vspec/misc.rs	113	core::sync::atomic::Atomic::<u32>::as_ptr	Kani	kani_proofs::atomic::atomic_u32_as_ptr
+verus/ledger/src/vspec/panic.rs.overrides	src/vspec/panic.rs	33	core::panic::Location::<'a>::file	Kani	kani_proofs::panic::location_file_returns
+verus/ledger/src/vspec/panic.rs.overrides	src/vspec/panic.rs	36	core::panic::Location::<'a>::line	Kani	kani_proofs::panic::location_line_returns
+verus/ledger/src/vspec/zero.rs.overrides	src/vspec/zero.rs	206	axiom_zero_word	Kani	kani_proofs::zero::zero_word_reads_zero
+verus/ledger/src/vspec/zero.rs.overrides	src/vspec/zero.rs	458	zero_raw	Kani	kani_proofs::ptr::zero_raw_fills

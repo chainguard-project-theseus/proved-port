@@ -1,0 +1,16 @@
+functions old 1 new 1: exact 0, reloc-only 0, padding-only 0, erratum-stub 0, changed 1
+insns old 5 new 7
+### changed: mallinfo (7 insns) vs baseline mallinfo (5 insns)
+
+--- diff of mallinfo, immediates masked
+   --- old
+   +++ new
+   @@ -1,5 +1,7 @@
+    bl A <sym>
+   -adrp x8, A <sym>
+   +adr x8, A <sym>
+    ldr x13, [x20, #I]
+    ldr w10, [x8, #I]
+    ret
+   +bl A <sym>
+   +ret

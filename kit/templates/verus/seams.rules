@@ -1,0 +1,140 @@
+# verus/seams.rules: the port's rules for the kit's seam ledger generator
+# (kit/verus/seams; its doc comment is the full format). One rule a line,
+# fields separated by one tab, `#` comments. The generator scans SOURCE
+# for the items Verus takes on trust and writes one ledger file per
+# source file with seams under LEDGER; these lines are what is the
+# port's: where things are, the tools and categories its SEAMS.md names,
+# and the heuristics that propose a category for a seam no overrides line
+# names. This starting point is challoc's (verus/seams.sh as of its
+# deda0db); reshape the lists and the guesses to the port's code.
+#
+# Where the ledger and the sources are, and the command that writes the
+# ledger (named in each ledger file's header). The theseus-proved-port
+# package installs the generator as proved-port-seams (on PATH; a
+# checkout's kit/install.sh installs it too); a port that runs it some
+# other way writes here how.
+ledger	verus/ledger
+source	src
+command	proved-port-seams -write
+seams-doc	verus/SEAMS.md
+#
+# Test files under SOURCE: not scanned for seams, read only for `unsafe
+# impl Send/Sync` (a claims nothing status refuses a type that has one).
+# A pattern with a / matches the path from the root, any other the base
+# name; * and ? match / too, as in find -path.
+test-file	tests.rs
+test-file	testutil.rs
+test-file	src/*/tests/*
+#
+# The tools, in the order the totals tables list them, and the one for
+# a seam no check applies to.
+tool	Islaris/Isla
+tool	RefinedRust
+tool	Kani
+tool	loom/GenMC
+tool	Verus
+tool	ABI tests
+tool	none (assumption)
+assumption-tool	none (assumption)
+#
+# The categories, in table order, each with the tool proposed for it.
+category	inline asm	Islaris/Isla
+category	FFI/syscall	none (assumption)
+category	function pointer	Kani
+category	UnsafeCell/volatile/transmute	RefinedRust
+category	raw pointer (internal)	RefinedRust
+category	raw pointer from C caller	none (assumption)
+category	panic/abort	Kani
+category	atomics primitive	loom/GenMC
+category	platform/kernel fact	none (assumption)
+category	C-program contract	none (assumption)
+category	termination	loom/GenMC
+category	core library	Kani
+category	allocator invariant	RefinedRust
+category	C ABI export	ABI tests
+#
+# A status holding `TAG: ` cites a check (a claims nothing status may
+# not); -check fails on a discharged or partly checked status that holds
+# none, and on a `TAG: ` that names nothing. A third field `partial`
+# marks a check that covers only part of a contract (challoc's loom
+# models run a copy of the code, and its GenMC cases erase the
+# permissions): -check fails a discharged status that cites one.
+cite-tag	Kani
+cite-tag	const assert
+cite-tag	loom	partial
+cite-tag	GenMC	partial
+#
+# -check resolves the citations of the tags these lines name and fails
+# each that does not resolve. A cite-fn tag cites `a::b::m::f`: a fn
+# with the attribute line `#[ATTR]` above it, in SOURCE/a/b.rs (or
+# SOURCE/a/b/mod.rs) and its inline `mod m`, laid out as rustfmt lays it
+# out, with no cfg, cfg_attr or ignore attribute on the fn but
+# `#[cfg(CFG)]` for a CFG field after ATTR (the cfg the tool builds
+# under: `kani` here, `test` for a #[test] fn). A cite-module NAME reads a path starting `NAME::` under DIR (here
+# challoc's `kani_proofs::m::f`, f in src/kani/m.rs). A cite-assert tag
+# cites `LABEL in FILE`, FILE a .rs file under SOURCE or a cite-module
+# DIR and not a test file: one top-level `const _: () = assert!(` right
+# under a `// LABEL` comment block, with no attribute above it. A
+# cite-row tag's citations each also need a row in FILE's table under
+# `## HEADING` that names the citation in backquotes in its first cell
+# and holds every PART. The other tags (loom and GenMC here) are the
+# port's own checks to resolve, from seams -cites (one line per
+# citation).
+cite-fn	Kani	kani::proof	kani
+cite-module	kani_proofs	src/kani
+cite-assert	const assert
+# challoc's guard tests: `callers: PATH` names a #[test] fn with its row
+# in the guard-test table:
+# cite-tag	callers
+# cite-fn	callers	test	test
+# cite-row	callers	verus/README.md	Guard tests	Mutants killed:	Known escapes:
+#
+# challoc's not-Copy checks: each `tracked` struct or enum needs a check
+# in the file that it is neither Copy nor Clone (`<T as NotCopy<_>>::HOLDS`
+# and `<T as NotClone<_>>::HOLDS` under a `// `T`` label), and a
+# tracked-type seam citing `const assert:` cites its type's check. Write
+# a generic type's check at Copy arguments (`K<u8>`): a const assertion
+# checks only the arguments it names, so one at a non-Copy argument
+# passes for a type that is Copy whenever its argument is:
+# notcopy	src/vspec/notcopy.rs	const assert
+#
+# The heuristics: the first guess whose conditions all hold proposes its
+# category (- for none, which -check reports until an overrides line
+# names one). FIELD=RE matches, FIELD!RE does not; kind, name, file and
+# body (comments and literals blanked) are the fields, RE is RE2.
+guess	termination	kind=^no_decreases$
+guess	C ABI export	kind=^unsupported-attribute$
+guess	inline asm	body=asm!
+guess	atomics primitive	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$	name=Atomic
+guess	UnsafeCell/volatile/transmute	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$	name=UnsafeCell|volatile|transmute
+guess	raw pointer (internal)	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$	name=^(core::)?ptr::|^<\*|::add$|::offset$|from_raw_parts|null
+guess	-	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$	name=^crate::|^super::
+guess	core library	kind=^(assume_spec|ext_type_spec|ext_trait_spec|spec_impl)$
+# challoc's C entry points are under src/api/: a pointer there came
+# from the C caller.
+guess	raw pointer from C caller	kind=^(ghost_)?assume_new$	file=^src/api/
+guess	raw pointer (internal)	kind=^(ghost_)?assume_new$
+guess	FFI/syscall	body=(raw::)?syscall[0-6]?\(
+guess	function pointer	body=\(\*?[a-z_.]*\.0\)\(|[^a-z]fn\(
+guess	panic/abort	body=panic!	body!write!|writeln!
+guess	function pointer	body=format_args!|write!|writeln!|panic!
+guess	UnsafeCell/volatile/transmute	body=volatile|UnsafeCell|transmute|\.get\(\)
+guess	atomics primitive	body=compare_exchange|fetch_[a-z]+\(|\.load\(|\.store\(
+guess	raw pointer from C caller	body=\*mut|\*const|ptr::|as_ptr|\.add\(|from_raw_parts	file=^src/api/
+guess	raw pointer (internal)	body=\*mut|\*const|ptr::|as_ptr|\.add\(|from_raw_parts
+#
+# The note on each unsupported-attribute entry (an item marked
+# `#[verifier::assume_unsupported_attributes]`): what backs the symbol.
+unsupported-doc	Verus takes every attribute it refuses on this item on trust (`#[verifier::assume_unsupported_attributes]`), its symbol and section attributes among them; the port's C ABI tests call the symbol.
+#
+# A port whose exports come from a macro names it, its file, the form of
+# an invocation's `fn` lines and the `fn $VAR(` templates whose
+# attributes each export takes (one for every name, or one per name).
+# challoc's `verified_export_pair! { fn malloc / je_malloc(..) }` writes
+# two, from `fn $name(` and `fn $je(` (the older `pair` line says the
+# same: pair<TAB>MACRO<TAB>FILE<TAB>VAR<TAB>VAR):
+# export-macro	verified_export_pair	src/api/mod.rs	slash	name	je
+# A list form, `fn body [f_8, f_16, f_32] (..)` (the names may run over
+# lines to the `]`), writes one export per name; invoked as
+# `width::exports! {` too:
+# export-macro	exports	src/width.rs	list	name

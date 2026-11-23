@@ -1,0 +1,115 @@
+//! Specifications of the derived `PartialEq` of five enums verified code
+//! compares: `config::Thp` and `sys::thp_host::ThpSetting` (`thp.rs`),
+//! `huge::RunState`, `slab::State` (`class::ClassState::take`) and
+//! `thp::Mode` (`class::table::SlabTable::commit_slab` and
+//! `commit_page_group`); and of
+//! `fence`, `core::hint::assert_unchecked`, `core::hint::black_box` and
+//! `AtomicU32::as_ptr`; and the type `PhantomPinned` (a field of
+//! `heap::Heap`).
+
+use vstd::prelude::*;
+
+verus! {
+
+/// `core::marker::PhantomPinned`, opaque: a zero-sized marker field of
+/// `heap::Heap` that makes it `!Unpin`.
+#[verifier::external_type_specification]
+#[verifier::external_body]
+pub struct ExPhantomPinned(core::marker::PhantomPinned);
+
+// The derived `PartialEq` of these enums compares variants.
+
+impl vstd::std_specs::cmp::PartialEqSpecImpl for crate::config::Thp {
+    open spec fn obeys_eq_spec() -> bool {
+        true
+    }
+
+    open spec fn eq_spec(&self, other: &Self) -> bool {
+        *self == *other
+    }
+}
+
+impl vstd::std_specs::cmp::PartialEqSpecImpl for crate::sys::thp_host::ThpSetting {
+    open spec fn obeys_eq_spec() -> bool {
+        true
+    }
+
+    open spec fn eq_spec(&self, other: &Self) -> bool {
+        *self == *other
+    }
+}
+
+impl vstd::std_specs::cmp::PartialEqSpecImpl for crate::huge::RunState {
+    open spec fn obeys_eq_spec() -> bool {
+        true
+    }
+
+    open spec fn eq_spec(&self, other: &Self) -> bool {
+        *self == *other
+    }
+}
+
+impl vstd::std_specs::cmp::PartialEqSpecImpl for crate::slab::State {
+    open spec fn obeys_eq_spec() -> bool {
+        true
+    }
+
+    open spec fn eq_spec(&self, other: &Self) -> bool {
+        *self == *other
+    }
+}
+
+impl vstd::std_specs::cmp::PartialEqSpecImpl for crate::thp::Mode {
+    open spec fn obeys_eq_spec() -> bool {
+        true
+    }
+
+    open spec fn eq_spec(&self, other: &Self) -> bool {
+        *self == *other
+    }
+}
+
+/// `core::sync::atomic::fence`: panics on `Relaxed` only, and has no
+/// effect Verus models (Verus's memory model is sequentially consistent;
+/// the ordering it adds is checked by the loom models in `tests/loom`, not
+/// here).
+pub assume_specification[ core::sync::atomic::fence ](order: core::sync::atomic::Ordering)
+    requires
+        !(order is Relaxed),
+    opens_invariants none
+    no_unwind
+;
+
+/// `str::as_ptr`: the address of the first byte; nothing is claimed
+/// about it.
+pub assume_specification[ str::as_ptr ](s: &str) -> *const u8;
+
+/// `core::hint::assert_unchecked`: undefined behaviour unless `cond`
+/// holds (`core`'s safety contract), which this makes a precondition; it
+/// has no effect Verus models. Its one verified caller is
+/// `layout::small_class`, where the condition is the small table's
+/// postcondition.
+pub assume_specification[ core::hint::assert_unchecked ](cond: bool)
+    requires
+        cond,
+    opens_invariants none
+    no_unwind
+;
+
+/// `core::hint::black_box`: the identity (`core` guarantees no more; it
+/// only keeps the optimizer from seeing through the value). Its one
+/// verified caller is `stats::stack_mark`, which keeps a local's address
+/// opaque so that the local gets a stack slot.
+pub assume_specification<T>[ core::hint::black_box ](dummy: T) -> (r: T)
+    ensures
+        r == dummy,
+    opens_invariants none
+    no_unwind
+;
+
+/// `AtomicU32::as_ptr`: the address of the atomic's value, for a futex
+/// syscall argument. Nothing is claimed about it; the verified callers
+/// only pass it to the kernel and never dereference it.
+pub assume_specification[ core::sync::atomic::Atomic::<u32>::as_ptr ](a: &core::sync::atomic::Atomic<u32>) -> *mut u32;
+
+} // verus!

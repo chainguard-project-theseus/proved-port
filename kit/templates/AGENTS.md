@@ -19,8 +19,8 @@ issue or PR.
 
 - **ABI compatibility with {LIBRARY} {UPSTREAM_VERSION}.** The same
   header constants, exported names, sonames, symbol version nodes, error
-  codes and error texts. A deliberate difference needs an entry in
-  `docs/abi-changes.md` in the same PR.
+  codes and error texts. A deliberate difference needs an entry,
+  `docs/abi/ABI-<nnn>.md` (`docs/abi/README.md`), in the same PR.
 - **The C library decides what is correct.** A divergence found by the
   conformance ratchet, the differential runner or fuzz-diff is a bug, or
   it gets an `ABI-nnn` entry and a narrow known-divergence predicate
@@ -45,6 +45,16 @@ issue or PR.
   or pass where a ghost or spec route exists: take the harder proof.
   Checks of state a C caller can corrupt are input validation, outside
   this rule.
+- **Coverage first for the runtime cost of a proof.** Where a proof
+  costs runtime and no ghost or spec route avoids the cost (a bounds
+  check Verus needs, a shape the proof takes; where a route exists, the
+  principle above holds and the harder proof is taken), a measured cost
+  is accepted by default: the PR body records the bench
+  table, against main and the C library, and says the cost is accepted
+  under this rule. A cost above about 2% on a hot path also gets an
+  "optimize within proof bounds" follow-up issue. A cost above about 10%
+  on a real workload goes to the maintainers before merge. Every cost is
+  measured and reported, never assumed to be zero.
 - **Fast paths are proved equal, not checked.** A JIT, direct emitter or
   fast tier carries the equality to the slow path in its postcondition; a
   runtime checker runs only in tests, as an oracle.
@@ -105,6 +115,17 @@ issue or PR.
   that lands the share lower), when a `lowered` or `rlimit-raised` line
   is allowed and what it says. Read them before a change that moves a
   share or an rlimit. Never ask a maintainer to lower the floor.
+- **Shared coverage lines.** A proof PR keeps its figures in its
+  theorem's `verus/theorems/<ID>.md` and its PR body. It does not edit
+  the lines every coverage change would touch: it raises no verus/FLOOR
+  figure, and it edits no coverage figure or row in the README (the
+  badge included), `verus/README.md` or the design and handoff docs.
+  The FLOOR PR that follows a coverage merge updates them from main's
+  figures. Otherwise every merge conflicts every other open proof PR.
+  FLOOR's header gives the two exceptions: the port's first proof PR
+  may raise every figure, and the badge, from 0.0; and a PR with a
+  `lowered` line lowers that figure and replaces the badge line with
+  the one `verus-count --badge .` prints.
 - **Entry points.** Every function a C caller reaches is verified,
   discharged by Kani, or a row of verus/REACH with a reason; a new row is
   marked `new`.
@@ -114,7 +135,7 @@ issue or PR.
   hit has a seam row and a reason.
 
   ```
-  grep -rnE 'assume\(|admit\(|assume_new|assume_specification|assume_unsupported_attributes|external_body|external_(fn|type|trait)_specification|verifier::external\]|axiom fn' --include=*.rs
+  grep -rnE 'assume\(|admit\(|assume_new|assume_specification|assume_unsupported_attributes|exec_allows_no_decreases_clause|external_body|external_(fn|type|trait)_specification|verifier::external\]|axiom fn' --include=*.rs
   ```
 
 ## Environment facts

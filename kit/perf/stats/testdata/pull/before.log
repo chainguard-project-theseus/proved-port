@@ -1,0 +1,6 @@
+== before
+4f2a1c0d9e8b7a6f5e4d3c2b1a090807  /box/tar/rev-a.tar.gz
+0123456789abcdef0123456789abcdef  /box/lib/rev-a/libx.so.0
+fedcba9876543210fedcba9876543210  /box/lib/rev-b/libx.so.0
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /box/run.sh
+building rev-a ... ok

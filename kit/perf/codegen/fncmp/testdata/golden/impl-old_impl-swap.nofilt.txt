@@ -1,0 +1,20 @@
+functions old 2 new 2: exact 0, reloc-only 0, padding-only 0, erratum-stub 0, changed 2
+insns old 4 new 4
+### changed: _RNvMsA_NtCs1a2b3c4d5e6_5crate4heapNtB5_4Heap4push (2 insns) vs baseline _RNvMs0_NtCs1a2b3c4d5e6_5crate4heapNtB4_4Heap4push (2 insns)
+### changed: _RNvMsA_NtCs1a2b3c4d5e6_5crate4heapNtB5_4Heap3pop (2 insns) vs baseline _RNvMs0_NtCs1a2b3c4d5e6_5crate4heapNtB4_4Heap3pop (2 insns)
+
+--- diff of _RNvMsA_NtCs1a2b3c4d5e6_5crate4heapNtB5_4Heap4push against baseline _RNvMs0_NtCs1a2b3c4d5e6_5crate4heapNtB4_4Heap4push, immediates masked
+   --- old
+   +++ new
+   @@ -1,2 +1,2 @@
+   -add x0, x0, x1
+   +sub x0, x0, x1
+    ret
+
+--- diff of _RNvMsA_NtCs1a2b3c4d5e6_5crate4heapNtB5_4Heap3pop against baseline _RNvMs0_NtCs1a2b3c4d5e6_5crate4heapNtB4_4Heap3pop, immediates masked
+   --- old
+   +++ new
+   @@ -1,2 +1,2 @@
+   -sub x0, x0, x1
+   +add x0, x0, x1
+    ret

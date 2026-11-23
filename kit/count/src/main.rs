@@ -12,12 +12,22 @@
 //! is not `#[verifier::external_body]`,
 //! `#[verifier::external]` or `verus_verify(external_body)`, and its body
 //! calls none of `assume`, `admit` and `Tracked::assume_new` (which mints
-//! a ghost token on trust); *trusted* when it sits inside
+//! a ghost token on trust), and no `#[verifier::exec_allows_no_decreases_clause]`
+//! covers it (on it, or on the `impl`, trait or module around it: Verus
+//! then proves none of its loops or recursion ends; covering an
+//! out-of-line `mod x;`, on it or on a module or file around it, it
+//! fails the run);
+//! *trusted* when it sits inside
 //! `verus!` but is one of those; and *outside* when it is not inside
-//! `verus!` at all. A trusted function marked
+//! `verus!` at all. A trusted or outside function marked
 //! `#[cfg_attr(any(), discharged_by = "kani")]` is *discharged* instead:
 //! Kani checks its contract (verus/README.md, "Kani"), on the bounded inputs
-//! its record names, so it counts neither as verified nor as trusted. The
+//! its record names, so it counts neither as verified nor as trusted or
+//! outside. One outside `verus!` has no Verus contract, so its record
+//! states what Kani checks, names it in backquotes by its path (a method
+//! with its owner, [`owner_key`]; a free function with its inline modules
+//! in its file, or alone), and names a `#[kani::proof]` harness that
+//! calls it ([`outside_unchecked`]). The
 //! marker is inert in every build (`any()` is false), and a marked function
 //! no `verus/seams/kani-*.md` record covers fails the run. With a
 //! `[ledger]` section, a generated seam ledger ([`ledger`]) says which
@@ -45,7 +55,13 @@
 //! configuration settles there are sure: `verus_keep_ghost`, the
 //! Verus-only features, the test-only atoms (never set), and the
 //! `verus_sets` and `verus_never_sets` atoms; a platform such as
-//! `target_os = "windows"`, or any other atom, may be either.
+//! `target_os = "windows"`, or any other atom, may be either. A port
+//! that declares its proof runs (`[[runs]]`, #21) has each run's `sets`
+//! and `never_sets` settle atoms in that run alone, where a set value of
+//! a single-valued key also settles that key's other values as never;
+//! an item is classed in each run, and is verified where it is sure in
+//! some run and unsure in none, so one only one run compiles
+//! (`not(target_arch = "x86_64")` beside an aarch64 run) may be.
 //! Lines run from a function's `fn` keyword to its closing brace.
 //!
 //! cargo verus has Verus check only a package whose Cargo.toml sets
@@ -55,6 +71,50 @@
 //! not fails the run (exit 1), each such crate named ([`opted_in`]):
 //! nothing would check the functions the tally credits as verified.
 //!
+//! A module declaration whose file the source walk does not read (a
+//! `#[path]` to a file not named `*.rs` or outside the crate's `src/`,
+//! under either reading of where the declaring file's modules live)
+//! fails the run (exit 1), each named ([`unread_module_files`]), unless
+//! only tests build it: rustc compiles its functions, so leaving them
+//! out would raise the verified share.
+//!
+//! The source walk reads every `*.rs` file under a crate's `src/`. A
+//! member with `skip_packages = true` (#198) leaves out each directory
+//! below its `src/` that holds a Cargo.toml: another package's sources,
+//! which cargo builds as its own crate. Every reader of the crate's
+//! sources leaves out the same directories (the walk of the working tree
+//! and of a base revision, the symlink check, the token-mint scan). A
+//! module declaration, a target root (by its declared path, so through a
+//! link too) or an `include!` of a string literal of the crate in such a
+//! directory fails the run, since rustc compiles that file as part of the
+//! crate. Any other `include!` in such a crate fails the run too, as the
+//! counter cannot resolve the file it names, except one of
+//! `concat!(env!("OUT_DIR"), ..)` whose other arguments are string
+//! literals with no `..` component, outside `src/` ([`included_files`]);
+//! one inside a `macro_rules!` definition fails whatever its argument but
+//! that form, as rustc resolves its path from the invoking file; and a
+//! `use` that imports `include` under any name fails, as an invocation
+//! through it does not name `include` ([`imports_include`]), as does a
+//! bare `include` anywhere among a macro invocation's argument tokens,
+//! which the macro may forward to one (but std's expression macros,
+//! [`EXPRESSION_MACROS`], where nothing may give the name another macro:
+//! no `macro_rules!` or import of it, no rebound `std`/`core`/`alloc`
+//! path, no foreign `#[macro_use] extern crate`, and no foreign glob in
+//! the file, [`foreign_glob`]; the `OUT_DIR` form is held the same way
+//! for `concat` and `env`). Each
+//! left-out directory must be read by a configured crate of its own (a
+//! member at that directory, or a crate of `[crates] dir` there), else
+//! the run fails ([`left_out_unread`]), so its code counts somewhere, as
+//! it does on a library or binary root that crate declares outside its
+//! own `src/`, which no walk reads, and on an `include!` of its files
+//! that a crate with `skip_packages` could not have, against all of its
+//! `src/`, and, as a backstop for every include form, on any `*.rs` file
+//! under the directory that crate does not read and cargo does not build
+//! apart (its `tests/`, `benches/`, `examples/`, `build.rs`:
+//! [`built_apart`]); in a `macro_rules!` body every `include` fails but
+//! the `OUT_DIR` form and a path ([`path_separator`]); the run prints a line for each (`crate a leaves out crates/a/src/uu/x
+//! (counted as crate x)`).
+//!
 //! A function an item macro writes counts too ([`Counter::item_macro`]):
 //! an invocation of a `macro_rules!` the crate defines is expanded
 //! ([`expand`]), and each function in the expansion counts as outside
@@ -62,7 +122,23 @@
 //! invocation and the definition it came from. An item macro the crate
 //! does not define counts as one function outside `verus!`, named
 //! `NAME!`, so no function leaves the tally for being written by a macro;
-//! one the crate defines that does not expand fails the run. Fragments
+//! one the crate defines that does not expand fails the run. The
+//! exceptions are std's item macros that write no function
+//! (`compile_error!`, `thread_local!`), by `::std::` or bare where
+//! nothing may rebind the name. A `thread_local!` imported by name or
+//! invoked by a path from `std` or `core` is std's only where no `use`
+//! in the module (for the import in 2015, at the root too) or `extern
+//! crate .. as` gives another crate that name ([`Counter::use_rebinds`]),
+//! and, for the import, where no module of the crate has that name as
+//! rustc reads a `use` path (in 2015 one at the root, from 2018 on one
+//! in the module: [`Counter::use_module`]).
+//! A bare `thread_local!` that a `*` or a
+//! `#[macro_use]` may rebind is std's only where each such source is
+//! shown not to bring another ([`Counter::other_thread_local`]): a glob
+//! of Verus's prelude, of std or core, or of a module of the crate that
+//! brings in no `thread_local`, and a `#[macro_use]` of std's or Verus's
+//! crates, each by a name no Cargo rename or `use` alias rebinds; any
+//! other source counts it as another crate's macro. Fragments
 //! match by the crate's edition ([`walked_editions`]): below 2024 an
 //! `expr` is an `expr_2021` (no `const` block, no `_`), and below 2021 a
 //! `pat` is a `pat_param` (no top-level `|`). A crate whose read targets
@@ -90,7 +166,11 @@
 //! row's verified share of functions or of lines, or its verified and
 //! discharged share, is below the figure FILE records (verus/FLOOR), and
 //! names the figure to record when the share has risen past it; FILE must
-//! be the configuration's `[floor] path`. `--base-rev REV` also fails a
+//! be the configuration's `[floor] path`. With `[floor] room_functions`
+//! or `room_lines` (#100), the figure named is the share with that many
+//! more unverified functions and lines in its denominators, and no figure
+//! is named while the share is within that room; the pass or failure is
+//! the share's alone. `--base-rev REV` also fails a
 //! figure FILE sets below the figure in REV's FLOOR (at REV's `[floor]
 //! path`) without a new `lowered` line for it, and fails when REV does
 //! not resolve. With `[floor] renamed_from`, REV's copy may give the
@@ -115,6 +195,12 @@
 //! cycle of direct calls, within one file, through a function of a shipped
 //! crate that Verus does not check (outside `verus!`, or trusted or
 //! discharged), and on one through a verified function that RN1.md's table
+//! does not name.
+//!
+//! With `[loops]`, it checks nested loops ([`nested_loops`], #76): it fails
+//! on a function of a shipped crate that nests a loop in a loop, or calls
+//! from inside a loop a function that loops (by name within its file, as
+//! the recursion check reads calls), that the work-bound theorem's table
 //! does not name.
 //!
 //! `--rlimit STATS` also checks rlimit headroom ([`rlimit`]; verus/README.md,
@@ -171,6 +257,7 @@ use std::path::{Path, PathBuf};
 
 mod config;
 mod expand;
+mod features;
 mod inputs;
 mod ledger;
 mod mints;
@@ -192,11 +279,49 @@ enum Class {
     Discharged,
 }
 
+/// How `exec_allows_no_decreases_clause` bears on a function the counter
+/// tallies ([`Counter::tally_fn`]): it does not cover it (`No`), it alone
+/// makes it trusted (`Only`: it would be verified without), or it covers
+/// one that is trusted for another reason as well (`Also`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Covered {
+    No,
+    Only,
+    Also,
+}
+
+/// A discharged function outside `verus!`: its crate, file (relative to
+/// the root) and name, and the key a record names it by before `::name`
+/// ([`owner_key`] for a method, the inline modules around it within its
+/// file for a free function, `None` at a file's top).
+#[derive(Clone, Debug, PartialEq)]
+struct OutsideMark {
+    krate: String,
+    file: PathBuf,
+    name: String,
+    key: Option<String>,
+    /// For a method, its owner's name alone (`A` for `<A as From<u8>>`,
+    /// `B` for `B<u8>`), which a harness that checks it mentions.
+    owner: Option<String>,
+}
+
+impl OutsideMark {
+    /// How a record names it: `KEY::name`, or `name` with no key.
+    fn path(&self) -> String {
+        match &self.key {
+            Some(k) => format!("{k}::{}", self.name),
+            None => self.name.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct Tally {
     fns: [usize; 4],
     lines: [usize; 4],
     ghost: usize,
+    /// The discharged functions among `fns` that sit outside `verus!`.
+    outside_discharged: usize,
 }
 
 impl Tally {
@@ -206,6 +331,7 @@ impl Tally {
             self.lines[i] += t.lines[i];
         }
         self.ghost += t.ghost;
+        self.outside_discharged += t.outside_discharged;
     }
 }
 
@@ -220,6 +346,19 @@ struct Counter {
     /// Each discharged function's file, relative to the root, and name, for
     /// [`unrecorded`].
     discharged: Vec<(PathBuf, String)>,
+    /// Each discharged function outside `verus!`, for [`outside_unchecked`].
+    outside: Vec<OutsideMark>,
+    /// The inline modules around the item [`Counter::items`] is walking,
+    /// within its file: the last this many of [`Counter::module`].
+    inline_mods: usize,
+    /// Each crate's `#[kani::proof]` harnesses ([`kani_harnesses`]),
+    /// test-only files included.
+    harnesses: BTreeMap<String, Vec<Harness>>,
+    /// Each function with the Kani marker that
+    /// `exec_allows_no_decreases_clause` covers, which counts as trusted
+    /// and so is not in `discharged`: with `[ledger]` its marker is
+    /// refused as a discharged one's is.
+    marked_covered: Vec<(PathBuf, String)>,
     /// Every executable function, for [`recursive`].
     fns: Vec<FnRef>,
     /// Each source file a shipped build compiles, with its crate, whether
@@ -240,6 +379,9 @@ struct Counter {
     owner: String,
     /// Whether [`Counter::owner`] is an `impl`'s type, not a trait.
     owner_impl: bool,
+    /// The trait a trait `impl` [`Counter::items`] is walking implements,
+    /// as written (`From<u8>`); `None` elsewhere.
+    owner_trait: Option<String>,
     /// The type parameters of the `impl` [`Counter::items`] is walking
     /// (`impl<S: Spec> Tr for S` declares `S`).
     owner_params: Vec<String>,
@@ -287,6 +429,12 @@ struct Counter {
     /// or `verus!` block whose `cfg` it might not meet
     /// ([`Built::Unsure`]), whose verified functions count as trusted.
     sure: bool,
+    /// Whether the code [`Counter::items`] is walking is under
+    /// `#[verifier::exec_allows_no_decreases_clause]` ([`allows_no_decreases`]):
+    /// a module, `impl` or trait that carries it, or a file whose inner
+    /// attributes do. Verus proves no termination for its exec functions,
+    /// whose verified ones count as trusted.
+    no_decreases: bool,
     /// The `cfg` predicates of the code [`Counter::items`] is walking: its
     /// file's ([`module_guards`]) and those of each module, `impl`, trait
     /// and `verus!` block around it. An item is built where they and its
@@ -307,6 +455,20 @@ struct Counter {
     /// Each trusted function's crate, `FILE:LINE` and lines, for the
     /// generated ledger ([`ledger::match_ledger`]).
     trusted: Vec<(String, String, usize)>,
+    /// The `FILE:LINE` of each trusted function that would be verified
+    /// but for `exec_allows_no_decreases_clause`, and of each
+    /// trusted for another reason: a ledger's `no_decreases` seam may
+    /// stand only for a line in the first and not in the second (several
+    /// functions one macro invocation writes share its line)
+    /// ([`Counter::termination_only`], [`ledger::match_ledger`]).
+    trusted_for_termination: std::collections::BTreeSet<String>,
+    trusted_otherwise: std::collections::BTreeSet<String>,
+    /// The `FILE:LINE` of each trusted exec function that
+    /// `exec_allows_no_decreases_clause` covers, whether or not it is
+    /// trusted for another reason too: a ledger's function seam does not
+    /// make it discharged or partly checked, since nothing checks that it
+    /// ends ([`ledger::match_ledger`]).
+    trusted_covered: std::collections::BTreeSet<String>,
     /// The `FILE:LINE` of each function inside `verus!` with
     /// `#[verifier::assume_unsupported_attributes]` ([`assumes_attributes`]),
     /// a seam of the linkage alone ([`ledger::match_assumed`]).
@@ -335,9 +497,27 @@ struct Counter {
     /// ([`Counter::walk_crate`]), so that no function the crate's macro
     /// writes leaves the tally for a lookup the counter does not follow.
     unresolved: Vec<(String, String)>,
+    /// The invocations that resolved to some definition, each with where
+    /// it is, its module, its outermost invocation's line and its name:
+    /// once the crate is read, one a `macro_rules!` that an expansion in a
+    /// file read later writes, carried in by a `#[macro_use] mod`, may
+    /// reach fails the run ([`Counter::walk_crate`]).
+    invoked: Vec<Invoked>,
+    /// The file being walked: its module, and the scope and
+    /// [`MacroDef::carried_at`] a definition at its top has, which a
+    /// `macro_rules!` an expansion writes there takes.
+    carry: Carry,
+    /// While the walk is in inline modules of the file: whether each, from
+    /// the outermost, has `#[macro_use]`, for a `macro_rules!` an
+    /// expansion writes there.
+    inline_macro_use: Vec<bool>,
     /// Every module of the crate, by path from its root, so that a `use`
     /// path whose first segment is one of them reads as this crate's.
     modules: std::collections::BTreeSet<Vec<String>>,
+    /// The modules a `mod` item under a `cfg` of its own declares
+    /// ([`cfg_gated_mods`]), and those whose file has a `#![cfg]`: a build
+    /// may leave each out.
+    cfg_modules: std::collections::BTreeSet<Vec<String>>,
     /// For each crate root (the library, each binary and other target),
     /// the files it may compile and those it surely names by their place
     /// under src/ ([`Counter::add_proof_trees`]), by which
@@ -357,7 +537,7 @@ struct Counter {
     /// The crate's edition (its Cargo.toml's, or the workspace's it
     /// inherits; 2015 when it gives none, as cargo reads it).
     edition: u32,
-    /// Each name among `vstd`, `verus_builtin_macros`, `core`, `std` and `alloc`
+    /// Each of std's and Verus's crate names ([`STD_OR_VERUS_CRATES`])
     /// that a dependency of the crate takes for another package (`vstd =
     /// { package = "other" }`), with why.
     renamed_deps: Vec<(String, String)>,
@@ -400,10 +580,25 @@ struct MacroDef {
     /// build ([`Built::Unsure`]), so that it may not shadow an earlier
     /// definition of its name.
     unsure: bool,
+    /// The `cfg` predicates on it and around it. [`Built::Shipped`] says
+    /// only that a shipped build can compile it and Verus's surely does (a
+    /// `verus_sets` atom), so in shipped code it shadows an earlier
+    /// definition only where a shipped build compiling the invocation
+    /// surely compiles it ([`shipped_may_skip`]).
+    guards: Vec<String>,
     /// The module whose end ends its textual scope: the module it is in,
     /// or for one in a `#[macro_use]` module (inline, or a file declared
     /// `#[macro_use] mod name;`), the module that one is in.
     scope: Vec<String>,
+    /// For one at the top of a file a `#[macro_use] mod name;` declares
+    /// (and of a file that one's file so declares, outward), each declaring
+    /// file and the line of its `mod`: in that file it is in scope from
+    /// that line on, as a definition written there would be.
+    carried_at: Vec<(PathBuf, usize)>,
+    /// Whether a module along [`MacroDef::carried_at`] is declared by more
+    /// than one `mod` (under `cfg`s): in another file its place is then
+    /// not one line, so it is a candidate there that ends no chain.
+    split: bool,
     /// Whether it has `#[macro_export]`, which puts it at the crate root.
     exported: bool,
     rules: Result<expand::Rules, String>,
@@ -436,17 +631,74 @@ struct Atoms {
     verus: Vec<String>,
     sets: Vec<String>,
     never: Vec<String>,
+    /// Each declared proof run's `(sets, never)` (`[[runs]]`, #21), whose
+    /// classes [`verus_can`] combines; empty without `[[runs]]`, when
+    /// `sets` and `never` are the one run's.
+    runs: Vec<(Vec<String>, Vec<String>)>,
+    /// Whether `sets` and `never` are one declared run's ([`Atoms::each_run`]),
+    /// so a value of a single-valued key `sets` holds rules out the key's
+    /// other values. The shorthand may hold several runs' values, so it
+    /// does not.
+    one_run: bool,
 }
 
 impl Atoms {
     fn of(c: &Config) -> Atoms {
+        let runs = if c.runs.is_empty() {
+            Vec::new()
+        } else {
+            c.proof_runs().into_iter().map(|(_, s, n)| (s, n)).collect()
+        };
         Atoms {
             test: c.test_atoms(),
             verus: c.verus_atoms(),
             sets: c.verus_set_atoms(),
             never: c.verus_never_atoms(),
+            runs,
+            one_run: false,
         }
     }
+
+    /// Each proof run's atoms, as one-run [`Atoms`]: the declared runs, or
+    /// these atoms themselves without any.
+    fn each_run(&self) -> Vec<Atoms> {
+        if self.runs.is_empty() {
+            return vec![self.clone()];
+        }
+        self.runs
+            .iter()
+            .map(|(sets, never)| Atoms {
+                test: self.test.clone(),
+                verus: self.verus.clone(),
+                sets: sets.clone(),
+                never: never.clone(),
+                runs: Vec::new(),
+                one_run: true,
+            })
+            .collect()
+    }
+}
+
+/// [`Can`] for the predicate `p` across the proof runs (#21): without
+/// `[[runs]]`, [`cfg_eval`] in Verus's build. With them, `p` is classed in
+/// each run, and it can be true where some run may compile it, and can be
+/// false unless it is sure in some run and unsure in none, so `t && !f`
+/// reads "verified": every run that might ship it also verifies it.
+fn verus_can(p: &str, atoms: &Atoms) -> Result<Can, String> {
+    if atoms.runs.is_empty() {
+        return cfg_eval(p, true, atoms);
+    }
+    let (mut t, mut sure, mut unsure) = (false, false, false);
+    for run in atoms.each_run() {
+        let c = cfg_eval(p, true, &run)?;
+        t |= c.t;
+        sure |= c.t && !c.f;
+        unsure |= c.t && c.f;
+    }
+    Ok(Can {
+        t,
+        f: unsure || !sure,
+    })
 }
 
 impl Counter {
@@ -459,6 +711,10 @@ impl Counter {
             tallies: BTreeMap::new(),
             errors: 0,
             discharged: Vec::new(),
+            outside: Vec::new(),
+            inline_mods: 0,
+            harnesses: BTreeMap::new(),
+            marked_covered: Vec::new(),
             fns: Vec::new(),
             files: Vec::new(),
             statics: Vec::new(),
@@ -467,6 +723,7 @@ impl Counter {
             traits: std::collections::BTreeSet::new(),
             owner: String::new(),
             owner_impl: false,
+            owner_trait: None,
             owner_params: Vec::new(),
             type_paths: BTreeMap::new(),
             opaque: std::collections::BTreeSet::new(),
@@ -477,19 +734,27 @@ impl Counter {
             verus_fns: BTreeMap::new(),
             shipped: true,
             sure: true,
+            no_decreases: false,
             guards: Vec::new(),
             fn_ptrs: FnPtrs::default(),
             addressed: Vec::new(),
             atoms,
             fn_ptr_macro,
             trusted: Vec::new(),
+            trusted_for_termination: std::collections::BTreeSet::new(),
+            trusted_otherwise: std::collections::BTreeSet::new(),
+            trusted_covered: std::collections::BTreeSet::new(),
             assumed: Vec::new(),
             verus_only_ghost: false,
             macros: BTreeMap::new(),
             uses: BTreeMap::new(),
             dry: None,
             unresolved: Vec::new(),
+            invoked: Vec::new(),
+            carry: Default::default(),
+            inline_macro_use: Vec::new(),
             modules: std::collections::BTreeSet::new(),
+            cfg_modules: std::collections::BTreeSet::new(),
             proof_trees: Vec::new(),
             macro_use: Vec::new(),
             bindings: Vec::new(),
@@ -544,6 +809,8 @@ struct FnRef {
     name: String,
     class: Class,
     calls: Vec<(bool, String)>,
+    /// Its body's loops, for the nested-loop check ([`nested_loops`]).
+    loops: LoopShape,
     /// What the body names, for the compile-inputs check ([`inputs`]).
     body: inputs::Body,
     /// Its parameters, the receiver aside, and whether it has one.
@@ -637,34 +904,35 @@ fn is_c_abi(sig: &Signature) -> bool {
     })
 }
 
-/// Whether C can call the function by its name: `#[no_mangle]` or
-/// `#[export_name = ..]`, either one inside `#[unsafe(..)]` too. That, not
-/// the ABI, makes a function an entry point ([`entry_roots`]); the ABI is
-/// then [`is_c_abi`]'s to check ([`Counter::record`]).
-fn exports_symbol(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        let tokens = verus_syn::__private::ToTokens::to_token_stream(&a.meta);
-        let mut idents = Vec::new();
-        let mut stack = vec![tokens];
-        while let Some(ts) = stack.pop() {
-            for t in ts {
-                match t {
-                    TokenTree::Ident(i) => idents.push(i.to_string()),
-                    TokenTree::Group(g) if g.delimiter() == proc_macro2::Delimiter::Parenthesis => {
-                        stack.push(g.stream());
-                    }
-                    _ => {}
+/// Whether C can call the function by its name in some shipped build:
+/// `#[no_mangle]` or `#[export_name = ..]`, either one inside
+/// `#[unsafe(..)]` too, read through [`applied_attrs`], so under
+/// `cfg_attr`s nested to any depth and beside other attributes. One a
+/// `cfg_attr` applies counts when a shipped build can meet its predicates
+/// (by [`cfg_eval`]): a feature, in `verus_sets` or not, a platform, or
+/// any atom the configuration does not settle, so no function a shipped
+/// C caller may enter drops out of the walk. One whose predicates no
+/// shipped build meets (`any()`, a test atom, a Verus-only one) does not.
+/// A predicate it cannot read is an error. That, not the ABI, makes a
+/// function an entry point ([`entry_roots`]); the ABI is then
+/// [`is_c_abi`]'s to check ([`Counter::record`]).
+fn exports_symbol(attrs: &[Attribute], atoms: &Atoms) -> Result<bool, String> {
+    let names = |t: Option<&TokenTree>| matches!(t, Some(TokenTree::Ident(i)) if i == "no_mangle" || i == "export_name");
+    for (preds, toks) in applied_attrs(attrs) {
+        let exports = names(toks.first())
+            || match toks.as_slice() {
+                [TokenTree::Ident(u), TokenTree::Group(g), ..]
+                    if u == "unsafe" && g.delimiter() == proc_macro2::Delimiter::Parenthesis =>
+                {
+                    names(g.stream().into_iter().next().as_ref())
                 }
-            }
+                _ => false,
+            };
+        if exports && (preds.is_empty() || cfg_eval(&all_of(&preds), false, atoms)?.t) {
+            return Ok(true);
         }
-        match idents.first().map(String::as_str) {
-            Some("no_mangle" | "export_name") => true,
-            Some("unsafe") => idents
-                .get(1)
-                .is_some_and(|i| i == "no_mangle" || i == "export_name"),
-            _ => false,
-        }
-    })
+    }
+    Ok(false)
 }
 
 /// A signature's parameters, the receiver aside, and whether it has one.
@@ -691,8 +959,9 @@ fn arity(sig: &Signature) -> (usize, bool) {
 /// the declarations a file makes under the other reading of where its
 /// modules live, for a file another target may read the other way (a
 /// root read as a module, a main.rs or lib.rs that is a module, a
-/// `#[path]`-named file declared by its place elsewhere); only
-/// [`Counter::add_proof_trees`] reads them, as files a target may compile.
+/// `#[path]`-named file declared by its place elsewhere);
+/// [`Counter::add_proof_trees`] and [`module_guards`] read them, as files
+/// a target may compile.
 #[derive(Default)]
 struct ModFiles {
     inner: Vec<(PathBuf, Vec<String>)>,
@@ -739,8 +1008,8 @@ const UNREAD_DECLARATION: &str = "verus_count_unread_declaration";
 /// edition`, or, with `edition.workspace = true`, `[workspace.package]
 /// edition` of `root`'s Cargo.toml; 2015 when none is given, as cargo
 /// reads it; the lowest of that and any target's own, `[lib] edition`
-/// and the like), and each of `vstd`, `verus_builtin_macros`, `core`, `std` and `alloc`
-/// that a dependency table (`[dependencies]`, `[dev-dependencies]`,
+/// and the like), and each of std's and Verus's crate names
+/// ([`STD_OR_VERUS_CRATES`]) that a dependency table (`[dependencies]`, `[dev-dependencies]`,
 /// `[build-dependencies]`, or a `[target.*]` one) takes for another
 /// package (`vstd = { package = "other" }`, directly or through a
 /// `{ workspace = true }` entry of `[workspace.dependencies]`), or
@@ -787,7 +1056,7 @@ fn crate_manifest(root: &Path, dir: &Path) -> (u32, Vec<(String, String)>) {
     for table in tables.into_iter().filter_map(toml::Value::as_table) {
         for (key, dep) in table {
             let name = key.replace('-', "_");
-            if !["vstd", "verus_builtin_macros", "core", "std", "alloc"].contains(&name.as_str()) {
+            if !STD_OR_VERUS_CRATES.contains(&name.as_str()) {
                 continue;
             }
             // `{ workspace = true }` takes the workspace's entry of the key,
@@ -968,6 +1237,22 @@ fn walked_editions(root: &Path, dir: &Path) -> Vec<u32> {
 /// undeclared, never verified. A manifest it cannot read gives the default
 /// targets.
 fn crate_roots(dir: &Path) -> Vec<PathBuf> {
+    declared_roots(dir, ALL_TARGETS)
+        .into_iter()
+        .filter_map(|r| fs::canonicalize(r).ok())
+        .collect()
+}
+
+/// Every kind of target whose `path` [`declared_roots`] reads besides the
+/// library.
+const ALL_TARGETS: &[&str] = &["bin", "example", "test", "bench"];
+
+/// The root files [`crate_roots`] gives, as the manifest and the directory
+/// listing name them under `dir`, before links are resolved, so a root
+/// reached through a link under `src/` is seen at the path cargo names:
+/// the library's, and each `path` of the target tables `kinds` names
+/// (`bin`, `example`, `test`, `bench`), with the binaries autobins finds.
+fn declared_roots(dir: &Path, kinds: &[&str]) -> Vec<PathBuf> {
     let manifest: toml::Table = fs::read_to_string(dir.join("Cargo.toml"))
         .ok()
         .and_then(|t| toml::from_str(&t).ok())
@@ -991,8 +1276,8 @@ fn crate_roots(dir: &Path) -> Vec<PathBuf> {
         None if auto("autolib") => roots.push(src.join("lib.rs")),
         None => {}
     }
-    for kind in ["bin", "example", "test", "bench"] {
-        if let Some(targets) = manifest.get(kind).and_then(toml::Value::as_array) {
+    for kind in kinds {
+        if let Some(targets) = manifest.get(*kind).and_then(toml::Value::as_array) {
             roots.extend(targets.iter().filter_map(path_of));
         }
     }
@@ -1006,9 +1291,6 @@ fn crate_roots(dir: &Path) -> Vec<PathBuf> {
         }
     }
     roots
-        .into_iter()
-        .filter_map(|r| fs::canonicalize(r).ok())
-        .collect()
 }
 
 /// [`ModFiles`] for the parsed module files `files`, each with its path,
@@ -1233,6 +1515,79 @@ fn declared_module_files(
     }
 }
 
+/// An error for each module file a declaration in `mods` names that the
+/// source walk did not read (`walked`, canonical): a `#[path]` to a file
+/// not named `*.rs`, or to one outside the crate's `src/`, or a link the
+/// walk does not follow to one. rustc compiles its functions, so leaving
+/// them out of the counts would raise the verified share. A file only
+/// tests build is left out of the counts anyway, so it may sit anywhere.
+/// The declarations under the other reading of where a file's modules
+/// live (`alternate`: a main.rs or lib.rs that is a module declares them
+/// under `stem/`) count too, as a target may compile them.
+///
+/// The exemption reads reachability, not composed guards. A shipped build
+/// may compile an entry point (a crate root, or a file no declaration of
+/// either reading names, which may be a target the counter does not
+/// know), and any file a declaration names from such a file when that
+/// declaration is not test-only on its own (by its guards and the
+/// declaring file's inner `cfg`s). Such a declaration fails when the walk
+/// did not read its file. Each step is judged alone, so guards that keep
+/// a path out of shipped builds only together give a false failure,
+/// never a pass. The file's own inner `cfg`s are not read, as the walk
+/// did not read the file: one whose `#![cfg(test)]` alone keeps it out of
+/// shipped builds fails too.
+fn unread_module_files(walked: &[PathBuf], mods: &ModFiles, atoms: &Atoms) -> Vec<String> {
+    let both: Vec<&Declared> = mods.declared.iter().chain(&mods.alternate).collect();
+    let inner = |f: &Path| -> Vec<String> {
+        mods.inner
+            .iter()
+            .filter(|(i, _)| i == f)
+            .flat_map(|(_, g)| g.iter().cloned())
+            .collect()
+    };
+    // Whether a declaration is test-only on its own.
+    let test_only = |d: &Declared| {
+        let g = [d.guards.clone(), inner(&d.from)].concat();
+        guarded_built(&g, atoms).is_ok_and(|b| b == Built::Test)
+    };
+    let mut shipped: Vec<PathBuf> = mods.roots.clone();
+    for d in &both {
+        if !both.iter().any(|e| e.file == d.from) && !shipped.contains(&d.from) {
+            shipped.push(d.from.clone());
+        }
+    }
+    loop {
+        let more: Vec<PathBuf> = both
+            .iter()
+            .filter(|d| shipped.contains(&d.from) && !shipped.contains(&d.file) && !test_only(d))
+            .map(|d| d.file.clone())
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        for f in more {
+            if !shipped.contains(&f) {
+                shipped.push(f);
+            }
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    for d in &both {
+        if walked.contains(&d.file) || !shipped.contains(&d.from) || test_only(d) {
+            continue;
+        }
+        let e = format!(
+            "{}: a module declaration names {}, which the counter does not read (it reads the `*.rs` files under the crate's src/); name the file `*.rs` under src/, or put the module under a test-only `cfg`",
+            d.from.display(),
+            d.file.display()
+        );
+        if !out.contains(&e) {
+            out.push(e);
+        }
+    }
+    out
+}
+
 /// The places a module with `attrs` may be: each path its path attributes
 /// give ([`ordered_paths`]), or `None` for its default place, each with the
 /// predicates under which it is the one. rustc takes the first path
@@ -1384,14 +1739,19 @@ fn module_dir(file: &Path) -> Option<PathBuf> {
 /// The `cfg` predicates that must hold for the file `f` to be built, given
 /// the module files `mods` records: its inner `#![cfg(..)]`s, and for each
 /// declaration of it, that declaration's guards and the declaring file's
-/// own ([`module_guards`] of it). A file declared once takes that
+/// own ([`module_guards`] of it). The declarations are those of every
+/// reading that may compile it: the primary one's and the other's
+/// ([`ModFiles::alternate`]). A file declared once takes that
 /// declaration's; one declared several times is built where any
 /// declaration holds, so it takes their `any(all(..), ..)`, and nothing
-/// more when one declaration needs nothing. A crate file no declaration
-/// names, other than a root, is unsure ([`UNREAD_DECLARATION`]) and takes
-/// the guards of each recorded file whose module directory ([`module_dir`])
-/// it is under, so one under a test-only module stays test-only. A root
-/// has its inner `cfg`s alone.
+/// more when one declaration needs nothing. A crate root is built by its
+/// own target too, which needs nothing, so a root has its inner `cfg`s
+/// alone, whatever declares it as a module. A crate file no declaration
+/// of the primary reading names, other than a root, is unsure
+/// ([`UNREAD_DECLARATION`]) and takes the guards of each recorded file
+/// whose module directory ([`module_dir`]) it is under, so one under a
+/// test-only module stays test-only; the other reading's declarations of
+/// it are alternatives beside that one, as they only widen.
 fn module_guards(f: &Path, mods: &ModFiles) -> Vec<String> {
     guards_of(f, mods, &mut Vec::new())
 }
@@ -1409,12 +1769,28 @@ fn guards_of(f: &Path, mods: &ModFiles, seen: &mut Vec<PathBuf>) -> Vec<String> 
         .filter(|(i, _)| i == f)
         .flat_map(|(_, g)| g.iter().cloned())
         .collect();
-    let declarations: Vec<&Declared> = mods.declared.iter().filter(|d| d.file == f).collect();
-    if declarations.is_empty() && !mods.roots.iter().any(|r| r == f) {
-        // No declaration the counter reads names this file, so nothing
-        // shows where it is built: it is unsure, and keeps the guards of
-        // the files whose module directory holds it.
-        out.push(UNREAD_DECLARATION.to_owned());
+    // Every reading that may compile the file: the declarations of the
+    // primary one and of the other ([`ModFiles::alternate`]), and for a
+    // crate root its own target, which needs no declaration.
+    // An alternate declaration is a reading some target may not make
+    // (a root's `mod foo;` read under `src/lib/`), so it shows only that
+    // the file may be built: it is unsure ([`UNREAD_DECLARATION`]), and
+    // so never verified through it.
+    let declarations: Vec<(&Declared, bool)> = mods
+        .declared
+        .iter()
+        .map(|d| (d, false))
+        .chain(mods.alternate.iter().map(|d| (d, true)))
+        .filter(|(d, _)| d.file == f)
+        .collect();
+    let root = mods.roots.iter().any(|r| r == f);
+    // No declaration of the primary reading names this file, so nothing
+    // the counter reads shows where it is built (an `include!` may
+    // compile it): it is unsure, and keeps the guards of the files whose
+    // module directory holds it.
+    let undeclared = !root && declarations.iter().all(|(_, alternate)| *alternate);
+    let fallback = |seen: &mut Vec<PathBuf>| {
+        let mut g = vec![UNREAD_DECLARATION.to_owned()];
         let mut above: Vec<&PathBuf> = mods
             .inner
             .iter()
@@ -1425,17 +1801,33 @@ fn guards_of(f: &Path, mods: &ModFiles, seen: &mut Vec<PathBuf>) -> Vec<String> 
         above.sort();
         above.dedup();
         for m in above {
-            out.extend(guards_of(m, mods, seen));
+            g.extend(guards_of(m, mods, seen));
         }
+        g
+    };
+    if declarations.is_empty() && !root {
+        out.extend(fallback(seen));
     } else if !declarations.is_empty() {
-        let alternatives: Vec<Vec<String>> = declarations
+        let mut alternatives: Vec<Vec<String>> = declarations
             .iter()
-            .map(|d| {
+            .map(|(d, alternate)| {
                 let mut g = d.guards.clone();
+                if *alternate {
+                    g.push(UNREAD_DECLARATION.to_owned());
+                }
                 g.extend(guards_of(&d.from, mods, seen));
                 g
             })
             .collect();
+        if root {
+            alternatives.push(Vec::new());
+        }
+        // The other reading's declarations only widen where the file is
+        // built: one the primary reading does not declare keeps the
+        // fallback beside them.
+        if undeclared {
+            alternatives.push(fallback(seen));
+        }
         match alternatives.as_slice() {
             [one] => out.extend(one.iter().cloned()),
             several if several.iter().any(Vec::is_empty) => {}
@@ -1547,9 +1939,26 @@ fn cfg_eval(p: &str, verus: bool, atoms: &Atoms) -> Result<Can, String> {
         Can { t: true, f: false }
     } else if verus && atoms.never.contains(&w) {
         Can { t: false, f: true }
+    } else if verus && atoms.one_run && other_value_set(&w, &atoms.sets) {
+        // One declared run (#21) sets one value of a single-valued key,
+        // so every other value of it is false there.
+        Can { t: false, f: true }
     } else {
         Can { t: true, f: true }
     })
+}
+
+/// Whether `sets` holds another value of the single-valued key
+/// ([`SINGLE_VALUED`]) of the atom `w` (`target_arch="aarch64"` for
+/// `target_arch="x86_64"`), both without whitespace.
+fn other_value_set(w: &str, sets: &[String]) -> bool {
+    let Some((k, _)) = w.split_once('=') else {
+        return false;
+    };
+    SINGLE_VALUED.contains(&k)
+        && sets
+            .iter()
+            .any(|s| s.as_str() != w && s.split_once('=').is_some_and(|(sk, _)| sk == k))
 }
 
 /// The `cfg` keys rustc gives exactly one value per target (`rustc --print
@@ -1757,7 +2166,7 @@ fn cfg_args(inner: &str) -> Result<Vec<&str>, String> {
 /// Verus's build: only the atoms the configuration settles there are sure,
 /// and only one run's of them at a time ([`names_several_runs`]).
 fn cfg_built(tokens: &str, atoms: &Atoms) -> Result<Built, String> {
-    let verus = cfg_eval(tokens, true, atoms)?;
+    let verus = verus_can(tokens, atoms)?;
     Ok(if cfg_eval(tokens, false, atoms)?.t {
         if verus.f || names_several_runs(tokens, atoms)? {
             Built::Unsure
@@ -1866,7 +2275,7 @@ fn guarded_verus_sure(guards: &[String], atoms: &Atoms) -> Result<bool, String> 
         return Ok(true);
     }
     let all = format!("all({})", guards.join(","));
-    let can = cfg_eval(&all, true, atoms)?;
+    let can = verus_can(&all, atoms)?;
     Ok(can.t && !can.f && !names_several_runs(&all, atoms)?)
 }
 
@@ -1890,6 +2299,23 @@ fn every_run_sure(shared: &[String], own: &[String], atoms: &Atoms) -> Result<bo
         return Ok(false);
     }
     if own.is_empty() {
+        return Ok(true);
+    }
+    // With [[runs]] declared (#21), each run that may compile the module
+    // must be sure to compile the item there: `own` holds wherever
+    // `shared` does, in that run's atoms.
+    if !atoms.runs.is_empty() {
+        let own = all_of(own);
+        let implied = match shared {
+            [] => own,
+            _ => format!("any(not({}),{own})", all_of(shared)),
+        };
+        for run in atoms.each_run() {
+            let can = cfg_eval(&implied, true, &run)?;
+            if can.f {
+                return Ok(false);
+            }
+        }
         return Ok(true);
     }
     let key = |a: &str| a.split_once('=').map(|(k, _)| k.to_owned());
@@ -1946,22 +2372,15 @@ fn cfg_needs_test(tokens: &str, atoms: &Atoms) -> bool {
 }
 
 /// The packages that a build of the workspace at `root` compiles with one
-/// of the test-only `features` (the PCRE2 port's `test-util`), each with the
-/// feature, so that [`cfg_needs_test`] could not leave its
-/// items out, as cargo itself resolves them: `cargo tree` over every
-/// member (a plain `cargo build` builds them all and unifies their
-/// features), for every target, along normal and build edges only, once
-/// with the default features and once with every member's every other
-/// feature too ([`member_features`]), as a build such as
-/// `--features pcre2-capi/hardened` turns them on. Tests' dev-dependencies
-/// are the one place that may enable it, with a member's own `test-util`
-/// feature, which forwards it. Reading cargo's resolution rather than the
-/// manifests leaves no TOML form (quoting, tables, forwarding features,
-/// globbed members) to miss. cargo runs `--locked --offline`: the lockfile
-/// is checked in, and `make verus` has fetched every dependency before
-/// verus-count runs. Its failure, or no cargo at all, is an error rather
-/// than a pass.
-fn test_util_enablers(root: &Path, test: &[String]) -> Result<Vec<(String, String)>, String> {
+/// of the test-only `features`, each with the feature, as cargo itself
+/// resolves them: `cargo tree` over every member, for every target, along
+/// normal and build edges only, once with the default features and once
+/// with every member's every other feature too ([`member_features`]).
+/// The counter reads the manifests instead
+/// ([`features::test_util_enablers`], #136), so that it needs no cargo;
+/// the tests hold that reading to this one, cargo's.
+#[cfg(test)]
+fn cargo_enablers(root: &Path, test: &[String]) -> Result<Vec<(String, String)>, String> {
     let features = member_features(root, test)?;
     let mut enablers = Vec::new();
     for extra in [None, Some(features.join(","))] {
@@ -2000,6 +2419,7 @@ fn test_util_enablers(root: &Path, test: &[String]) -> Result<Vec<(String, Strin
 
 /// Every feature of every workspace member under `root` but the test-only
 /// ones (`test`), as `member/feature`, from `cargo metadata`.
+#[cfg(test)]
 fn member_features(root: &Path, test: &[String]) -> Result<Vec<String>, String> {
     let out = cargo(
         root,
@@ -2030,6 +2450,7 @@ fn member_features(root: &Path, test: &[String]) -> Result<Vec<String>, String> 
 
 /// `cargo args` in `root` (cargo from `$CARGO`, as `cargo run` and `cargo
 /// test` set it, or else from `PATH`): its standard output, or an error.
+#[cfg(test)]
 fn cargo(root: &Path, args: &[&str]) -> Result<String, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let out = std::process::Command::new(&cargo)
@@ -2049,7 +2470,8 @@ fn cargo(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 /// The `#[cfg_attr(any(), discharged_by = "kani")]` marker: Kani checks
-/// this trusted function's contract (verus/README.md, "Kani"). The marker
+/// this trusted function's contract, or what the record states for one
+/// outside `verus!` (verus/README.md, "Kani"). The marker
 /// is inert: `discharged_by` is no attribute rustc knows, so it may only
 /// sit under predicates that hold in no build. It is read through
 /// [`applied_attrs`], so it counts nested or beside other attributes
@@ -2133,6 +2555,27 @@ fn assumes_attributes(attrs: &[Attribute]) -> bool {
         .any(|(_, toks)| names(toks.into_iter().collect()))
 }
 
+/// Whether `attrs` hold `#[verifier::exec_allows_no_decreases_clause]`,
+/// read through [`applied_attrs`]: Verus then checks the exec functions
+/// it covers with no `decreases` on their loops or recursion, so proves
+/// none of them terminates. It fails closed as [`assumes_attributes`]
+/// does: the name counts anywhere in an attribute's tokens outside a
+/// literal, so in any path and in
+/// `#[verifier(exec_allows_no_decreases_clause)]`, and one a `cfg_attr`
+/// applies counts whatever its predicate.
+fn allows_no_decreases(attrs: &[Attribute]) -> bool {
+    fn names(toks: TokenStream) -> bool {
+        toks.into_iter().any(|t| match t {
+            TokenTree::Ident(i) => i == "exec_allows_no_decreases_clause",
+            TokenTree::Group(g) => names(g.stream()),
+            _ => false,
+        })
+    }
+    applied_attrs(attrs)
+        .into_iter()
+        .any(|(_, toks)| names(toks.into_iter().collect()))
+}
+
 /// Whether `attrs` hold Verus's attribute form, which marks a plain Rust
 /// function outside `verus!` for verification: `#[verus_verify]` or
 /// `#[verus_spec(..)]` (by any path), alone or as an attribute a
@@ -2153,6 +2596,10 @@ fn assumes_attributes(attrs: &[Attribute]) -> bool {
 /// read is an error. A `cfg_attr`'s predicate is read together with the
 /// `cfg`s the function is under, `guards`: one under `target_arch =
 /// "x86_64"` whose attribute needs `target_arch = "aarch64"` never applies.
+/// With `[[runs]]` declared (#21), the attribute is sure only when every
+/// run that may compile the function is sure to apply it
+/// ([`every_run_sure`]); the combined class of all runs is not enough, as
+/// a run where the `cfg_attr` is false compiles the function without it.
 fn verus_attribute(
     attrs: &[Attribute],
     guards: &[String],
@@ -2180,11 +2627,17 @@ fn verus_attribute(
         if preds.is_empty() {
             return Ok(Some(true));
         }
+        // With [[runs]] declared (#21), each run that may compile the
+        // function must be sure to apply the attribute: a run where the
+        // `cfg_attr` is false compiles the function without it.
+        if !atoms.runs.is_empty() && every_run_sure(guards, &preds, atoms)? {
+            return Ok(Some(true));
+        }
         let mut all = guards.to_vec();
         all.extend(preds);
         let all = format!("all({})", all.join(","));
-        let can = cfg_eval(&all, true, atoms)?;
-        if can.t && !can.f && !names_several_runs(&all, atoms)? {
+        let can = verus_can(&all, atoms)?;
+        if atoms.runs.is_empty() && can.t && !can.f && !names_several_runs(&all, atoms)? {
             return Ok(Some(true));
         }
         maybe |= can.t;
@@ -2312,7 +2765,9 @@ fn is_trusted_proof(sig: &Signature, attrs: &[Attribute], body: Option<&TokenStr
 /// How the tally classes a function, `in_verus` when it is under `verus!`:
 /// `None` for a ghost one (spec or proof) that is not a trusted proof, which
 /// is counted apart. Shipped code and code built only for Verus are classed
-/// by this one rule.
+/// by this one rule. A function outside `verus!` with the Kani marker is
+/// discharged, as a trusted one with it is: Kani checks it, on the bounded
+/// inputs its record names, and Verus checks nothing of it either way.
 fn classify(
     in_verus: bool,
     sig: &Signature,
@@ -2320,7 +2775,11 @@ fn classify(
     body: Option<&TokenStream>,
 ) -> Option<Class> {
     if !in_verus {
-        return Some(Class::Outside);
+        return Some(if is_discharged(attrs) {
+            Class::Discharged
+        } else {
+            Class::Outside
+        });
     }
     let trusted_proof = is_trusted_proof(sig, attrs, body);
     if is_ghost(sig) && !trusted_proof {
@@ -2365,17 +2824,23 @@ impl Counter {
     /// Enters code (a module, `impl`, trait or `verus!` block) with `attrs`
     /// whose `cfg` classes it `built`, other than test-only: returns what
     /// [`Counter::leave`] restores.
-    fn enter(&mut self, built: Built, attrs: &[Attribute]) -> (bool, bool, usize) {
-        let was = (self.shipped, self.sure, self.guards.len());
+    fn enter(&mut self, built: Built, attrs: &[Attribute]) -> (bool, bool, bool, usize) {
+        let was = (
+            self.shipped,
+            self.sure,
+            self.no_decreases,
+            self.guards.len(),
+        );
         self.shipped &= matches!(built, Built::Shipped | Built::Unsure);
         self.sure &= built != Built::Unsure;
+        self.no_decreases |= allows_no_decreases(attrs);
         self.guards.extend(cfg_predicates(attrs));
         was
     }
 
     /// Leaves the code [`Counter::enter`] entered.
-    fn leave(&mut self, (shipped, sure, guards): (bool, bool, usize)) {
-        (self.shipped, self.sure) = (shipped, sure);
+    fn leave(&mut self, (shipped, sure, no_decreases, guards): (bool, bool, bool, usize)) {
+        (self.shipped, self.sure, self.no_decreases) = (shipped, sure, no_decreases);
         self.guards.truncate(guards);
     }
 
@@ -2448,6 +2913,56 @@ impl Counter {
             }
         }
         let class = classify(in_verus, sig, attrs, body.as_ref());
+        // An exec function Verus lets go without a `decreases` (on it, or
+        // on the module, `impl` or trait around it) is trusted: nothing
+        // proves its loops and recursion end, Verus's check or a Kani
+        // record ([`Class::Discharged`]) alike.
+        let no_decreases = self.no_decreases || allows_no_decreases(attrs);
+        // Whether the attribute alone makes it trusted (only a generated
+        // ledger reads this): without it, a verified function stays
+        // verified where Verus's build is sure to compile it, or on the
+        // path below that leaves verified code out of the tally (code no
+        // shipped build compiles); on the shipped path an unsure one would
+        // be trusted all the same. A discharged one is not: it is
+        // `external_body` or calls `assume`, with the Kani marker, which a
+        // ledger does not take as discharging it, so without the attribute
+        // it is trusted for that. Any other exec function the attribute
+        // covers is trusted for another reason as well. Code outside
+        // `verus!` keeps its class: the attribute is Verus's, and covers
+        // none of it, a function with the Kani marker included.
+        let covers = no_decreases && in_verus && !is_ghost(sig);
+        let mut covered = if covers { Covered::Also } else { Covered::No };
+        let class = match class {
+            Some(c @ (Class::Verified | Class::Discharged)) if covers => {
+                if c == Class::Verified && (sure || built == Built::Verus || !self.shipped) {
+                    covered = Covered::Only;
+                }
+                // Its Kani marker discharges nothing, but with a ledger
+                // it is refused all the same (#169). A candidate
+                // definition's walk gives the marker a row, so candidates
+                // that differ only in it count differently and fail the
+                // run, as they do for a function the attribute does not
+                // cover (Discharged against Trusted), rather than leave
+                // the first candidate to decide whether it is refused.
+                if c == Class::Discharged {
+                    match &mut self.dry {
+                        Some(rows) => rows.push((
+                            Class::Trusted,
+                            format!(
+                                "discharged_by = \"kani\" under exec_allows_no_decreases_clause {}",
+                                sig.ident
+                            ),
+                            0,
+                        )),
+                        None => self
+                            .marked_covered
+                            .push((self.file.clone(), sig.ident.to_string())),
+                    }
+                }
+                Some(Class::Trusted)
+            }
+            c => c,
+        };
         let (at, lines) = match &self.expansion {
             Some(line) => (*line, expansion_lines(sig, body.as_ref(), close)),
             None => (start, end.saturating_sub(start) + 1),
@@ -2470,12 +2985,13 @@ impl Counter {
             // A shipped build compiles none of this code, so its verified,
             // ghost and outside functions leave the tally. A trusted one
             // still counts: a shipped function's proof can rest on it, so
-            // it is a seam.
+            // it is a seam. One outside `verus!` with the Kani marker is no
+            // seam, since no proof rests on it, and leaves the tally too.
             // With `verus_only_ghost`, its ghost functions join the ghost
             // column, which Verus checks all the same.
             match class {
-                Some(class @ (Class::Trusted | Class::Discharged)) => {
-                    self.tally(class, sig.ident.to_string(), at, lines);
+                Some(class @ (Class::Trusted | Class::Discharged)) if in_verus => {
+                    self.tally_fn(class, sig.ident.to_string(), at, lines, covered);
                 }
                 None if self.verus_only_ghost => {
                     self.tallies.entry(self.krate.clone()).or_default().ghost += 1;
@@ -2495,17 +3011,48 @@ impl Counter {
         } else {
             class
         };
+        // A discharged function outside `verus!` gives Verus nothing to
+        // check, so it does not make its crate one that needs
+        // `[package.metadata.verus] verify = true` ([`verus_crates`]).
+        if class == Class::Discharged && !in_verus && self.dry.is_none() {
+            self.tallies
+                .entry(self.krate.clone())
+                .or_default()
+                .outside_discharged += 1;
+            // Plain Rust holds many same-named functions (`new`, `drop`, an
+            // `init` in two inline modules), so a quote of `fn NAME` alone
+            // could cover each of them: the record names it by its key too.
+            let inline = &self.module[self.module.len().saturating_sub(self.inline_mods)..];
+            let key = owner_key(&self.owner, self.owner_trait.as_deref())
+                .or_else(|| (!inline.is_empty()).then(|| inline.join("::")));
+            // The owner's last identifier: `A` for `A`, `B<u8>`, `&'a A` or
+            // `crate::A`.
+            let owner = owner_name(&self.owner).and_then(|o| {
+                o.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .rfind(|s| !s.is_empty())
+                    .map(str::to_owned)
+            });
+            self.outside.push(OutsideMark {
+                krate: self.krate.clone(),
+                file: self.file.clone(),
+                name: sig.ident.to_string(),
+                key,
+                owner,
+            });
+        }
         // A macro's expansion is counted, not walked: the walks read the
         // configured macros their own way (`[reach]`'s `exports_macro`
         // and `fn_ptr_macro`).
         if self.expansion.is_some() {
-            self.tally(class, sig.ident.to_string(), at, lines);
+            self.tally_fn(class, sig.ident.to_string(), at, lines, covered);
             return None;
         }
         let mut calls = Vec::new();
         let mut names = inputs::Body::default();
+        let mut loops = LoopShape::default();
         if let Some(b) = &body {
             direct_calls(b.clone(), &mut calls);
+            loops = loop_shape(b.clone());
             names = inputs::body(b.clone());
             inputs::statics_in(b.clone(), false, &mut self.statics);
             inputs::aliases_in(b.clone(), &mut self.aliases);
@@ -2519,13 +3066,80 @@ impl Counter {
             name: sig.ident.to_string(),
             class,
             calls,
+            loops,
             body: names,
             params: arity(sig).0,
             receiver: arity(sig).1,
             entry,
         });
-        self.tally(class, sig.ident.to_string(), at, lines);
-        Some(class)
+        self.tally_fn(class, sig.ident.to_string(), at, lines, covered);
+        // The functions nested in its body take the class returned here
+        // ([`Counter::nested`]). A marked function outside `verus!` is
+        // discharged by its own record and harness alone, which check
+        // nothing it nests (a nested `extern "C"` entry point included),
+        // so those stay outside.
+        Some(if class == Class::Discharged && !in_verus {
+            Class::Outside
+        } else {
+            class
+        })
+    }
+
+    /// [`Counter::tally`] for a function, recording a trusted one's line as
+    /// trusted by `exec_allows_no_decreases_clause` alone or otherwise, and
+    /// as covered by the attribute or not (`covered`).
+    fn tally_fn(
+        &mut self,
+        class: Class,
+        name: String,
+        start: usize,
+        lines: usize,
+        covered: Covered,
+    ) {
+        if class == Class::Trusted {
+            match &mut self.dry {
+                // A candidate definition's walk: why the function is
+                // trusted is a row too, so two candidates that differ only
+                // in that count differently and fail the run, rather than
+                // leave the first one's reason to decide whether a
+                // `no_decreases` ledger row stands for the function, or
+                // whether a function seam there can class it (as with
+                // `assume_unsupported_attributes`).
+                Some(rows) if covered == Covered::Only => rows.push((
+                    Class::Trusted,
+                    format!("#[verifier::exec_allows_no_decreases_clause] {name}"),
+                    0,
+                )),
+                Some(rows) if covered == Covered::Also => rows.push((
+                    Class::Trusted,
+                    format!("#[verifier::exec_allows_no_decreases_clause] (also trusted) {name}"),
+                    0,
+                )),
+                Some(_) => {}
+                None => {
+                    let loc = format!("{}:{start}", self.file.display());
+                    if covered != Covered::No {
+                        self.trusted_covered.insert(loc.clone());
+                    }
+                    if covered == Covered::Only {
+                        self.trusted_for_termination.insert(loc);
+                    } else {
+                        self.trusted_otherwise.insert(loc);
+                    }
+                }
+            }
+        }
+        self.tally(class, name, start, lines);
+    }
+
+    /// The `FILE:LINE` of each trusted function a ledger's `no_decreases`
+    /// seam may stand for: every trusted function at that line would be
+    /// verified but for `exec_allows_no_decreases_clause`.
+    fn termination_only(&self) -> std::collections::BTreeSet<String> {
+        self.trusted_for_termination
+            .difference(&self.trusted_otherwise)
+            .cloned()
+            .collect()
     }
 
     /// Counts function `name`, of class `class`, `lines` long and listed at
@@ -2682,6 +3296,7 @@ impl Counter {
                         .collect();
                     let mut calls = Vec::new();
                     let names = inputs::body(body.clone());
+                    let loops = loop_shape(body.clone());
                     direct_calls(body, &mut calls);
                     self.fns.push(FnRef {
                         krate: krate.clone(),
@@ -2691,6 +3306,7 @@ impl Counter {
                         name: g.sig.ident.to_string(),
                         class: Class::Outside,
                         calls,
+                        loops,
                         body: names,
                         params: arity(&g.sig).0,
                         receiver: arity(&g.sig).1,
@@ -2703,9 +3319,14 @@ impl Counter {
 
     /// Whether a function with `attrs` and `sig`, at `line`, is a C entry
     /// point ([`exports_symbol`]). An exported symbol whose ABI C cannot
-    /// call ([`is_c_abi`]) is an error.
+    /// call ([`is_c_abi`]) is an error, and so is a `cfg_attr` predicate it
+    /// cannot read, which leaves the function an entry point.
     fn entry(&mut self, attrs: &[Attribute], sig: &Signature, line: usize) -> bool {
-        let entry = exports_symbol(attrs);
+        let entry = exports_symbol(attrs, &self.atoms).unwrap_or_else(|e| {
+            eprintln!("{}:{line}: `{}`: {e}", self.file.display(), sig.ident);
+            self.errors += 1;
+            true
+        });
         if entry && !is_c_abi(sig) {
             eprintln!(
                 "{}:{line}: `{}` exports its symbol but its ABI is not C's (extern \"C\", \"C-unwind\" or bare extern)",
@@ -2822,6 +3443,7 @@ impl Counter {
                 let body: TokenStream = block.stmts.iter().map(ToTokens::to_token_stream).collect();
                 let mut calls = Vec::new();
                 let names = inputs::body(body.clone());
+                let loops = loop_shape(body.clone());
                 direct_calls(body, &mut calls);
                 let line = sig.fn_token.span.start().line;
                 let entry = self.entry(attrs, sig, line);
@@ -2833,6 +3455,7 @@ impl Counter {
                     name: sig.ident.to_string(),
                     class,
                     calls,
+                    loops,
                     body: names,
                     params: arity(sig).0,
                     receiver: arity(sig).1,
@@ -2967,6 +3590,12 @@ impl Counter {
                         verus_syn::__private::ToTokens::to_token_stream(&*i.self_ty).to_string(),
                     );
                     let outer_impl = std::mem::replace(&mut self.owner_impl, true);
+                    let outer_trait = std::mem::replace(
+                        &mut self.owner_trait,
+                        i.trait_.as_ref().map(|(_, path, _)| {
+                            verus_syn::__private::ToTokens::to_token_stream(path).to_string()
+                        }),
+                    );
                     let outer_params = std::mem::replace(
                         &mut self.owner_params,
                         i.generics
@@ -3018,6 +3647,7 @@ impl Counter {
                     }
                     self.owner = outer;
                     self.owner_impl = outer_impl;
+                    self.owner_trait = outer_trait;
                     self.owner_params = outer_params;
                     self.leave(was);
                 }
@@ -3032,6 +3662,7 @@ impl Counter {
                     }
                     let outer = std::mem::replace(&mut self.owner, t.ident.to_string());
                     let outer_impl = std::mem::replace(&mut self.owner_impl, false);
+                    let outer_trait = self.owner_trait.take();
                     for ti in &t.items {
                         if let TraitItem::Fn(f) = ti
                             && let Some(block) = &f.default
@@ -3059,6 +3690,7 @@ impl Counter {
                     }
                     self.owner = outer;
                     self.owner_impl = outer_impl;
+                    self.owner_trait = outer_trait;
                     self.leave(was);
                 }
                 Item::Mod(m) => {
@@ -3068,13 +3700,32 @@ impl Counter {
                     {
                         let was = self.enter(built, &m.attrs);
                         self.module.push(m.ident.to_string());
+                        self.inline_mods += 1;
+                        self.inline_macro_use.push(has_attr(&m.attrs, "macro_use"));
                         let instance =
                             mod_instance(&self.file, self.expansion, m.ident.span().start());
                         let outer = std::mem::replace(&mut self.scope, instance);
                         self.items(inner, in_verus);
                         self.scope = outer;
+                        self.inline_macro_use.pop();
+                        self.inline_mods -= 1;
                         self.module.pop();
                         self.leave(was);
+                    } else if built != Built::Test
+                        && m.content.is_none()
+                        && (self.no_decreases || allows_no_decreases(&m.attrs))
+                    {
+                        // The attribute covers the module, on it or on a
+                        // module or file around it, but the module's file,
+                        // and every file under it, is walked on its own,
+                        // so it would not reach the functions it covers.
+                        eprintln!(
+                            "{}:{}: #[verifier::exec_allows_no_decreases_clause] covers `mod {};`, a module the counter reads file by file: put it on the functions, impls, traits or inline modules it covers",
+                            self.file.display(),
+                            m.mod_token.span.start().line,
+                            m.ident
+                        );
+                        self.errors += 1;
                     }
                 }
                 Item::Static(s) if self.item_ships(&s.attrs) => {
@@ -3126,8 +3777,10 @@ impl Counter {
                         && self.item_ships(&m.attrs) =>
                 {
                     inputs::statics_in(m.mac.tokens.clone(), true, &mut self.statics);
+                    // One not shown to be std's is read as any other macro
+                    // of its name ([`Counter::item_macro`]).
                     if !self.std_thread_local(&m.mac.path) {
-                        self.opaque.insert(self.module.clone());
+                        self.item_macro(&m.attrs, &m.mac, None);
                     }
                 }
                 Item::Macro(m)
@@ -3216,6 +3869,24 @@ impl Counter {
                         .map(ToString::to_string)
                         .unwrap_or_default();
                     let file = self.file.clone();
+                    // Its scope ends with the innermost module around it
+                    // without `#[macro_use]`; where every one up to the
+                    // file's top has it, it is carried out as one written
+                    // at the top is.
+                    let through = self
+                        .inline_macro_use
+                        .iter()
+                        .rev()
+                        .take_while(|u| **u)
+                        .count();
+                    let (scope, carried_at, split) = if through == self.inline_macro_use.len()
+                        && self.module.starts_with(&self.carry.0)
+                    {
+                        (self.carry.1.clone(), self.carry.2.clone(), self.carry.3)
+                    } else {
+                        let keep = self.module.len().saturating_sub(through);
+                        (self.module[..keep].to_vec(), Vec::new(), false)
+                    };
                     let mut def = macro_def(
                         m,
                         &DefsAt {
@@ -3226,7 +3897,10 @@ impl Counter {
                                 (true, false) => Built::Unsure,
                                 (true, true) => Built::Shipped,
                             },
-                            scope: self.module.clone(),
+                            guards: self.guards.clone(),
+                            scope,
+                            carried_at,
+                            split,
                         },
                         &self.atoms,
                         true,
@@ -3252,17 +3926,20 @@ impl Counter {
     /// ([`macro_defs`]), so that an invocation in one file expands a
     /// definition in another; then each file is walked under its modules'
     /// `cfg`s. `tests`, if given, gathers the `#[test]` functions a ledger
-    /// may name.
+    /// may name. With `skip_packages` (#198), the other packages'
+    /// directories under `src/` are left out ([`rust_files`]); a root of
+    /// the crate's targets there fails the run, as a module file the walk
+    /// does not read does ([`unread_module_files`]).
     fn walk_crate(
         &mut self,
         cfg: &Config,
-        (root, k): (&Path, &Path),
+        (root, k, skip_packages): (&Path, &Path, bool),
         mut tests: Option<&mut std::collections::BTreeSet<String>>,
     ) {
         let src = k.join("src");
         let src = src.as_path();
         let mut paths = Vec::new();
-        rust_files(src, &mut paths);
+        rust_files(src, skip_packages, &mut paths);
         // A same-length stand-in for an identifier Verus keeps as a keyword
         // (the PCRE2 port's `assert::`) keeps the line numbers.
         let read: Vec<(PathBuf, Option<verus_syn::Result<verus_syn::File>>)> = paths
@@ -3284,7 +3961,61 @@ impl Counter {
             }
         }
         let mut bad = Vec::new();
-        let mods = module_files(&ok, crate_roots(k), &self.atoms, &mut bad);
+        let roots = crate_roots(k);
+        if skip_packages {
+            // Each root by the path cargo names (a link under src/ into a
+            // package's directory) and by where it leads.
+            for r in declared_roots(k, ALL_TARGETS)
+                .iter()
+                .filter(|r| r.is_file() && in_left_out(src, r))
+            {
+                bad.push(format!(
+                    "{}: a target's root file is {}, in a directory under src/ with its own Cargo.toml, which the counter does not read for this crate (skip_packages); move the target's root out of that directory, or drop skip_packages",
+                    k.join("Cargo.toml").display(),
+                    r.display()
+                ));
+            }
+            let defined =
+                macro_rules_names(ok.iter().map(|(_, file)| file), &crate_manifest(root, k).1);
+            for (f, file) in &ok {
+                for (line, what, to) in
+                    unfollowed_includes((src, f), file, &defined, |to| in_left_out(src, to))
+                {
+                    match what {
+                        Include::Path(lit) => {
+                            bad.push(format!(
+                                "{}:{line}: include!({lit:?}) names {}, in a directory under src/ with its own Cargo.toml, which the counter does not read for this crate (skip_packages); move the file out of that directory, or drop skip_packages",
+                                f.display(),
+                                to.display()
+                            ));
+                        }
+                        Include::OutDir => {}
+                        Include::Unresolved(arg) => bad.push(format!(
+                            "{}:{line}: include!({arg}) names a file the counter cannot resolve in a crate with skip_packages, so it may be in a directory the counter does not read for this crate; give the path as one string literal (or as concat!(env!(\"OUT_DIR\"), ..)), or drop skip_packages",
+                            f.display()
+                        )),
+                        Include::InMacro(arg) => bad.push(format!(
+                            "{}:{line}: {arg} is inside a macro_rules! definition, so rustc resolves its path from wherever the macro is invoked, which the counter does not follow in a crate with skip_packages; move the include! out of the macro (as one string literal, or as concat!(env!(\"OUT_DIR\"), ..)), or drop skip_packages",
+                            f.display()
+                        )),
+                        Include::Imported(tree) => bad.push(format!(
+                            "{}:{line}: `use {tree}` imports `include`, and the counter cannot follow a renamed or imported include in a crate with skip_packages; invoke include! by its own name, or drop skip_packages",
+                            f.display()
+                        )),
+                        Include::Forwarded => bad.push(format!(
+                            "{}:{line}: a macro invocation's arguments name include outside an include! invocation, which the macro may forward to one, and the counter cannot follow that in a crate with skip_packages; invoke include! itself, or drop skip_packages",
+                            f.display()
+                        )),
+                    }
+                }
+            }
+        }
+        let mods = module_files(&ok, roots, &self.atoms, &mut bad);
+        bad.extend(unread_module_files(
+            &read.iter().map(|(f, _)| canonical(f)).collect::<Vec<_>>(),
+            &mods,
+            &self.atoms,
+        ));
         for e in &bad {
             eprintln!("{e}");
         }
@@ -3309,8 +4040,12 @@ impl Counter {
         self.uses.clear();
         // The modules a `#[macro_use] mod name;` declares, whose textual
         // scope carries on into the module that declares them.
-        let mut carried = std::collections::BTreeSet::new();
+        let mut carried = Carried::new();
+        // The inline modules' declarations: the scope of a file `mod` one
+        // with `#[macro_use]` declares carries on outward through it.
+        let mut inline_carried = InlineMods::new();
         self.modules.clear();
+        self.cfg_modules.clear();
         self.macro_use.clear();
         (self.edition, self.renamed_deps) = crate_manifest(root, k);
         // Macros match by the edition of the target compiling them. The
@@ -3331,7 +4066,17 @@ impl Counter {
             let Some(Ok(file)) = p else { continue };
             let module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
             self.modules.insert(module.clone());
-            macro_use_mods(&file.items, &module, (&mut carried, &mut self.modules));
+            macro_use_mods(
+                &file.items,
+                &module,
+                f.strip_prefix(root).unwrap_or(f),
+                (&mut carried, &mut inline_carried, &mut self.modules),
+            );
+            cfg_gated_mods(&file.items, &module, &mut self.cfg_modules);
+            // A module file's own `#![cfg]` may leave it out too.
+            if !cfg_predicates(&file.attrs).is_empty() {
+                self.cfg_modules.insert(module.clone());
+            }
             if class(i) == Built::Test {
                 continue;
             }
@@ -3350,18 +4095,52 @@ impl Counter {
             bindings_in(&file.items, &at, &self.atoms, &mut bindings);
         }
         self.add_proof_trees(&mods, (root, src), &files);
+        // Each file's module, and the scope and chain a definition at its
+        // top has: each `#[macro_use] mod name;` carrying it out, and each
+        // inline `#[macro_use]` module around such a `mod` (whose own
+        // file and line the `mod`'s step already gives). A module declared
+        // by more than one `mod` (under `cfg`s) has no one place in its
+        // parent: its definitions are not ordered against the others
+        // there.
+        let carry: Vec<Carry> = files
+            .iter()
+            .map(|f| {
+                let module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
+                let mut scope = module.clone();
+                let mut carried_at = Vec::new();
+                let mut split = false;
+                loop {
+                    if let Some(decls) = carried.get(&scope)
+                        && let Some(c) = decls.iter().flatten().min_by_key(|(_, l)| *l)
+                    {
+                        carried_at.push(c.clone());
+                        split |= decls.len() > 1;
+                    } else if !carried_at.is_empty()
+                        && inline_carried
+                            .get(&scope)
+                            .is_some_and(|d| d.contains(&true))
+                    {
+                        // A file `mod` that two declarations of an inline
+                        // module both hold is itself declared twice.
+                    } else {
+                        break;
+                    }
+                    scope.pop();
+                }
+                (module, scope, carried_at, split)
+            })
+            .collect();
         for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
             let Some(Ok(file)) = p else { continue };
-            let module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
-            let mut scope = module.clone();
-            while carried.contains(&scope) {
-                scope.pop();
-            }
+            let (module, scope, carried_at, split) = carry[i].clone();
             let at = DefsAt {
                 file: f.strip_prefix(root).unwrap_or(f),
                 scope,
                 module,
                 built: class(i),
+                guards: classes[i].1.clone(),
+                carried_at,
+                split,
             };
             macro_defs(
                 &file.items,
@@ -3426,7 +4205,31 @@ impl Counter {
         self.bindings = bindings;
         self.emitted.clear();
         self.took.clear();
+        self.invoked.clear();
         for (i, (f, p)) in files.iter().zip(&parsed).enumerate() {
+            // The Kani harnesses live in test-only files (`cfg(kani)`), so
+            // they are gathered before those are skipped: from a file some
+            // target builds, a crate root or one a `mod` declares under
+            // `cfg`s cargo kani may meet ([`kani_skips`]). An orphan file,
+            // or one only `#[cfg(any())] mod x;` or `#[cfg(test)] mod x;`
+            // declares, holds no harness `make kani` runs.
+            let cf = canonical(f);
+            let declared = mods.roots.contains(&cf)
+                || mods
+                    .declared
+                    .iter()
+                    .chain(&mods.alternate)
+                    .any(|d| d.file == cf);
+            if declared
+                && !kani_skips(&module_guards(&cf, &mods))
+                && let Some(Ok(file)) = p
+            {
+                kani_harnesses(
+                    &file.items,
+                    f.strip_prefix(root).unwrap_or(f),
+                    self.harnesses.entry(self.krate.clone()).or_default(),
+                );
+            }
             // A module built only for Verus is read for its rlimits alone,
             // and one Verus's build might not compile counts no function
             // verified. Its items are read under its modules' `cfg`s.
@@ -3442,9 +4245,19 @@ impl Counter {
                 self.files.push((self.krate.clone(), self.file.clone()));
             }
             self.module = module_path(&self.krate, f.strip_prefix(src).unwrap_or(f));
+            self.carry = carry[i].clone();
             self.scope = self.file.display().to_string();
+            self.no_decreases = false;
             match p {
-                Some(Ok(file)) => self.items(&file.items, false),
+                Some(Ok(file)) => {
+                    // A file's inner `#![verifier::exec_allows_no_decreases_clause]`
+                    // covers its own functions; a `mod x;` under it fails
+                    // the run ([`Counter::items`]), since `x`'s file is
+                    // walked on its own.
+                    self.no_decreases = allows_no_decreases(&file.attrs);
+                    self.items(&file.items, false);
+                    self.no_decreases = false;
+                }
                 Some(Err(e)) => {
                     eprintln!("{}:{}: {e}", self.file.display(), e.span().start().line);
                     self.errors += 1;
@@ -3471,6 +4284,37 @@ impl Counter {
             if defined {
                 eprintln!(
                     "{here}: {name}! resolves to none of this crate's definitions of `{name}`, though rustc may reach one; invoke it by its definition's path, or in that definition's textual scope"
+                );
+                self.errors += 1;
+            }
+        }
+        // A `macro_rules!` an expansion writes is known only once its own
+        // file is walked: an invocation of its name in a file walked
+        // before it, in a module in its scope, may expand it, and fails
+        // the run. One carried out by a `#[macro_use] mod` is in the
+        // declaring file's scope from that `mod` on; in any other file
+        // (a module file of its scope, such as one a later `mod`
+        // declares) the resolution reaches it as one of the others,
+        // wherever the invocation is.
+        let rels: Vec<PathBuf> = files
+            .iter()
+            .map(|f| f.strip_prefix(root).unwrap_or(f).to_path_buf())
+            .collect();
+        let order = |p: &Path| rels.iter().position(|r| r == p);
+        for (here, file, module, at, name) in std::mem::take(&mut self.invoked) {
+            let late = self.macros.get(&name).into_iter().flatten().find(|d| {
+                d.emitted
+                    && d.built != Built::Test
+                    && order(&file) < order(&d.file)
+                    && module.starts_with(&d.scope)
+                    && (d.carried_at.iter().all(|(f, _)| *f != file)
+                        || d.carried_at.iter().any(|(f, l)| *f == file && *l <= at))
+            });
+            if let Some(d) = late {
+                eprintln!(
+                    "{here}: {name}! may expand the `macro_rules! {name}` that an expansion writes at {}:{}, which may be in scope here but is in a file the counter reads after this one; write that `macro_rules!` outside the macro",
+                    d.file.display(),
+                    d.line
                 );
                 self.errors += 1;
             }
@@ -3784,8 +4628,9 @@ impl Counter {
     /// crate does not define cannot be read, so the invocation counts as
     /// one function outside `verus!`, named `NAME!`, over the invocation's
     /// lines. A definition that resolves but does not expand, or an
-    /// expansion that does not parse, is an error. `thread_local!` writes
-    /// statics, not functions.
+    /// expansion that does not parse, is an error. std's `thread_local!`
+    /// ([`Counter::std_thread_local`]) writes statics, not functions; any
+    /// other macro of the name is read as above.
     fn item_macro(
         &mut self,
         attrs: &[Attribute],
@@ -3795,11 +4640,20 @@ impl Counter {
         let Some(name) = mac.path.segments.last().map(|s| s.ident.to_string()) else {
             return;
         };
+        // std's `thread_local!` writes statics alone. Any other may write
+        // any item, so its module's globs place no type
+        // ([`Counter::opaque`]); one shown to be another macro
+        // ([`Counter::other_thread_local`]) is read as any other macro:
+        // the crate's own expanded, another crate's counted as one
+        // function.
         if name == "thread_local" {
-            if !self.std_thread_local(&mac.path) {
-                self.opaque.insert(self.module.clone());
+            if self.std_thread_local(&mac.path) {
+                return;
             }
-            return;
+            self.opaque.insert(self.module.clone());
+            if !self.other_thread_local(&mac.path) {
+                return;
+            }
         }
         let built = self.built(attrs);
         if built == Built::Test {
@@ -3831,6 +4685,15 @@ impl Counter {
                     return;
                 }
             };
+        if !found.is_empty() {
+            self.invoked.push((
+                here.clone(),
+                self.file.clone(),
+                self.module.clone(),
+                at,
+                name.clone(),
+            ));
+        }
         // The expansion by `rules`, read as items (inside `wrap`, in an
         // `impl` or trait).
         let expand = |rules: &expand::Rules| {
@@ -4062,20 +4925,86 @@ impl Counter {
         // Latest first: by line, an emitted definition after any written
         // on its line, and among equals (the definitions one expansion
         // writes, all at its invocation's line) the one registered later.
-        let mut before: Vec<(usize, &MacroDef)> = defs
+        // One a `#[macro_use] mod name;` here carries out of its file is
+        // placed by its path: that `mod`'s line here, then the line of each
+        // `mod` inward along the chain, then its own line, compared in that
+        // order, so a definition in `j` after its `mod k;` shadows one in
+        // `k`, and one in `k` shadows one in `j` before it.
+        // Each step of a place is a line and, for a `mod`, the file it
+        // leads into (`None` for the definition's own line).
+        let here = |d: &MacroDef| -> Option<DefPlace> {
+            if d.file == self.file {
+                return Some(vec![(d.line, None)]);
+            }
+            let i = d.carried_at.iter().position(|(f, _)| *f == self.file)?;
+            let mut place: DefPlace = (0..=i)
+                .rev()
+                .map(|k| {
+                    let into = if k == 0 {
+                        d.file.clone()
+                    } else {
+                        d.carried_at[k - 1].0.clone()
+                    };
+                    (d.carried_at[k].1, Some(into))
+                })
+                .collect();
+            place.push((d.line, None));
+            Some(place)
+        };
+        let lines = |p: &[(usize, Option<PathBuf>)]| p.iter().map(|(l, _)| *l).collect::<Vec<_>>();
+        let mut before: Vec<(usize, DefPlace, &MacroDef)> = defs
             .iter()
             .enumerate()
             .filter(|(_, d)| active(d) && visible(d))
-            .filter(|(_, d)| d.file == self.file && (d.line < at || (d.emitted && d.line == at)))
+            .filter_map(|(i, d)| here(d).map(|l| (i, l, d)))
+            .filter(|(.., d)| !(d.split && d.file != self.file))
+            .filter(|(_, l, d)| l[0].0 < at || (d.emitted && d.file == self.file && d.line == at))
             .collect();
-        before.sort_by_key(|(i, d)| std::cmp::Reverse((d.line, d.emitted, *i)));
-        let before: Vec<&MacroDef> = before.into_iter().map(|(_, d)| d).collect();
+        // One a `mod` on the invocation's own line carries in is not
+        // ordered against the invocation, so it is a candidate, but it
+        // ends no chain. So is one carried in through a module several
+        // `mod`s declare, from the first of them on.
+        let on_line: Vec<&MacroDef> = defs
+            .iter()
+            .filter(|d| active(d) && visible(d) && d.file != self.file)
+            .filter(|d| here(d).is_some_and(|l| l[0].0 == at || (d.split && l[0].0 < at)))
+            .collect();
+        before.sort_by(|(i, l, d), (j, m, e)| {
+            (lines(m), e.emitted, j).cmp(&(lines(l), d.emitted, i))
+        });
+        // Two places that reach one line and go on from it differently (a
+        // definition on the line of a `mod` that carries the other in, or
+        // two `mod`s on one line into different files) are not ordered:
+        // the order on a line is not read, so both stay candidates.
+        let unordered = |a: &[(usize, Option<PathBuf>)], b: &[(usize, Option<PathBuf>)]| {
+            for (x, y) in a.iter().zip(b) {
+                if x.0 != y.0 {
+                    return false;
+                }
+                if x.1 != y.1 {
+                    return true;
+                }
+            }
+            false
+        };
         // When every one is under such a `cfg`, a build may compile none of
         // them, and then the definitions below are rustc's: they join.
-        let textual: Vec<&MacroDef> = match before.iter().position(|d| !d.unsure) {
-            Some(i) => return Ok(before[..=i].to_vec()),
-            None => before,
+        // In shipped code, one a shipped build may skip does not end them
+        // either, though Verus's build is sure to compile it.
+        let shadows = |d: &MacroDef| {
+            !d.unsure && !(self.shipped && shipped_may_skip(&d.guards, &self.guards, &self.atoms))
         };
+        if let Some(i) = before.iter().position(|(_, _, d)| shadows(d)) {
+            let key = &before[i].1;
+            let chain: Vec<&MacroDef> = before
+                .iter()
+                .enumerate()
+                .filter(|(k, (_, l, _))| *k <= i || unordered(l, key))
+                .map(|(_, (_, _, d))| *d)
+                .collect();
+            return Ok(joined(chain, on_line));
+        }
+        let textual: Vec<&MacroDef> = joined(before.iter().map(|(.., d)| *d).collect(), on_line);
         let others: Vec<&MacroDef> = defs
             .iter()
             .filter(active)
@@ -4453,6 +5382,208 @@ impl Counter {
         self.doubt(&either, kind, read, &self.module).is_none()
     }
 
+    /// Whether the `thread_local` invoked by `path` is shown to be a macro
+    /// other than std's, so that it counts as one (#68): the bare name
+    /// where the crate defines a macro of that name, or where a `use` of
+    /// this module imports the name from a path that does not start at
+    /// `std` or `core`; or a path whose first segment is neither
+    /// (`elsewhere::thread_local!`, `crate::thread_local!`). A `std` or
+    /// `core` first segment that a `use` or an `extern crate .. as` gives
+    /// another crate is neither (#137; [`Counter::use_rebinds`]), nor, in
+    /// an import, one that names a module of the crate as rustc reads a
+    /// `use` path (#140; [`Counter::use_module`]). A bare one
+    /// only a `*` or a `#[macro_use]` may bind to another counts too
+    /// (#122), unless each such source is shown not to bring one
+    /// ([`Counter::foreign_glob`]): a `#[macro_use]` of a crate other than
+    /// std's and Verus's ([`STD_OR_VERUS_CRATES`]), or of one of those a
+    /// Cargo dependency is renamed to, or a `*` that may hold another
+    /// `thread_local`, counts it.
+    fn other_thread_local(&self, path: &verus_syn::Path) -> bool {
+        let segs = segments(path);
+        if segs.len() == 1 && path.leading_colon.is_none() {
+            self.macros.contains_key("thread_local")
+                || self.imported("thread_local", false).iter().any(|p| {
+                    !self.std_crate(p.first())
+                        || p.first().is_some_and(|f| {
+                            self.use_rebinds(&self.module, f) || self.use_module(&self.module, f)
+                        })
+                })
+                || self
+                    .macro_use
+                    .iter()
+                    .any(|c| !STD_OR_VERUS_CRATES.contains(&c.as_str()) || self.renamed(c))
+                || self.foreign_glob(&self.module, &mut Vec::new())
+        } else {
+            // A first segment that is a module of this crate (`mod core`)
+            // shadows the extern prelude's `std` or `core`, and so does a
+            // `use` here or an `extern crate .. as` that gives another
+            // crate that name (#137). The path is read in this module's
+            // scope in every edition, so a root `use` rebinds it only at
+            // the root.
+            !self.std_crate(segs.first())
+                || self.local(&segs)
+                || segs
+                    .first()
+                    .is_some_and(|f| self.binds(&self.module, f) || self.extern_alias(f))
+        }
+    }
+
+    /// Whether `first`, a path's first segment, is `std` or `core`, unless
+    /// a Cargo dependency is renamed to it.
+    fn std_crate(&self, first: Option<&String>) -> bool {
+        first.is_some_and(|f| matches!(f.as_str(), "std" | "core") && !self.renamed(f))
+    }
+
+    /// Whether a Cargo dependency of the crate is renamed to `name`
+    /// ([`Counter::renamed_deps`]).
+    fn renamed(&self, name: &str) -> bool {
+        self.renamed_deps.iter().any(|(n, _)| n == name)
+    }
+
+    /// Whether module `path` of the crate is declared where every build
+    /// compiling its parent compiles it: no `mod` item of it is under a
+    /// `cfg` of its own ([`Counter::cfg_modules`]).
+    fn surely_declared(&self, path: &[String]) -> bool {
+        !self.cfg_modules.contains(path)
+    }
+
+    /// Whether module `m` has a glob, one a shipped build or Verus's may
+    /// compile, that may bring a name of any kind: any but a glob of
+    /// std's, core's or Verus's by a name no Cargo rename takes (a glob
+    /// of a module of the crate, by any path or alias, or of another
+    /// crate, may).
+    fn glob_may_bring_any(&self, m: &[String]) -> bool {
+        self.bindings.iter().any(|b| {
+            // The glob's first segment is the crate of that name only
+            // where no `use` here or `extern crate .. as` rebinds it and no
+            // module of the crate has that name.
+            let other = b.path.first().is_some_and(|f| {
+                self.binds(m, f)
+                    || self.extern_alias(f)
+                    || self.module_from(m, std::slice::from_ref(f)).is_some()
+            });
+            b.glob
+                && b.module == m
+                && (b.shipped || b.verus)
+                && (other
+                    || !((one_of(&b.path, &VERUS_GLOBS) && !self.renamed(&b.path[0]))
+                        || self.std_crate(b.path.first())))
+        })
+    }
+
+    /// Whether a `use` path's first segment `f`, in module `m`, may name a
+    /// crate other than the one of that name: a `use` here (`use
+    /// elsewhere as std;`) or an `extern crate .. as` gives another crate
+    /// that name, or, in 2015 (where the path is read from the crate
+    /// root), a root `use` does or a root glob not shown to be std's,
+    /// core's or Verus's may (it may bring a module of that name).
+    fn use_rebinds(&self, m: &[String], f: &str) -> bool {
+        self.binds(m, f)
+            || (self.edition < 2018 && (self.binds(&m[..1], f) || self.glob_may_bring_any(&m[..1])))
+            || self.extern_alias(f)
+    }
+
+    /// Whether a `use` path's plain first segment `f`, in module `m`, may
+    /// name a module of the crate, as rustc reads a `use` path: in 2015 one
+    /// at the crate root, from 2018 on one in `m` (#140). A module some
+    /// build may leave out still may. A leading `::` is not read (the
+    /// module's `use` paths are kept without it), so from 2018 on `use
+    /// ::core::thread_local;` beside a `mod core` in `m` may too, though
+    /// rustc reads it as core's: that fails the run (closed), and writing
+    /// `::std::thread_local!` at the invocation, or no `mod core` beside
+    /// the import, passes.
+    fn use_module(&self, m: &[String], f: &str) -> bool {
+        let base = if self.edition < 2018 { &m[..1] } else { m };
+        self.modules.contains(&[base, &[f.to_owned()]].concat())
+    }
+
+    /// Whether an `extern crate path as name;` a shipped build or Verus's
+    /// may compile gives `name` to a crate of another name.
+    fn extern_alias(&self, name: &str) -> bool {
+        self.bindings
+            .iter()
+            .any(|b| b.extern_crate && b.name == name && b.path != [name] && (b.shipped || b.verus))
+    }
+
+    /// Whether a `use p::*;` of module `m` (one not built only for tests)
+    /// may bring a `thread_local` other than std's (#122). A glob of a
+    /// module of this crate (whatever its name, a `mod core` included)
+    /// may only where that module brings the name in by a `use`
+    /// ([`Counter::binds`]) or has such a glob itself, read through every
+    /// glob it has (`seen` ends a cycle). A plain first segment names such
+    /// a module as rustc reads a `use` path: from 2018 on one in scope in
+    /// `m` (none after a leading `::`), in 2015 one at the crate root,
+    /// whatever `m` holds. Of a crate's globs, Verus's ([`VERUS_GLOBS`])
+    /// and std's or core's cannot, where no Cargo rename
+    /// ([`Counter::renamed`]), `use` in `m` (or, in 2015, at the root),
+    /// or `extern crate .. as`
+    /// ([`Counter::extern_alias`]) gives another crate that name, and no
+    /// module of the crate has the first segment's name there (the rest
+    /// would then be a re-export the counter does not follow); any other
+    /// may.
+    fn foreign_glob(&self, m: &[String], seen: &mut Vec<Vec<String>>) -> bool {
+        if seen.iter().any(|s| s == m) {
+            return false;
+        }
+        seen.push(m.to_vec());
+        // Each glob of `m` a shipped build or Verus's may compile, with
+        // whether it has a leading `::`.
+        let globs: Vec<(Vec<String>, bool)> = self
+            .bindings
+            .iter()
+            .filter(|b| b.glob && b.module == m && (b.shipped || b.verus))
+            .map(|b| (b.path.clone(), b.absolute))
+            .collect();
+        globs.iter().any(|(p, absolute)| {
+            // A plain first segment names, from 2018 on, a module in
+            // scope here or an extern crate, and after a leading `::` an
+            // extern crate alone; in 2015, a module at the crate root or
+            // an extern crate there. A module of the crate it names is
+            // read, whatever its name (a `mod core` included).
+            let lookup = |q: &[String]| {
+                match q.first().map(String::as_str) {
+                    Some("crate" | "self" | "super") => self.module_from(m, q),
+                    _ if self.edition < 2018 => Some([&m[..1], q].concat()),
+                    _ if *absolute => None,
+                    _ => Some([m, q].concat()),
+                }
+                .filter(|l| self.modules.contains(l))
+            };
+            let local = lookup(p);
+            // A rebound first segment may be what the path names, beside a
+            // module of that name under `cfg`s: then each may bring the
+            // name.
+            let rebound = p.first().is_some_and(|f| self.use_rebinds(m, f));
+            if let Some(local) = local {
+                let brings = rebound
+                    || self.binds(&local, "thread_local")
+                    || self.foreign_glob(&local, seen);
+                // A module some build may leave out (under a `cfg` the
+                // counter cannot settle) leaves the crate of that name as
+                // the other reading.
+                let named = p
+                    .iter()
+                    .filter(|s| !matches!(s.as_str(), "crate" | "self" | "super"))
+                    .count();
+                let base = local.len() - named;
+                if brings || (base + 1..=local.len()).all(|k| self.surely_declared(&local[..k])) {
+                    return brings;
+                }
+            }
+            // A first segment that names a module of the crate, where the
+            // rest is no module of it (a re-export the counter does not
+            // follow: `mod core { pub(crate) use elsewhere::cell; }`), may
+            // be any crate's.
+            if p.len() > 1 && lookup(&p[..1]).is_some() {
+                return true;
+            }
+            // A crate's: std's, core's and Verus's bring none, unless so
+            // rebound.
+            rebound
+                || !((one_of(p, &VERUS_GLOBS) && !self.renamed(&p[0])) || self.std_crate(p.first()))
+        })
+    }
+
     /// How item macro `name`, invoked by `path` and defined nowhere in the
     /// crate, is one of the standard library's that write nothing that
     /// ships ([`STD_NO_FN`]), if it is: by `::core::` or `::std::`, or by
@@ -4619,7 +5750,14 @@ struct DefsAt<'a> {
     file: &'a Path,
     module: Vec<String>,
     built: Built,
+    /// The `cfg` predicates of the file and the items around (as
+    /// [`Counter::guards`] holds them).
+    guards: Vec<String>,
     scope: Vec<String>,
+    /// [`MacroDef::carried_at`] for a definition here.
+    carried_at: Vec<(PathBuf, usize)>,
+    /// [`MacroDef::split`] for a definition here.
+    split: bool,
 }
 
 /// Whether `attrs` has `#[name]` itself, not through a `cfg_attr`: the
@@ -4640,6 +5778,18 @@ const VERUS_PATHS: [&[&str]; 2] = [
 
 /// The modules of [`VERUS_PATHS`], whose `*` imports Verus's `verus!`.
 const VERUS_GLOBS: [&[&str]; 2] = [&["vstd", "prelude"], &["verus_builtin_macros"]];
+
+/// The crates whose `#[macro_use] extern crate` cannot bring a
+/// `thread_local` other than std's ([`Counter::other_thread_local`]):
+/// the standard library's and Verus's.
+const STD_OR_VERUS_CRATES: [&str; 6] = [
+    "std",
+    "core",
+    "alloc",
+    "vstd",
+    "verus_builtin",
+    "verus_builtin_macros",
+];
 
 /// The standard library's item macros that write nothing that ships,
 /// each with the paths of more than one segment that name it: only
@@ -4851,12 +6001,16 @@ fn bindings_in(items: &[Item], at: &BindAt, atoms: &Atoms, out: &mut Vec<Binding
         };
         let mut guards = at.guards.clone();
         guards.extend(cfg_predicates(attrs));
-        let sees = |verus: bool| {
+        let sees = |verus: bool, atoms: &Atoms| {
             guards
                 .iter()
                 .all(|p| cfg_eval(p, verus, atoms).map_or(true, |c| c.t))
         };
-        let (shipped, verus) = (sees(false), sees(true));
+        // Verus sees it where some proof run may (#21).
+        let (shipped, verus) = (
+            sees(false, atoms),
+            atoms.each_run().iter().any(|r| sees(true, r)),
+        );
         let base = Binding {
             module: at.module.clone(),
             shipped,
@@ -5001,15 +6155,22 @@ pub(crate) fn verus_path(path: &verus_syn::Path) -> bool {
 }
 
 /// The modules among `items` (in `module`, and in its inline modules)
-/// that `#[macro_use] mod name;` declares in a file of their own, into
-/// `carried`: the textual scope of a definition at such a file's top
-/// carries on into the module that declares it. Every module `items`
-/// declares goes into `all`, one declared inside a `verus!` block too.
+/// that `mod name;` declares in a file of their own, into `carried`, each
+/// declaration with `#[macro_use]` with the declaring `file` and the line
+/// of its `mod`: the textual scope of a definition at such a file's top
+/// carries on into the module that declares it, from that line on. One
+/// without is kept too, as a declaration that does not carry. Each
+/// declaration of an inline module goes into `inline`, with whether it
+/// has `#[macro_use]`: that scope carries on through one that has. Every
+/// module `items` declares goes into `all`, one declared inside a
+/// `verus!` block too.
 fn macro_use_mods(
     items: &[Item],
     module: &[String],
-    (carried, all): (
-        &mut std::collections::BTreeSet<Vec<String>>,
+    file: &Path,
+    (carried, inline, all): (
+        &mut Carried,
+        &mut InlineMods,
         &mut std::collections::BTreeSet<Vec<String>>,
     ),
 ) {
@@ -5018,7 +6179,7 @@ fn macro_use_mods(
             && verus_path(&v.mac.path)
             && let Ok(f) = parse2::<verus_syn::File>(v.mac.tokens.clone())
         {
-            macro_use_mods(&f.items, module, (carried, all));
+            macro_use_mods(&f.items, module, file, (carried, inline, all));
             continue;
         }
         let Item::Mod(m) = item else { continue };
@@ -5026,11 +6187,53 @@ fn macro_use_mods(
         inner.push(m.ident.to_string());
         all.insert(inner.clone());
         match &m.content {
-            None if has_attr(&m.attrs, "macro_use") => {
-                carried.insert(inner);
+            None => carried.entry(inner).or_default().push(
+                has_attr(&m.attrs, "macro_use")
+                    .then(|| (file.to_path_buf(), m.mod_token.span.start().line)),
+            ),
+            Some((_, items)) => {
+                inline
+                    .entry(inner.clone())
+                    .or_default()
+                    .push(has_attr(&m.attrs, "macro_use"));
+                macro_use_mods(items, &inner, file, (carried, inline, all));
             }
-            Some((_, items)) => macro_use_mods(items, &inner, (carried, all)),
-            None => {}
+        }
+    }
+}
+
+/// The modules among `items` (in `module`, and in its inline modules)
+/// whose `mod` item is under a `cfg` of its own, or inside a `verus!`
+/// block that is, and every module inside such a one, into `out`: a
+/// build may leave each out ([`Counter::foreign_glob`]).
+fn cfg_gated_mods(
+    items: &[Item],
+    module: &[String],
+    out: &mut std::collections::BTreeSet<Vec<String>>,
+) {
+    for item in items {
+        if let Item::Macro(v) = item
+            && verus_path(&v.mac.path)
+            && let Ok(f) = parse2::<verus_syn::File>(v.mac.tokens.clone())
+        {
+            if cfg_predicates(&v.attrs).is_empty() {
+                cfg_gated_mods(&f.items, module, out);
+            } else {
+                // Every module the block declares is under its `cfg`.
+                let mut all = std::collections::BTreeSet::new();
+                let (mut c, mut i) = (Carried::new(), InlineMods::new());
+                macro_use_mods(&f.items, module, Path::new(""), (&mut c, &mut i, &mut all));
+                out.extend(all);
+            }
+            continue;
+        }
+        let Item::Mod(m) = item else { continue };
+        let inner = [module, &[m.ident.to_string()]].concat();
+        if !cfg_predicates(&m.attrs).is_empty() {
+            out.insert(inner.clone());
+        }
+        if let Some((_, items)) = &m.content {
+            cfg_gated_mods(items, &inner, out);
         }
     }
 }
@@ -5063,6 +6266,20 @@ fn use_paths(tree: &verus_syn::UseTree, prefix: &mut Vec<String>, out: &mut Vec<
     }
 }
 
+/// Whether a shipped build that compiles code under the `cfg` predicates
+/// `at` may leave out an item under `guards`: the conjunction of those of
+/// `guards` that `at` does not hold can be false there. One the counter
+/// cannot read may be.
+fn shipped_may_skip(guards: &[String], at: &[String], atoms: &Atoms) -> bool {
+    let own: Vec<&str> = guards
+        .iter()
+        .filter(|g| !at.contains(g))
+        .map(String::as_str)
+        .collect();
+    !own.is_empty()
+        && !cfg_eval(&format!("all({})", own.join(",")), false, atoms).is_ok_and(|c| !c.f)
+}
+
 /// The definition `m`, a `macro_rules!` item, at `at`.
 fn macro_def(m: &verus_syn::ItemMacro, at: &DefsAt, atoms: &Atoms, emitted: bool) -> MacroDef {
     let built = narrower(
@@ -5087,7 +6304,10 @@ fn macro_def(m: &verus_syn::ItemMacro, at: &DefsAt, atoms: &Atoms, emitted: bool
         },
         built,
         unsure: built == Built::Unsure,
+        guards: [&at.guards[..], &cfg_predicates(&m.attrs)].concat(),
         scope: at.scope.clone(),
+        carried_at: at.carried_at.clone(),
+        split: at.split,
         exported: has_attr(&m.attrs, "macro_export"),
         rules: expand::Rules::parse(m.mac.tokens.clone()),
     }
@@ -5095,6 +6315,30 @@ fn macro_def(m: &verus_syn::ItemMacro, at: &DefsAt, atoms: &Atoms, emitted: bool
 
 /// The crate's `macro_rules!` definitions, by name.
 type MacroDefs = BTreeMap<String, Vec<MacroDef>>;
+
+/// The modules a `#[macro_use] mod name;` declares in a file of their own
+/// ([`macro_use_mods`]), each with every `mod` declaring it in a file of
+/// its own (under `cfg`s, one module may have several): the file and the
+/// line of each with `#[macro_use]`, `None` for each without.
+type Carried = BTreeMap<Vec<String>, Vec<Option<(PathBuf, usize)>>>;
+
+/// An invocation [`Counter::resolve`] found definitions for: where it is
+/// (`file:line`), its file, its module, its outermost invocation's line
+/// and its name.
+type Invoked = (String, PathBuf, Vec<String>, usize, String);
+
+/// A file's module, and the scope, [`MacroDef::carried_at`] and
+/// [`MacroDef::split`] of a definition at its top.
+type Carry = (Vec<String>, Vec<String>, Vec<(PathBuf, usize)>, bool);
+
+/// Each declaration of each inline module ([`macro_use_mods`]): whether it
+/// has `#[macro_use]`.
+type InlineMods = BTreeMap<Vec<String>, Vec<bool>>;
+
+/// Where a definition stands in an invocation's file
+/// ([`Counter::resolve`]): each `mod` step's line with the file it leads
+/// into, then the definition's own line (`None`).
+type DefPlace = Vec<(usize, Option<PathBuf>)>;
 
 /// Each module's `use` paths.
 type Uses = BTreeMap<Vec<String>, Vec<UsePath>>;
@@ -5117,6 +6361,7 @@ fn macro_defs(
             attrs_built(attrs, atoms).unwrap_or(Built::Shipped),
         )
     };
+    let guards = |attrs: &[Attribute]| [&at.guards[..], &cfg_predicates(attrs)].concat();
     for item in items {
         match item {
             Item::Macro(m) if m.mac.path.is_ident("macro_rules") => {
@@ -5142,7 +6387,10 @@ fn macro_defs(
                         file: at.file,
                         module: at.module.clone(),
                         built: built(&m.attrs),
+                        guards: guards(&m.attrs),
                         scope: at.scope.clone(),
+                        carried_at: at.carried_at.clone(),
+                        split: at.split,
                     };
                     macro_defs(&f.items, &inner_at, atoms, (out, uses));
                 }
@@ -5151,16 +6399,19 @@ fn macro_defs(
                 if let Some((_, inner)) = &m.content {
                     let mut module = at.module.clone();
                     module.push(m.ident.to_string());
-                    let scope = if has_attr(&m.attrs, "macro_use") {
-                        at.scope.clone()
+                    let (scope, carried_at, split) = if has_attr(&m.attrs, "macro_use") {
+                        (at.scope.clone(), at.carried_at.clone(), at.split)
                     } else {
-                        module.clone()
+                        (module.clone(), Vec::new(), false)
                     };
                     let inner_at = DefsAt {
                         file: at.file,
                         module,
                         built: built(&m.attrs),
+                        guards: guards(&m.attrs),
                         scope,
+                        carried_at,
+                        split,
                     };
                     macro_defs(inner, &inner_at, atoms, (out, uses));
                 }
@@ -5170,17 +6421,1086 @@ fn macro_defs(
     }
 }
 
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+/// The `*.rs` files under `dir` (a crate's `src/`), in path order,
+/// following directory links. With `skip_packages`, a directory below
+/// `dir` that is another package's ([`other_package`]) is left out.
+fn rust_files(dir: &Path, skip_packages: bool, out: &mut Vec<PathBuf>) {
+    src_walk(dir, skip_packages, out, &mut Vec::new());
+}
+
+/// The directories below `dir` (a crate's `src/`) that a walk with
+/// `skip_packages` leaves out ([`rust_files`]), in path order: the
+/// outermost of each, as the walk reaches them, through links too.
+fn left_out_dirs(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    src_walk(dir, true, &mut Vec::new(), &mut out);
+    out
+}
+
+/// [`rust_files`]'s walk: the `*.rs` files into `files`, and each
+/// directory it leaves out into `left_out`.
+fn src_walk(
+    dir: &Path,
+    skip_packages: bool,
+    files: &mut Vec<PathBuf>,
+    left_out: &mut Vec<PathBuf>,
+) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
     entries.sort();
     for p in entries {
         if p.is_dir() {
-            rust_files(&p, out);
+            if skip_packages && other_package(&p) {
+                left_out.push(p);
+            } else {
+                src_walk(&p, skip_packages, files, left_out);
+            }
         } else if p.extension().is_some_and(|e| e == "rs") {
-            out.push(p);
+            files.push(p);
         }
     }
+}
+
+/// Each directory a crate of `crates` with `skip_packages` leaves out of
+/// its walk ([`left_out_dirs`]), under `root`, with the configured crate
+/// that reads it (a member at that directory, or a crate of `[crates]
+/// dir` there, compared canonically), printed as a line of the run's
+/// output so the change to the denominator is visible. A directory no
+/// configured crate reads would leave its code counted nowhere (a
+/// package added under `src/` later that no row lists), so each is an
+/// error; and so is each library or binary root the counting crate
+/// declares outside its own `src/` ([`declared_roots`], as written and
+/// resolved), which its walk does not read either, and each `include!`
+/// of that crate's files whose file its walk may not read
+/// ([`unfollowed_includes`]: a literal path outside its `src/`, an
+/// argument the counter cannot resolve, one inside a `macro_rules!`
+/// body; the `OUT_DIR` form passes). This holds for the crates counting
+/// left-out directories alone: another crate's roots and includes
+/// outside `src/` are read by no crate before or after. And, as a
+/// backstop for every include form, each `*.rs` file under the left-out
+/// directory that crate does not read and cargo does not build apart
+/// ([`built_apart`]) is an error. The stand-ins of `cfg` apply as the
+/// walk applies them. The errors, which the run prints at once and fails
+/// on after the walk has named its own.
+fn left_out_unread(root: &Path, cfg: &Config, crates: &[Krate]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for k in crates.iter().filter(|k| k.skip_packages) {
+        for d in left_out_dirs(&k.dir.join("src")) {
+            let shown = d.strip_prefix(root).unwrap_or(&d).display().to_string();
+            let at = canonical(&d);
+            match crates.iter().find(|j| canonical(&j.dir) == at) {
+                Some(j) => {
+                    println!(
+                        "crate {} leaves out {shown} (counted as crate {})",
+                        k.name, j.name
+                    );
+                    // The counting crate's walk reads its src/ alone, so a
+                    // library or binary root outside it would count in no
+                    // row. (Tests, benches and examples ship nothing.)
+                    let jsrc = j.dir.join("src");
+                    // A configured crate nested under the directory
+                    // (`x/derive`) is held like the counting crate: its
+                    // roots and includes here, its other files by the
+                    // backstop below.
+                    let dcanon = canonical(&d);
+                    let nested: Vec<&Krate> = crates
+                        .iter()
+                        .filter(|c| {
+                            let cc = canonical(&c.dir);
+                            cc != dcanon && cc.starts_with(&dcanon)
+                        })
+                        .collect();
+                    let holders: Vec<&Krate> =
+                        std::iter::once(j).chain(nested.iter().copied()).collect();
+                    for h in &holders {
+                        let hsrc = h.dir.join("src");
+                        for r in declared_roots(&h.dir, &["bin"])
+                            .iter()
+                            .filter(|r| r.is_file() && !read_under(&hsrc, r))
+                        {
+                            errors.push(format!(
+                                "FAIL skip_packages: crate {} leaves out {shown}, and crate {}, which counts it, does not read its target root {}, which lies outside its src/, so that code would count nowhere: move the root under {}, or drop skip_packages",
+                                k.name,
+                                h.name,
+                                r.strip_prefix(root).unwrap_or(r).display(),
+                                hsrc.strip_prefix(root).unwrap_or(&hsrc).display()
+                            ));
+                        }
+                    }
+                    // Nor does it read a file one of its own files
+                    // includes from outside its src/: held as a crate with
+                    // skip_packages is, against all of its src/. A file
+                    // that does not parse is left to the walk to report.
+                    let mut paths = Vec::new();
+                    rust_files(&jsrc, j.skip_packages, &mut paths);
+                    // The backstop: every `*.rs` file under the left-out
+                    // directory is one the counting crate's walk reads,
+                    // or one cargo builds apart from any shipped target
+                    // (its tests, benches, examples and build script).
+                    // Any other could reach a crate through an include!
+                    // the scan below does not see, counted in no row.
+                    // A nested configured crate counts what its own walk
+                    // reads, and builds its own tests, benches, examples
+                    // and build script apart; anything else of it is held.
+                    let mut walked: Vec<PathBuf> = paths.iter().map(|p| canonical(p)).collect();
+                    for c in &nested {
+                        let mut more = Vec::new();
+                        rust_files(&c.dir.join("src"), c.skip_packages, &mut more);
+                        walked.extend(more.iter().map(|p| canonical(p)));
+                    }
+                    let mut under = Vec::new();
+                    let configured: Vec<PathBuf> =
+                        nested.iter().map(|c| canonical(&c.dir)).collect();
+                    let mut unconfigured = Vec::new();
+                    backstop_files(&d, &configured, &mut under, &mut unconfigured);
+                    // A package under the left-out directory's tests/,
+                    // benches/ or examples/ (`x/tests/fixture`) may be a
+                    // shipped crate's path dependency, so, as a package
+                    // under src/ is, it must be a configured crate.
+                    for q in &unconfigured {
+                        errors.push(format!(
+                            "FAIL skip_packages: crate {} leaves out {shown}, where {} holds a Cargo.toml, but no configured crate reads it, so its code would count nowhere if a shipped crate depends on it: add it as a [crates] member (with ships = false if it does not ship), or drop skip_packages",
+                            k.name,
+                            q.strip_prefix(root).unwrap_or(q).display()
+                        ));
+                    }
+                    // A file is built apart by the innermost package
+                    // holding it: a nested configured crate's tests,
+                    // benches, examples and build script, or the left-out
+                    // directory's (so a file of a configured crate inside
+                    // x/tests/ is held all the same).
+                    let apart = |f: &Path| {
+                        let fc = canonical(f);
+                        let owner = configured
+                            .iter()
+                            .filter(|c| fc.starts_with(c))
+                            .max_by_key(|c| c.components().count())
+                            .unwrap_or(&dcanon);
+                        built_apart(owner, &fc)
+                    };
+                    for f in under
+                        .iter()
+                        .filter(|f| !walked.contains(&canonical(f)) && !apart(f))
+                    {
+                        errors.push(format!(
+                            "FAIL skip_packages: crate {} leaves out {shown}, where {} is a `*.rs` file that crate {}, which counts it, does not read (it is outside its src/, tests/, benches/, examples/ and build.rs), so no row counts it, while rustc may compile it into a crate through an include!: move it under {} or one of those directories, or drop skip_packages",
+                            k.name,
+                            f.strip_prefix(root).unwrap_or(f).display(),
+                            j.name,
+                            jsrc.strip_prefix(root).unwrap_or(&jsrc).display()
+                        ));
+                    }
+                    for h in &holders {
+                    let hsrc = h.dir.join("src");
+                    let mut hpaths = Vec::new();
+                    rust_files(&hsrc, h.skip_packages, &mut hpaths);
+                    let parsed: Vec<(PathBuf, verus_syn::File)> = hpaths
+                        .into_iter()
+                        .filter_map(|f| {
+                            let t = fs::read_to_string(&f).ok()?;
+                            let file = parse_file(&cfg.stand_in(&t)).ok()?;
+                            Some((f, file))
+                        })
+                        .collect();
+                    let defined = macro_rules_names(
+                        parsed.iter().map(|(_, file)| file),
+                        &crate_manifest(root, &h.dir).1,
+                    );
+                    for (f, file) in &parsed {
+                        let f = f.clone();
+                        let unread = |to: &Path| !include_under(&hsrc, to);
+                        for (line, what, to) in
+                            unfollowed_includes((&hsrc, &f), file, &defined, unread)
+                        {
+                            let why = match what {
+                                Include::Path(lit) => format!(
+                                    "include!({lit:?}) names {}, outside its src/",
+                                    to.strip_prefix(root).unwrap_or(&to).display()
+                                ),
+                                Include::InMacro(arg) => format!(
+                                    "{arg} is inside a macro_rules! definition, whose path rustc resolves from wherever the macro is invoked"
+                                ),
+                                Include::Unresolved(arg) => format!(
+                                    "include!({arg}) names a file the counter cannot resolve"
+                                ),
+                                Include::Imported(tree) => format!(
+                                    "`use {tree}` imports `include`, and the counter cannot follow a renamed or imported include in the crate counting a left-out directory"
+                                ),
+                                Include::Forwarded => "a macro invocation's arguments name include outside an include! invocation, which the macro may forward to one, and the counter cannot follow that in the crate counting a left-out directory".to_owned(),
+                                // Never listed.
+                                Include::OutDir => continue,
+                            };
+                            errors.push(format!(
+                                "FAIL skip_packages: crate {} leaves out {shown}, and crate {}, which counts it, does not read what {}:{line} includes: {why}, so that code would count nowhere: give the path as one string literal under {} (or as concat!(env!(\"OUT_DIR\"), ..)), or drop skip_packages",
+                                k.name,
+                                h.name,
+                                f.strip_prefix(root).unwrap_or(&f).display(),
+                                hsrc.strip_prefix(root).unwrap_or(&hsrc).display()
+                            ));
+                        }
+                    }
+                    }
+                }
+                None => errors.push(format!(
+                    "FAIL skip_packages: crate {} leaves out {shown}, which holds a Cargo.toml, but no configured crate reads it, so its code would count nowhere: add it as a [crates] member (with ships = false if it does not ship), or drop skip_packages",
+                    k.name
+                )),
+            }
+        }
+    }
+    errors
+}
+
+/// The `*.rs` files under the left-out package directory `dir` that the
+/// coverage backstop holds: its `tests/`, `benches/` and `examples/`
+/// (built apart) are not walked for files, and a directory reached a
+/// second time through links (a cycle, `tests/left -> .`) is not walked
+/// again, so the walk ends on any tree. A nested package that is itself
+/// a configured crate (`configured`: the canonical directories of the
+/// configured crates under `dir`; `x/derive`, a cargo-fuzz `x/fuzz`
+/// listed as a member) is walked as a package of its own, its top-level
+/// `tests/`, `benches/` and `examples/` not walked for files; the caller
+/// passes what its own walk reads. A package's `tests/`, `benches/` and
+/// `examples/` are still searched for packages (a directory holding a
+/// Cargo.toml, `x/tests/fixture`), which a shipped crate may name as a
+/// path dependency: a configured one is walked as a package of its own,
+/// wherever it sits, and each other one goes into `unconfigured` (a link
+/// back to a package the walk is inside is a cycle, not a package).
+/// Directory links are followed otherwise, as the source walk follows
+/// them.
+fn backstop_files(
+    dir: &Path,
+    configured: &[PathBuf],
+    out: &mut Vec<PathBuf>,
+    unconfigured: &mut Vec<PathBuf>,
+) {
+    use std::collections::HashSet;
+    /// The outermost package directories at or below `at`, each once.
+    fn packages(at: &Path, seen: &mut HashSet<PathBuf>, found: &mut Vec<PathBuf>) {
+        let Ok(canon) = fs::canonicalize(at) else {
+            return;
+        };
+        if !seen.insert(canon) {
+            return;
+        }
+        if other_package(at) {
+            found.push(at.to_path_buf());
+            return;
+        }
+        let Ok(rd) = fs::read_dir(at) else { return };
+        let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+        entries.sort();
+        for p in entries.iter().filter(|p| p.is_dir()) {
+            packages(p, seen, found);
+        }
+    }
+    struct Walk<'a> {
+        configured: &'a [PathBuf],
+        seen: HashSet<PathBuf>,
+        searched: HashSet<PathBuf>,
+        out: &'a mut Vec<PathBuf>,
+        unconfigured: &'a mut Vec<PathBuf>,
+    }
+    impl Walk<'_> {
+        fn walk(&mut self, at: &Path, top: bool) {
+            let Ok(canon) = fs::canonicalize(at) else {
+                return;
+            };
+            if !self.seen.insert(canon) {
+                return;
+            }
+            let Ok(rd) = fs::read_dir(at) else { return };
+            let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+            entries.sort();
+            for p in entries {
+                if p.is_dir() {
+                    let apart = top
+                        && p.file_name()
+                            .is_some_and(|n| n == "tests" || n == "benches" || n == "examples");
+                    if apart {
+                        self.apart(&p);
+                    } else {
+                        // A configured nested package is walked as a
+                        // package of its own.
+                        let package = other_package(&p)
+                            && self.configured.iter().any(|c| *c == canonical(&p));
+                        self.walk(&p, package);
+                    }
+                } else if p.extension().is_some_and(|e| e == "rs") {
+                    self.out.push(p);
+                }
+            }
+        }
+        /// A package's `tests/`, `benches/` or `examples/` directory
+        /// `at`: its files are built apart, but a package in it may be
+        /// a shipped crate's path dependency.
+        fn apart(&mut self, at: &Path) {
+            let mut found = Vec::new();
+            packages(at, &mut self.searched, &mut found);
+            let inside = canonical(at);
+            for q in found {
+                let qc = canonical(&q);
+                if self.configured.contains(&qc) {
+                    self.walk(&q, true);
+                } else if !inside.starts_with(&qc) {
+                    self.unconfigured.push(q);
+                }
+            }
+        }
+    }
+    Walk {
+        configured,
+        seen: HashSet::new(),
+        searched: HashSet::new(),
+        out,
+        unconfigured,
+    }
+    .walk(dir, true);
+}
+
+/// Whether `file`, under the package directory `dir`, is one cargo builds
+/// apart from the package's library and binaries: under its `tests/`,
+/// `benches/` or `examples/`, or its `build.rs`.
+fn built_apart(dir: &Path, file: &Path) -> bool {
+    ["tests", "benches", "examples"]
+        .iter()
+        .any(|d| file.starts_with(dir.join(d)))
+        || file == dir.join("build.rs")
+}
+
+/// Whether `file` lies under `src`, where a crate's walk reads it, by
+/// where its links lead: a root written outside `src` that links to a
+/// file in it is read, and one written under `src` that links out is
+/// refused by the symlink check ([`crate_dirs`]).
+fn read_under(src: &Path, file: &Path) -> bool {
+    canonical(file).starts_with(canonical(src))
+}
+
+/// Whether `dir`, a directory below a crate's `src/`, holds another
+/// package's sources: it holds a Cargo.toml (followed through links), so
+/// cargo builds it as its own crate. A crate with `skip_packages`
+/// (#198) leaves such directories out of every reading of its sources.
+fn other_package(dir: &Path) -> bool {
+    dir.join("Cargo.toml").is_file()
+}
+
+/// Whether `file` lies in a directory below `src` that a walk with
+/// `skip_packages` leaves out, by its path as written, `.` and `..` taken
+/// as written (so through a link under `src/` into a package's directory),
+/// or by where its links lead.
+fn in_left_out(src: &Path, file: &Path) -> bool {
+    in_other_package(&lexical(src), &lexical(file))
+        || in_other_package(&canonical(src), &canonical(file))
+}
+
+/// `p` with its `.` components dropped and each `..` taking off the
+/// component before it, as written, links not followed.
+fn lexical(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push(c);
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Each `include!` invocation anywhere in `file` (an item, an expression,
+/// inside `verus!`, or in another macro's tokens, a `macro_rules!` body
+/// among them), with what its argument names ([`Include`]).
+/// `include_str!` and `include_bytes!` read no code and are not listed.
+/// `defined`: the names of the `macro_rules!` the crate defines
+/// ([`macro_rules_names`]), which take a std macro's name from it.
+fn included_files(
+    file: &verus_syn::File,
+    defined: &std::collections::BTreeSet<String>,
+) -> Vec<Included> {
+    use verus_syn::__private::ToTokens as _;
+    // `in_macro`: inside a `macro_rules!` definition, where rustc resolves
+    // a relative path from wherever the macro is invoked.
+    // `args`: the stream is inside the argument tokens, at any depth, of a
+    // macro invocation (`NAME!(..)`) whose macro may take an identifier
+    // and invoke it (a matcher reaches into groups), so a bare `include`
+    // here may be forwarded to an invocation.
+    fn scan(
+        ts: TokenStream,
+        (in_macro, args): (bool, bool),
+        defined: &std::collections::BTreeSet<String>,
+        out: &mut Vec<Included>,
+    ) {
+        let toks: Vec<TokenTree> = ts.into_iter().collect();
+        // The body of each `macro_rules!` here (`macro_rules! NAME { .. }`),
+        // scanned as a macro's.
+        let mut bodies = Vec::new();
+        for (i, t) in toks.iter().enumerate() {
+            if let TokenTree::Ident(id) = t
+                && id == "macro_rules"
+                && matches!(toks.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!')
+            {
+                let at = if matches!(toks.get(i + 2), Some(TokenTree::Ident(_))) {
+                    i + 3
+                } else {
+                    i + 2
+                };
+                if matches!(toks.get(at), Some(TokenTree::Group(_))) {
+                    bodies.push(at);
+                }
+            }
+        }
+        for (i, t) in toks.iter().enumerate() {
+            match t {
+                // A `use` that imports `include`, under any name: through
+                // it an invocation would not name `include`.
+                TokenTree::Ident(id) if id == "use" => {
+                    let tree: Vec<TokenTree> = toks[i + 1..]
+                        .iter()
+                        .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == ';'))
+                        .cloned()
+                        .collect();
+                    if imports_include(&tree) {
+                        let shown: TokenStream = tree.into_iter().collect();
+                        out.push((id.span().start().line, Include::Imported(shown.to_string())));
+                    }
+                }
+                TokenTree::Ident(id) if is_include(id) => {
+                    if let (Some(TokenTree::Punct(p)), Some(TokenTree::Group(g))) =
+                        (toks.get(i + 1), toks.get(i + 2))
+                        && p.as_char() == '!'
+                    {
+                        let line = id.span().start().line;
+                        let mut args: Vec<TokenTree> = g.stream().into_iter().collect();
+                        if matches!(args.last(), Some(TokenTree::Punct(c)) if c.as_char() == ',') {
+                            args.pop();
+                        }
+                        let what = match &args[..] {
+                            // Only while `concat!` and `env!` are the
+                            // builtins: a `macro_rules!` of either name
+                            // the crate defines could name any file.
+                            _ if out_dir_concat(&args)
+                                && !defined.contains("concat")
+                                && !defined.contains("env")
+                                && !defined.contains("*") =>
+                            {
+                                Include::OutDir
+                            }
+                            _ if in_macro => Include::InMacro(format!("include!({})", g.stream())),
+                            [TokenTree::Literal(l)] => {
+                                match verus_syn::parse2::<verus_syn::LitStr>(
+                                    TokenTree::Literal(l.clone()).into(),
+                                ) {
+                                    Ok(s) => Include::Path(s.value()),
+                                    Err(_) => Include::Unresolved(g.stream().to_string()),
+                                }
+                            }
+                            _ => Include::Unresolved(g.stream().to_string()),
+                        };
+                        out.push((line, what));
+                    } else if path_separator(&toks[i + 1..]) {
+                        // A path through a module named `include`.
+                    } else if in_macro {
+                        // In a `macro_rules!` body, an invocation may be
+                        // spliced from the macro's input (`include!$g`,
+                        // `include $b $g`), so any other `include` there
+                        // is one the counter cannot follow.
+                        let shown: TokenStream = toks[i..].iter().take(4).cloned().collect();
+                        out.push((id.span().start().line, Include::InMacro(shown.to_string())));
+                    } else if args {
+                        // Not an invocation, nor a path through a module
+                        // of that name: an identifier a macro may forward
+                        // to one (`call!(include, "p")`).
+                        out.push((id.span().start().line, Include::Forwarded));
+                    }
+                }
+                TokenTree::Group(g) => {
+                    let invoked = match (
+                        i.checked_sub(2).map(|j| &toks[j]),
+                        i.checked_sub(1).map(|j| &toks[j]),
+                    ) {
+                        (Some(TokenTree::Ident(name)), Some(TokenTree::Punct(p)))
+                            if p.as_char() == '!' =>
+                        {
+                            let name = name.to_string();
+                            Some(name.strip_prefix("r#").unwrap_or(&name).to_owned())
+                        }
+                        _ => None,
+                    };
+                    // A macro's arguments, and every group inside them,
+                    // are held, but a std expression macro's (one the
+                    // crate does not define for itself); a group that is
+                    // no invocation's keeps what holds around it.
+                    // An invocation through a path (`dep::vec!`) is the
+                    // path's macro, std's only through std, core or alloc
+                    // where the crate does not rebind that name
+                    // ([`macro_rules_names`] lists it then).
+                    let foreign_path = i >= 3
+                        && path_root(&toks[..i - 2]).is_some_and(|r| {
+                            !matches!(r.as_str(), "std" | "core" | "alloc") || defined.contains(&r)
+                        });
+                    let forwards = match invoked {
+                        Some(n) => {
+                            !EXPRESSION_MACROS.contains(&n.as_str())
+                                || defined.contains(&n)
+                                || defined.contains("*")
+                                || foreign_path
+                        }
+                        None => args,
+                    };
+                    scan(
+                        g.stream(),
+                        (in_macro || bodies.contains(&i), forwards),
+                        defined,
+                        out,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    // A glob of another crate's, or of a module of this crate, may bring
+    // in a macro of any name, which outranks the std prelude's in the
+    // glob's module; the file is read as that module (an inline module
+    // in it too), so every name is held there (`*`, which no `use` leaf
+    // can be).
+    let held;
+    let defined = if foreign_glob(file, defined) {
+        let mut d = defined.clone();
+        d.insert("*".to_owned());
+        held = d;
+        &held
+    } else {
+        defined
+    };
+    scan(file.to_token_stream(), (false, false), defined, &mut out);
+    out
+}
+
+/// The names of the `macro_rules!` the files `files` define, anywhere in
+/// them (`macro_rules! NAME`), as written (a raw `r#name` without its
+/// `r#`). With them, each of `std`, `core` and `alloc` the crate binds to
+/// something else (a `use .. as core`, an `extern crate .. as std`, a
+/// `mod core`, or a Cargo dependency of the crate renamed to it, in
+/// `deps`), so a path through it is not std's ([`unfollowed_includes`])
+/// and a `use` through it may import another crate's macro.
+fn macro_rules_names<'a>(
+    files: impl IntoIterator<Item = &'a verus_syn::File>,
+    deps: &[(String, String)],
+) -> std::collections::BTreeSet<String> {
+    use verus_syn::__private::ToTokens as _;
+    let std_name = |s: &str| matches!(s, "std" | "core" | "alloc");
+    /// The std names `as` or `mod` binds anywhere in `ts`, and each a
+    /// `use` imports by name, renamed or not (`use dep::core;`); and into
+    /// `loads`, each crate a `#[macro_use] extern crate` loads, with
+    /// whether it is renamed (`as`).
+    fn rebinds(
+        ts: TokenStream,
+        out: &mut std::collections::BTreeSet<String>,
+        loads: &mut Vec<(String, bool)>,
+    ) {
+        let toks: Vec<TokenTree> = ts.into_iter().collect();
+        for (i, t) in toks.iter().enumerate() {
+            match t {
+                TokenTree::Ident(id) if id == "extern" => {
+                    let (Some(TokenTree::Ident(c)), Some(TokenTree::Ident(name))) =
+                        (toks.get(i + 1), toks.get(i + 2))
+                    else {
+                        continue;
+                    };
+                    if c != "crate" {
+                        continue;
+                    }
+                    // The attributes before it, past a visibility.
+                    let mut j = i;
+                    if j >= 1
+                        && matches!(&toks[j - 1], TokenTree::Group(g) if g.delimiter() == proc_macro2::Delimiter::Parenthesis)
+                    {
+                        j -= 1;
+                    }
+                    if j >= 1 && matches!(&toks[j - 1], TokenTree::Ident(p) if p == "pub") {
+                        j -= 1;
+                    }
+                    // An attribute that names `macro_use` anywhere, so
+                    // under a `cfg_attr` too (`#[cfg_attr(all(),
+                    // macro_use)]`), whatever its condition: a build may
+                    // apply it.
+                    fn names_macro_use(ts: TokenStream) -> bool {
+                        ts.into_iter().any(|t| match t {
+                            TokenTree::Ident(a) => a == "macro_use",
+                            TokenTree::Group(g) => names_macro_use(g.stream()),
+                            _ => false,
+                        })
+                    }
+                    let mut macro_use = false;
+                    while j >= 2
+                        && matches!(&toks[j - 2], TokenTree::Punct(p) if p.as_char() == '#')
+                    {
+                        let TokenTree::Group(g) = &toks[j - 1] else {
+                            break;
+                        };
+                        if names_macro_use(g.stream()) {
+                            macro_use = true;
+                        }
+                        j -= 2;
+                    }
+                    if macro_use {
+                        let renamed =
+                            matches!(toks.get(i + 3), Some(TokenTree::Ident(a)) if a == "as");
+                        let name = name.to_string();
+                        loads.push((name.strip_prefix("r#").unwrap_or(&name).to_owned(), renamed));
+                    }
+                }
+                TokenTree::Ident(id) if id == "use" => {
+                    let tree: Vec<TokenTree> = toks[i + 1..]
+                        .iter()
+                        .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == ';'))
+                        .cloned()
+                        .collect();
+                    let mut leaves = std::collections::BTreeSet::new();
+                    use_names(&tree, false, &mut leaves);
+                    out.extend(
+                        leaves
+                            .into_iter()
+                            .filter(|n| matches!(n.as_str(), "std" | "core" | "alloc")),
+                    );
+                }
+                TokenTree::Ident(id) if id == "as" || id == "mod" => {
+                    if let Some(TokenTree::Ident(name)) = toks.get(i + 1) {
+                        let name = name.to_string();
+                        let name = name.strip_prefix("r#").unwrap_or(&name);
+                        if matches!(name, "std" | "core" | "alloc") {
+                            out.insert(name.to_owned());
+                        }
+                    }
+                }
+                TokenTree::Group(g) => rebinds(g.stream(), out, loads),
+                _ => {}
+            }
+        }
+    }
+    let files: Vec<&verus_syn::File> = files.into_iter().collect();
+    let mut rebound: std::collections::BTreeSet<String> = deps
+        .iter()
+        .map(|(n, _)| n.clone())
+        .filter(|n| std_name(n))
+        .collect();
+    let mut loads = Vec::new();
+    for f in &files {
+        rebinds(f.to_token_stream(), &mut rebound, &mut loads);
+    }
+    // A `#[macro_use] extern crate` of a crate but std's and Verus's, or
+    // of one of those renamed (in the `extern crate` or in Cargo), puts
+    // its macros in the macro_use prelude, which outranks the std
+    // prelude's in the whole crate: every name is held (`*`), as the
+    // thread_local rule holds it ([`Counter::other_thread_local`]).
+    if loads.iter().any(|(c, renamed)| {
+        *renamed || !STD_OR_VERUS_CRATES.contains(&c.as_str()) || deps.iter().any(|(n, _)| n == c)
+    }) {
+        rebound.insert("*".to_owned());
+    }
+    fn scan(
+        ts: TokenStream,
+        rebound: &std::collections::BTreeSet<String>,
+        out: &mut std::collections::BTreeSet<String>,
+    ) {
+        let toks: Vec<TokenTree> = ts.into_iter().collect();
+        for (i, t) in toks.iter().enumerate() {
+            match t {
+                TokenTree::Ident(id) if id == "macro_rules" => {
+                    if let (Some(TokenTree::Punct(p)), Some(TokenTree::Ident(name))) =
+                        (toks.get(i + 1), toks.get(i + 2))
+                        && p.as_char() == '!'
+                    {
+                        let name = name.to_string();
+                        out.insert(name.strip_prefix("r#").unwrap_or(&name).to_owned());
+                    }
+                }
+                // A name a `use` brings in from outside std, core and
+                // alloc, or renames anything to, may be another crate's
+                // macro, which outranks the std prelude's of that name
+                // (`use dep::vec;`, `use dep::call as println;`), and so
+                // may one through a std name the crate rebinds (`use dep
+                // as core; use core::vec;`).
+                TokenTree::Ident(id) if id == "use" => {
+                    let tree: Vec<TokenTree> = toks[i + 1..]
+                        .iter()
+                        .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == ';'))
+                        .cloned()
+                        .collect();
+                    let std_root = tree.iter().find_map(|t| match t {
+                        TokenTree::Ident(id) => {
+                            let s = id.to_string();
+                            let s = s.strip_prefix("r#").unwrap_or(&s);
+                            Some(matches!(s, "std" | "core" | "alloc") && !rebound.contains(s))
+                        }
+                        TokenTree::Punct(_) => None,
+                        _ => Some(false),
+                    }) == Some(true);
+                    use_names(&tree, std_root, out);
+                }
+                TokenTree::Group(g) => scan(g.stream(), rebound, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for f in &files {
+        scan(f.to_token_stream(), &rebound, &mut out);
+    }
+    out.extend(rebound);
+    out
+}
+
+/// Whether `file` holds a `use` with a `*` that may bring in a macro of
+/// any name ([`included_files`]): any glob but one whose use tree starts
+/// at `std`, `core` or `alloc` where the crate does not rebind that name
+/// (`defined` lists it then, [`macro_rules_names`]), or that is exactly
+/// one of Verus's preludes ([`VERUS_GLOBS`], `use vstd::prelude::*;`).
+/// So `use dep::*;`, `use super::*;` and `use crate::m::*;` count, and
+/// so does a glob inside a group not at a std root (`use {a::*, b};`).
+fn foreign_glob(file: &verus_syn::File, defined: &std::collections::BTreeSet<String>) -> bool {
+    use verus_syn::__private::ToTokens as _;
+    fn has_star(tree: &[TokenTree]) -> bool {
+        tree.iter().any(|t| match t {
+            TokenTree::Punct(p) => p.as_char() == '*',
+            TokenTree::Group(g) => has_star(&g.stream().into_iter().collect::<Vec<_>>()),
+            _ => false,
+        })
+    }
+    fn scan(ts: TokenStream, defined: &std::collections::BTreeSet<String>) -> bool {
+        let toks: Vec<TokenTree> = ts.into_iter().collect();
+        for (i, t) in toks.iter().enumerate() {
+            match t {
+                TokenTree::Ident(id) if id == "use" => {
+                    let tree: Vec<TokenTree> = toks[i + 1..]
+                        .iter()
+                        .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == ';'))
+                        .cloned()
+                        .collect();
+                    if !has_star(&tree) {
+                        continue;
+                    }
+                    // The path's identifiers, a leading `::` dropped.
+                    let words: Vec<String> = tree
+                        .iter()
+                        .filter_map(|t| match t {
+                            TokenTree::Ident(id) => Some(id.to_string()),
+                            _ => None,
+                        })
+                        .collect();
+                    let flat = tree
+                        .iter()
+                        .all(|t| matches!(t, TokenTree::Ident(_) | TokenTree::Punct(_)));
+                    let verus = flat
+                        && VERUS_GLOBS
+                            .iter()
+                            .any(|g| words.iter().map(String::as_str).eq(g.iter().copied()));
+                    let std_root = matches!(tree.iter().find(|t| !matches!(t, TokenTree::Punct(_))),
+                    Some(TokenTree::Ident(id)) if {
+                        let s = id.to_string();
+                        matches!(s.as_str(), "std" | "core" | "alloc") && !defined.contains(&s)
+                    });
+                    if !verus && !std_root {
+                        return true;
+                    }
+                }
+                TokenTree::Group(g) if scan(g.stream(), defined) => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+    scan(file.to_token_stream(), defined)
+}
+
+/// The first segment of the path that ends `before` (the tokens before a
+/// macro's name), if `before` ends in `::`: `dep` for `dep::vec`, `std`
+/// for `::std::vec`; `None` for a bare name.
+fn path_root(before: &[TokenTree]) -> Option<String> {
+    let colon = |t: &TokenTree| matches!(t, TokenTree::Punct(p) if p.as_char() == ':');
+    let mut j = before.len();
+    let mut root = None;
+    while j >= 2 && colon(&before[j - 1]) && colon(&before[j - 2]) {
+        j -= 2;
+        match j.checked_sub(1).map(|k| &before[k]) {
+            Some(TokenTree::Ident(id)) => {
+                let s = id.to_string();
+                root = Some(s.strip_prefix("r#").unwrap_or(&s).to_owned());
+                j -= 1;
+            }
+            // A leading `::` (`::dep::vec`): the root is the segment after it.
+            _ => break,
+        }
+    }
+    root
+}
+
+/// The names the use tree `tree` binds that may be another crate's
+/// macro ([`macro_rules_names`]): each `as` target, and, where the tree
+/// does not start at `std`, `core` or `alloc` (`std_root`), each leaf.
+fn use_names(tree: &[TokenTree], std_root: bool, out: &mut std::collections::BTreeSet<String>) {
+    for (i, t) in tree.iter().enumerate() {
+        match t {
+            TokenTree::Ident(id) => {
+                let leaf = !matches!(tree.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == ':')
+                    && !matches!(tree.get(i + 1), Some(TokenTree::Ident(a)) if a == "as");
+                let renamed = i > 0 && matches!(&tree[i - 1], TokenTree::Ident(a) if a == "as");
+                let s = id.to_string();
+                let s = s.strip_prefix("r#").unwrap_or(&s);
+                if leaf && (renamed || !std_root) && !matches!(s, "self" | "super" | "crate" | "_")
+                {
+                    out.insert(s.to_owned());
+                }
+            }
+            TokenTree::Group(g) => {
+                use_names(&g.stream().into_iter().collect::<Vec<_>>(), std_root, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether `rest` starts with the path separator `::`: two `:` puncts,
+/// the first joined to the second, not one `:` (a matcher's
+/// `$m:ident : $p:literal` takes `include: "p"`).
+fn path_separator(rest: &[TokenTree]) -> bool {
+    matches!(
+        rest,
+        [TokenTree::Punct(a), TokenTree::Punct(b), ..]
+            if a.as_char() == ':'
+                && a.spacing() == proc_macro2::Spacing::Joint
+                && b.as_char() == ':'
+    )
+}
+
+/// The macros whose arguments are expressions (or items, for `verus!`)
+/// and which invoke no identifier they are given: std's formatting,
+/// assertion and collection macros. A bare `include` among their
+/// arguments is a value (a variable named `include`), not one forwarded
+/// to an invocation. Any other macro, the crate's own among them, may
+/// take an identifier and invoke it (`($m:ident) => { $m!(..) }`), and
+/// so may one of these names that the crate defines for itself with
+/// `macro_rules!`, which is then held as any other.
+const EXPRESSION_MACROS: &[&str] = &[
+    "verus",
+    "print",
+    "println",
+    "eprint",
+    "eprintln",
+    "format",
+    "format_args",
+    "write",
+    "writeln",
+    "panic",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "vec",
+    "matches",
+    "dbg",
+    "todo",
+    "unimplemented",
+    "unreachable",
+];
+
+/// Whether `id` names `include`, as written or as the raw identifier
+/// `r#include`, which rustc reads as the same macro.
+fn is_include(id: &proc_macro2::Ident) -> bool {
+    let s = id.to_string();
+    s == "include" || s == "r#include"
+}
+
+/// Whether the use tree `tree` (the tokens after `use`) imports a leaf
+/// named `include`, renamed or not, at any depth of `{..}` groups: an
+/// `include` not followed by `::`. A glob (`std::prelude::v1::*`) names
+/// no leaf, and the bare `include!` the scan finds anyway.
+fn imports_include(tree: &[TokenTree]) -> bool {
+    // The tree's root: its first identifier (`std` in `use std::env;`).
+    let std_root = tree.iter().find_map(|t| match t {
+        TokenTree::Ident(id) => Some(matches!(id.to_string().as_str(), "std" | "core" | "alloc")),
+        TokenTree::Punct(_) => None,
+        _ => Some(false),
+    }) == Some(true);
+    imports_in(tree, std_root)
+}
+
+/// [`imports_include`] at one depth of the use tree `tree`, `std_root`
+/// whether the whole tree starts at `std`, `core` or `alloc`.
+fn imports_in(tree: &[TokenTree], std_root: bool) -> bool {
+    tree.iter().enumerate().any(|(i, t)| match t {
+        // `include` imported under any name; and a leaf `concat` or `env`
+        // that is renamed to (`use crate::p as env;`) or imported from
+        // outside std (`use dep::concat;`): an explicit import outranks
+        // the prelude, so it may shadow the builtin the OUT_DIR form
+        // relies on. `use std::env;` imports std's module and passes.
+        TokenTree::Ident(id) => {
+            let leaf = !matches!(tree.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == ':');
+            let s = id.to_string();
+            let s = s.strip_prefix("r#").unwrap_or(&s);
+            let renamed = i > 0 && matches!(&tree[i - 1], TokenTree::Ident(a) if a == "as");
+            leaf && (is_include(id) || ((renamed || !std_root) && (s == "concat" || s == "env")))
+        }
+        TokenTree::Group(g) => imports_in(&g.stream().into_iter().collect::<Vec<_>>(), std_root),
+        _ => false,
+    })
+}
+
+/// An `include!` [`included_files`] found: its line and its argument.
+type Included = (usize, Include);
+
+/// The `include!`s of `file` (at `f`, under a crate's `src`) whose file a
+/// walk does not follow, each with its line, what it names, and, for a
+/// literal path, the file it resolves to from `f`'s directory (else
+/// `f`): a literal path for which `unread` holds, any argument the
+/// counter cannot resolve, and any inside a `macro_rules!` body; the
+/// `OUT_DIR` form ([`out_dir_concat`]) is outside `src/` and never listed.
+/// `defined`: the crate's `macro_rules!` names ([`included_files`]).
+fn unfollowed_includes(
+    (src, f): (&Path, &Path),
+    file: &verus_syn::File,
+    defined: &std::collections::BTreeSet<String>,
+    unread: impl Fn(&Path) -> bool,
+) -> Vec<(usize, Include, PathBuf)> {
+    let mut out = Vec::new();
+    for (line, what) in included_files(file, defined) {
+        match what {
+            Include::Path(lit) => {
+                let to = f.parent().unwrap_or(src).join(&lit);
+                if unread(&to) {
+                    out.push((line, Include::Path(lit), to));
+                }
+            }
+            Include::OutDir => {}
+            other => out.push((line, other, f.to_path_buf())),
+        }
+    }
+    out
+}
+
+/// Whether the file an `include!` resolves to, `to`, lies under `src`:
+/// where its links lead, or, for a file that is not there (rustc then
+/// fails the build), by its path as written.
+fn include_under(src: &Path, to: &Path) -> bool {
+    match fs::canonicalize(to) {
+        Ok(c) => c.starts_with(canonical(src)),
+        Err(_) => lexical(to).starts_with(lexical(src)),
+    }
+}
+
+/// What an `include!` names: a path written as one string literal; a
+/// file of the build's `OUT_DIR` (`concat!(env!("OUT_DIR"), ..)`), which
+/// is outside `src/`; or anything else (another `concat!`, another
+/// macro, a macro's `$p`), which the counter cannot resolve, as written;
+/// or, whatever its argument but the `OUT_DIR` form, one inside a
+/// `macro_rules!` definition, whose relative path rustc resolves from
+/// the file that invokes the macro, not the one that defines it.
+#[derive(Debug, PartialEq, Eq)]
+enum Include {
+    Path(String),
+    OutDir,
+    Unresolved(String),
+    /// An `include` inside a `macro_rules!` body (the invocation, or the
+    /// tokens from `include` on, as written), but the `OUT_DIR` form and a
+    /// path through a module of that name.
+    InMacro(String),
+    /// A `use` that imports `include` (the use tree, as written), renamed
+    /// or not: an invocation through the new name is not one the scan
+    /// sees.
+    Imported(String),
+    /// A bare `include` among a macro invocation's arguments, outside an
+    /// `include!` invocation, which the macro may forward to one
+    /// ([`EXPRESSION_MACROS`] are not held).
+    Forwarded,
+}
+
+/// Whether `args` (an `include!`'s argument) is a `concat!` whose first
+/// argument is `env!("OUT_DIR")` and whose other arguments are string
+/// literals with no `..` component in their concatenation, so the file
+/// lies under the build's output directory, outside `src/`.
+fn out_dir_concat(args: &[TokenTree]) -> bool {
+    let [
+        TokenTree::Ident(c),
+        TokenTree::Punct(bang),
+        TokenTree::Group(inner),
+    ] = args
+    else {
+        return false;
+    };
+    if c != "concat" || bang.as_char() != '!' {
+        return false;
+    }
+    let inner: Vec<TokenTree> = inner.stream().into_iter().collect();
+    let mut parts: Vec<&[TokenTree]> = inner
+        .split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ','))
+        .collect();
+    // A trailing comma.
+    if parts.len() > 1 && parts.last().is_some_and(|p| p.is_empty()) {
+        parts.pop();
+    }
+    let Some((
+        [
+            TokenTree::Ident(e),
+            TokenTree::Punct(bang),
+            TokenTree::Group(var),
+        ],
+        rest,
+    )) = parts.split_first().map(|(f, r)| (*f, r))
+    else {
+        return false;
+    };
+    let var: Vec<TokenTree> = var.stream().into_iter().collect();
+    if !(e == "env"
+        && bang.as_char() == '!'
+        && matches!(&var[..], [TokenTree::Literal(l)] if l.to_string() == "\"OUT_DIR\""))
+    {
+        return false;
+    }
+    // The rest: string literals alone, whose path climbs out of OUT_DIR
+    // nowhere.
+    let mut tail = String::new();
+    for p in rest {
+        let [TokenTree::Literal(l)] = p else {
+            return false;
+        };
+        let Ok(s) = verus_syn::parse2::<verus_syn::LitStr>(TokenTree::Literal(l.clone()).into())
+        else {
+            return false;
+        };
+        tail.push_str(&s.value());
+    }
+    !tail.split(['/', '\\']).any(|c| c == "..")
+}
+
+/// Whether `file` lies in a directory below `src` that is another
+/// package's ([`other_package`]), so a walk with `skip_packages` leaves
+/// it out. Both paths canonical; a file outside `src` is in none.
+fn in_other_package(src: &Path, file: &Path) -> bool {
+    let Ok(rel) = file.strip_prefix(src) else {
+        return false;
+    };
+    let mut at = src.to_path_buf();
+    let mut dirs: Vec<_> = rel.components().collect();
+    // A `..` (a path that did not resolve) is read by [`in_left_out`]'s
+    // reading as written, not here, where it would climb out of `src`.
+    if dirs
+        .iter()
+        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return false;
+    }
+    dirs.pop();
+    dirs.into_iter().any(|c| {
+        at.push(c);
+        other_package(&at)
+    })
 }
 
 /// A share to a tenth of a percent, rounded down as the floor rounds it.
@@ -5216,12 +7536,15 @@ fn unpublished(text: &str) -> bool {
 /// A crate the counter reads: its name, its directory (holding `src/`),
 /// whether it ships ([`ships`], or the configuration's `ships`), and
 /// whether its Cargo.toml decides that (`by_rule`: a `dir` crate, or a
-/// member without `ships`).
+/// member without `ships`), and whether its source walk leaves out the
+/// other packages' directories under its `src/` (`skip_packages`, a
+/// member's key, #198).
 struct Krate {
     name: String,
     dir: PathBuf,
     ships: bool,
     by_rule: bool,
+    skip_packages: bool,
 }
 
 /// The crates `c` names under `root`, in reading order: each
@@ -5281,6 +7604,7 @@ fn crate_dirs(root: &Path, c: &Config) -> Result<Vec<Krate>, String> {
                     .unwrap_or_default(),
                 ships: ships(&p),
                 by_rule: true,
+                skip_packages: false,
                 dir: p,
             }
         }));
@@ -5294,15 +7618,18 @@ fn crate_dirs(root: &Path, c: &Config) -> Result<Vec<Krate>, String> {
             name: m.name.clone(),
             ships: m.ships.unwrap_or_else(|| ships(&p)),
             by_rule: m.ships.is_none(),
+            skip_packages: m.skip_packages,
             dir: p,
         });
     }
     // A crate of `dir` that is a link, or sources reached through one,
     // would read another crate's code under a new name, as a configured
-    // path through a symlink would.
+    // path through a symlink would. A link in a directory the walk leaves
+    // out (`skip_packages`) is not read through.
     for k in &out {
         let rel = k.dir.strip_prefix(root).unwrap_or(&k.dir);
-        if let Some(link) = symlink_in(root, rel).or_else(|| symlink_below(root, &rel.join("src")))
+        if let Some(link) =
+            symlink_in(root, rel).or_else(|| symlink_below(root, &rel.join("src"), k.skip_packages))
         {
             return Err(format!(
                 "[crates] crate {} reads {}, a symlink: give each crate's directory and sources as files under {}",
@@ -5509,6 +7836,10 @@ fn main() {
         rlimit_required(&root, b, &cfg);
     }
     let crates = crate_dirs(&root, &cfg).unwrap_or_else(|e| usage(e));
+    let unread = left_out_unread(&root, &cfg, &crates);
+    for e in &unread {
+        eprintln!("{e}");
+    }
     let mut unshipped = Vec::new();
     let mut c = Counter {
         verus_only_ghost: cfg.crates.verus_only_ghost,
@@ -5522,7 +7853,7 @@ fn main() {
     // no build of the workspace may enable one, as cargo resolves the
     // features.
     if !cfg.crates.test_features.is_empty() {
-        let enablers = match test_util_enablers(&root, &cfg.crates.test_features) {
+        let enablers = match features::test_util_enablers(&root, &cfg.crates.test_features) {
             Ok(e) => e,
             Err(e) => {
                 eprintln!("FAIL test-util: {e}");
@@ -5544,6 +7875,7 @@ fn main() {
         name,
         dir: k,
         ships,
+        skip_packages,
         ..
     } in &crates
     {
@@ -5552,14 +7884,23 @@ fn main() {
         if !ships {
             unshipped.push(c.krate.clone());
         }
-        c.walk_crate(&cfg, (&root, k), cfg.ledger.is_some().then_some(&mut tests));
+        c.walk_crate(
+            &cfg,
+            (&root, k, *skip_packages),
+            cfg.ledger.is_some().then_some(&mut tests),
+        );
+    }
+    // The left-out directories' failures, after the walk has named its
+    // own (an include! or a root into such a directory), so each shows.
+    if !unread.is_empty() {
+        std::process::exit(1);
     }
     c.finish();
     if !opted_in(&crates, &verus_crates(&c)) {
         std::process::exit(1);
     }
-    if cfg.ledger.is_some() && !c.discharged.is_empty() {
-        for (file, name) in &c.discharged {
+    if cfg.ledger.is_some() && !(c.discharged.is_empty() && c.marked_covered.is_empty()) {
+        for (file, name) in c.discharged.iter().chain(&c.marked_covered) {
             eprintln!(
                 "FAIL discharged: {}: `{name}` has the discharged_by = \"kani\" marker, but with [ledger] configured the ledger, not the marker, says what is discharged",
                 file.display()
@@ -5568,10 +7909,8 @@ fn main() {
         std::process::exit(1);
     }
     let records = cfg.kani.records.as_deref();
-    let missing = unrecorded(
-        &c.discharged,
-        &records.map_or_else(Vec::new, |d| kani_records(&root.join(d))),
-    );
+    let texts = records.map_or_else(Vec::new, |d| kani_records(&root.join(d)));
+    let missing = unrecorded(&c.discharged, &texts);
     for (file, name) in &missing {
         eprintln!(
             "FAIL discharged: {}: `{name}` has the discharged_by = \"kani\" marker, but no {}/kani-*.md record names its file and quotes `fn {name}`",
@@ -5579,11 +7918,23 @@ fn main() {
             records.unwrap_or("[kani] records")
         );
     }
-    if !missing.is_empty() {
+    let unchecked = outside_unchecked(
+        &c.outside,
+        &texts,
+        &c.harnesses,
+        records.unwrap_or("[kani] records"),
+    );
+    for f in &unchecked {
+        eprintln!("FAIL discharged: {f}");
+    }
+    if !missing.is_empty() || !unchecked.is_empty() {
         std::process::exit(1);
     }
     if let Some(r) = &cfg.recursion {
         check_recursion(&root, &r.table, &c.fns, &unshipped);
+    }
+    if let Some(l) = &cfg.loops {
+        check_loops(&root, &l.table, &c.fns, &unshipped);
     }
     let (tables, tables_named) = seam_tables(&root, &cfg.seams);
     let seams = reach::seam_ids(tables.iter().map(String::as_str));
@@ -5618,7 +7969,7 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let shipped = report(&root, &cfg, &c, &unshipped, &tests);
+    let (shipped, room) = report(&root, &cfg, &c, &unshipped, &tests);
     let mut failed = false;
     if let Some(f) = floor {
         let fig = Figures::new(&cfg.floor.checked, &cfg.floor.path);
@@ -5655,7 +8006,7 @@ fn main() {
         if let Some(name) = fig.missing(&head.floor) {
             usage(format!("{}: want a {name} figure", f.display()));
         }
-        let (mut ok, report) = fig.check(&shipped, &head.floor);
+        let (mut ok, report) = fig.check_with_room(&shipped, &head.floor, &room);
         print!("{report}");
         if let Some(b) = &cfg.badge {
             ok &= check_badge(&root, &b.path, &cfg.floor.path, &head.floor);
@@ -5727,7 +8078,7 @@ fn rlimit_required(root: &Path, base: &Base, cfg: &Config) {
 /// with a function the walk recorded for Verus ([`Counter::verus_fns`]),
 /// its proofs built only for Verus (`verus_keep_ghost`) too, which no
 /// coverage tally counts, and each whose tally counts a function inside
-/// `verus!`.
+/// `verus!` (a discharged one outside it gives Verus nothing to check).
 fn verus_crates(c: &Counter) -> Vec<String> {
     c.verus_fns
         .keys()
@@ -5736,7 +8087,8 @@ fn verus_crates(c: &Counter) -> Vec<String> {
             c.tallies
                 .iter()
                 .filter(|(_, t)| {
-                    t.ghost + t.fns.iter().sum::<usize>() > t.fns[Class::Outside as usize]
+                    t.ghost + t.fns.iter().sum::<usize>()
+                        > t.fns[Class::Outside as usize] + t.outside_discharged
                 })
                 .map(|(k, _)| k.replace('-', "_")),
         )
@@ -5796,8 +8148,11 @@ fn opted_in(crates: &[Krate], verus: &[String]) -> bool {
 /// configuration under `root` reached through a symlink exits 2: the
 /// base would be read at the link's path while the head is read through
 /// it, and once a link merged, the base's copy would be the link's text.
-/// A base with no copy, the change that adopts the counter, has nothing
-/// to compare. The base's copy, when there is one, for [`Base::copy`].
+/// A base with no copy at that path is held to the one configuration
+/// file of its tree, and one with none is the change that adopts the
+/// counter, with nothing to compare, unless it has a FLOOR
+/// ([`base_config`]). The base's copy, when there is one, for
+/// [`Base::copy`].
 fn check_config(root: &Path, file: &Path, cfg: &Config, rev: &str) -> Option<Config> {
     let under = std::path::absolute(file)
         .ok()
@@ -5810,23 +8165,18 @@ fn check_config(root: &Path, file: &Path, cfg: &Config, rev: &str) -> Option<Con
         );
         std::process::exit(2);
     }
-    let rel = under.unwrap_or_else(|| PathBuf::from("verus/count.toml"));
+    let in_root = under.is_some();
+    let rel = under.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
     let rel = rel.to_string_lossy();
-    let text = match base_file(root, rev, &rel) {
-        Ok(Some(text)) => text,
-        Ok(None) => {
-            println!("ok configuration: {rev} has no {rel} to compare with");
-            return None;
-        }
-        Err(e) => {
-            eprintln!("FAIL configuration: {e}");
-            std::process::exit(2);
-        }
-    };
+    let (base_rel, text) = base_config(root, rev, (&rel, in_root), cfg).unwrap_or_else(|e| {
+        eprintln!("FAIL configuration: {e}");
+        std::process::exit(2);
+    })?;
     let base = Config::parse(&text).unwrap_or_else(|e| {
-        eprintln!("FAIL configuration: {rev}:{rel}: {e}");
+        eprintln!("FAIL configuration: {rev}:{base_rel}: {e}");
         std::process::exit(2);
     });
+    let rev_rel = format!("{rev}:{base_rel}");
     let crate_changes = base_dir_narrowed(root, cfg, &base, rev)
         .and_then(|mut v| {
             v.extend(newly_unpublished(root, cfg, &base, rev)?);
@@ -5842,24 +8192,181 @@ fn check_config(root: &Path, file: &Path, cfg: &Config, rev: &str) -> Option<Con
     }
     for n in &explained.unnamed {
         eprintln!(
-            "FAIL configuration: {rel}: {n}, where {rev}:{rel} runs it: restore it, or give it a new [[narrowed]] line with change = {:?} and a reason",
+            "FAIL configuration: {rel}: {n}, where {rev_rel} runs it: restore it, or give it a new [[narrowed]] line with change = {:?} and a reason",
             n.change
         );
     }
     for change in &explained.stale {
         eprintln!(
-            "FAIL configuration: {rel}: the [[narrowed]] line for {change:?} names no change from {rev}:{rel}: remove it, or name the change as this run prints it"
+            "FAIL configuration: {rel}: the [[narrowed]] line for {change:?} names no change from {rev_rel}: remove it, or name the change as this run prints it"
         );
     }
     if !explained.unnamed.is_empty() || !explained.stale.is_empty() {
         std::process::exit(1);
     }
     if explained.named.is_empty() {
-        println!("ok configuration: {rel} keeps every gate {rev}:{rel} runs");
+        println!("ok configuration: {rel} keeps every gate {rev_rel} runs");
     } else {
-        println!("ok configuration: {rel} keeps every other gate {rev}:{rel} runs");
+        println!("ok configuration: {rel} keeps every other gate {rev_rel} runs");
     }
     Some(base)
+}
+
+/// The configuration path the counter reads when `--config` is not given.
+const DEFAULT_CONFIG: &str = "verus/count.toml";
+
+/// `rev`'s configuration to hold the head's to ([`check_config`]), with
+/// the path it was read at. The head's configuration is held to `rev`'s
+/// copy at `rel` (the head's path under ROOT, or [`DEFAULT_CONFIG`] for
+/// one outside ROOT, `in_root` false), or, when `rev` has none there, to
+/// the one file of its tree that is a configuration ([`base_configs`],
+/// [`DEFAULT_CONFIG`] among them); with several, which one `rev` ran is
+/// unknown, and the run exits 1 naming them. One outside ROOT with no
+/// base configuration is compared with nothing.
+///
+/// Under ROOT, `None` when `rev` has no configuration and no FLOOR (at the head's
+/// `[floor] path` or `verus/FLOOR`): the change that adopts the counter,
+/// with nothing to compare. A `rev` with a FLOOR but no configuration
+/// ran its gates from a file this run cannot find, so the run exits 1
+/// rather than compare with nothing: otherwise a head that moved its
+/// configuration with `--config` would narrow every gate, and move
+/// FLOOR, REACH and RLIMIT, unchecked.
+fn base_config(
+    root: &Path,
+    rev: &str,
+    (rel, in_root): (&str, bool),
+    cfg: &Config,
+) -> Result<Option<(String, String)>, String> {
+    if let Some(text) = base_file(root, rev, rel)? {
+        return Ok(Some((rel.to_string(), text)));
+    }
+    // The head's configuration as the messages name it: one outside ROOT
+    // has no path the base could share.
+    let head = if in_root {
+        rel.to_string()
+    } else {
+        "the configuration outside ROOT".to_string()
+    };
+    let found = base_configs(root, rev)?;
+    match found.as_slice() {
+        [] => {}
+        [(path, text)] => {
+            println!(
+                "ok configuration: {rev} has no {rel}, so {head} is held to {rev}:{path}, the one configuration {rev} has"
+            );
+            return Ok(Some((path.clone(), text.clone())));
+        }
+        several => {
+            let paths: Vec<&str> = several.iter().map(|(p, _)| p.as_str()).collect();
+            eprintln!(
+                "FAIL configuration: {rev} has no {rel}, and {} configuration files ({}), so which one it ran is unknown: keep the configuration at the path {rev} reads it from in this change, and move it in a change of its own",
+                paths.len(),
+                paths.join(", ")
+            );
+            std::process::exit(1);
+        }
+    }
+    // A configuration outside ROOT with no base configuration to hold it
+    // to is compared with nothing, FLOOR or not: a port may generate its
+    // configuration outside the tree, and the base cannot hold it.
+    if !in_root {
+        println!("ok configuration: {rev} has no {rel} to compare with");
+        return Ok(None);
+    }
+    let mut floors = vec![cfg.floor.path.as_str()];
+    if cfg.floor.path != "verus/FLOOR" {
+        floors.push("verus/FLOOR");
+    }
+    for floor in floors {
+        if base_file(root, rev, floor)?.is_some() {
+            eprintln!(
+                "FAIL configuration: {rev} has {floor} but no configuration, so the gates it ran cannot be compared with {rel}'s: a port whose FLOOR predates its configuration adds {rel} in a change that runs the verus check with VERUS_BASE=none, as the change that adds the first FLOOR does"
+            );
+            std::process::exit(1);
+        }
+    }
+    let shown = if rel == DEFAULT_CONFIG {
+        rel.to_string()
+    } else {
+        format!("{rel} or other configuration")
+    };
+    println!("ok configuration: {rev} has no {shown} to compare with");
+    Ok(None)
+}
+
+/// The configuration files of `rev`'s tree, as `(path, text)` in path
+/// order: each `.toml` file but a `Cargo.toml` with a top-level `crates`
+/// key, which every configuration has and other `.toml` files
+/// (`rustfmt.toml`, `.cargo/config.toml`) do not. `git grep` lists the
+/// candidates in one call. One that [`Config::parse`] refuses (a key
+/// this release dropped or renamed, say), any candidate that is not TOML,
+/// and one `git grep` lists that cannot be read back, are errors naming
+/// it (exit 2), as the base's copy at the head's path is, rather than be
+/// passed over.
+fn base_configs(root: &Path, rev: &str) -> Result<Vec<(String, String)>, String> {
+    let commit = base_commit(root, rev, "its configuration")?;
+    let listed = git_in(
+        root,
+        &[
+            "grep",
+            "-l",
+            "-z",
+            "-F",
+            "crates",
+            &commit,
+            "--",
+            "*.toml",
+            ":(exclude,glob)**/Cargo.toml",
+        ],
+    )?;
+    // git grep exits 1 when nothing matches. Its exit status says only
+    // whether some file matched: a blob it cannot read is reported on
+    // stderr and treated as no match, so any stderr fails the run too,
+    // rather than leave the list empty or short.
+    let failed = !listed.status.success() && listed.status.code() != Some(1);
+    if failed || !listed.stderr.is_empty() {
+        return Err(format!(
+            "git grep crates {commit}: {}",
+            String::from_utf8_lossy(&listed.stderr).trim()
+        ));
+    }
+    // -z gives each path verbatim, NUL-terminated, where Git would quote
+    // one with unusual characters. One the counter cannot read back
+    // exactly (not UTF-8, or not under the commit) fails, rather than be
+    // passed over as no configuration.
+    let mut found = Vec::new();
+    let prefix = format!("{commit}:");
+    for entry in listed.stdout.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        let path = std::str::from_utf8(entry)
+            .ok()
+            .and_then(|e| e.strip_prefix(&prefix))
+            .ok_or_else(|| {
+                format!(
+                    "git grep crates {commit}: {:?} is not a UTF-8 path under the commit, so whether it is {rev}'s configuration cannot be read",
+                    String::from_utf8_lossy(entry)
+                )
+            })?;
+        // git grep lists paths relative to ROOT, as `base_file` reads
+        // them; one that still reads back as nothing fails, rather than be
+        // passed over.
+        let text = base_file(root, rev, path)?.ok_or_else(|| {
+            format!(
+                "git grep crates {commit}: {path} is listed but cannot be read back from {rev}, so whether it is {rev}'s configuration cannot be read"
+            )
+        })?;
+        // A candidate that is not TOML may be a configuration this run
+        // cannot read, so it fails as one that does not parse.
+        let table = text
+            .parse::<toml::Table>()
+            .map_err(|e| format!("{rev}:{path}: {e}"))?;
+        if !table.contains_key("crates") {
+            continue;
+        }
+        Config::parse(&text).map_err(|e| format!("{rev}:{path}: {e}"))?;
+        found.push((path.to_string(), text));
+    }
+    found.sort();
+    Ok(found)
 }
 
 /// The crates that leave the shipped tally because their own Cargo.toml
@@ -6015,12 +8522,30 @@ fn symlink_in(root: &Path, rel: &Path) -> Option<PathBuf> {
 }
 
 /// The first path at or below `rel` under `root`, in path order, that is
-/// a symlink: `rel` itself, or a file or directory under it.
-fn symlink_below(root: &Path, rel: &Path) -> Option<PathBuf> {
+/// a symlink the source walk ([`rust_files`]) reads through: `rel` itself
+/// (a crate's `src/`), or below it one named `*.rs`, or one to a directory
+/// that holds a `.rs` file or a cycle at any depth (the walk follows
+/// directory links). Any other link below `rel` (a `LICENSE`, a `locales`
+/// directory of `.ftl` files) is a file the walk never reads (#71). With
+/// `skip_packages`, a directory below `rel` that is another package's
+/// ([`other_package`]), or a link to one, is left out as the walk leaves
+/// it out, with every link in it.
+fn symlink_below(root: &Path, rel: &Path, skip_packages: bool) -> Option<PathBuf> {
     let meta = fs::symlink_metadata(root.join(rel)).ok()?;
     if meta.file_type().is_symlink() {
         return Some(rel.to_path_buf());
     }
+    read_link_under(root, rel, &meta, skip_packages)
+}
+
+/// The first link under `rel` (a directory, `meta` its metadata) that the
+/// source walk reads through, as [`symlink_below`] defines it.
+fn read_link_under(
+    root: &Path,
+    rel: &Path,
+    meta: &fs::Metadata,
+    skip_packages: bool,
+) -> Option<PathBuf> {
     if !meta.is_dir() {
         return None;
     }
@@ -6030,7 +8555,67 @@ fn symlink_below(root: &Path, rel: &Path) -> Option<PathBuf> {
         .map(|e| rel.join(e.file_name()))
         .collect();
     entries.sort();
-    entries.iter().find_map(|e| symlink_below(root, e))
+    entries.iter().find_map(|e| {
+        let meta = fs::symlink_metadata(root.join(e)).ok()?;
+        let at = root.join(e);
+        if skip_packages && at.is_dir() && other_package(&at) {
+            return None;
+        }
+        if !meta.file_type().is_symlink() {
+            return read_link_under(root, e, &meta, skip_packages);
+        }
+        let read = e.extension().is_some_and(|x| x == "rs")
+            || (dir_or_unreadable(&at)
+                && reaches_rs(&at, skip_packages, &mut std::collections::HashSet::new()));
+        read.then(|| e.clone())
+    })
+}
+
+/// Whether [`rust_files`] would read a `.rs` file under `dir`, following
+/// links as it does and, with `skip_packages`, leaving out the other
+/// packages' directories as it does, or come back to a directory it is
+/// already in (a cycle, which the walk would follow without end). `seen`
+/// holds the canonical directories on the way down. A directory it cannot
+/// resolve or list counts as one that does, so a read error refuses the
+/// link rather than pass it unread.
+fn reaches_rs(
+    dir: &Path,
+    skip_packages: bool,
+    seen: &mut std::collections::HashSet<PathBuf>,
+) -> bool {
+    let Ok(canon) = fs::canonicalize(dir) else {
+        return true;
+    };
+    if !seen.insert(canon.clone()) {
+        return true;
+    }
+    let found = match fs::read_dir(dir) {
+        Err(_) => true,
+        Ok(entries) => entries.into_iter().any(|e| {
+            let Ok(e) = e else {
+                return true;
+            };
+            let p = e.path();
+            if dir_or_unreadable(&p) {
+                !(skip_packages && other_package(&p)) && reaches_rs(&p, skip_packages, seen)
+            } else {
+                p.extension().is_some_and(|x| x == "rs")
+            }
+        }),
+    };
+    seen.remove(&canon);
+    found
+}
+
+/// Whether `p`, followed through links, is a directory, or cannot be
+/// stat'd for a reason other than its absence (a link loop, a permission
+/// or I/O error), which [`reaches_rs`] then refuses. A dangling link is
+/// neither: the walk reads nothing through it.
+fn dir_or_unreadable(p: &Path) -> bool {
+    match fs::metadata(p) {
+        Ok(m) => m.is_dir(),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
 }
 
 /// The revision `--base-rev` names, and its copy of the configuration
@@ -6137,7 +8722,8 @@ fn report(
     c: &Counter,
     unshipped: &[String],
     tests: &std::collections::BTreeSet<String>,
-) -> Floor {
+) -> (Floor, Floor) {
+    let room = (cfg.floor.room_functions, cfg.floor.room_lines);
     let mut total = Tally::default();
     let mut shipped = Tally::default();
     for (k, t) in &c.tallies {
@@ -6157,7 +8743,10 @@ fn report(
         print_row("shipped", &shipped);
         print_assumed(&c.assumed, c.assumed.len());
         fail_on_errors(c.errors);
-        return shares(&shipped, (0, 0));
+        return (
+            shares(&shipped, (0, 0), (0, 0)),
+            shares(&shipped, (0, 0), room),
+        );
     };
     let several = c.tallies.len() > 1;
     println!(
@@ -6184,7 +8773,12 @@ fn report(
     };
     let seams = ledger::read_ledger(&root.join(&l.dir), &premises)
         .unwrap_or_else(|e| usage(format!("{}: {e}", l.dir)));
-    let (checked, mut warnings, errors) = ledger::match_ledger(&c.trusted, &seams);
+    let (checked, mut warnings, errors) = ledger::match_ledger(
+        &c.trusted,
+        &c.termination_only(),
+        &c.trusted_covered,
+        &seams,
+    );
     let (assumed_seams, w) = ledger::match_assumed(&c.assumed, &seams);
     warnings.extend(w);
     for w in &warnings {
@@ -6214,7 +8808,10 @@ fn report(
         }
         std::process::exit(1);
     }
-    shares(&shipped, shipped_checked.discharged)
+    (
+        shares(&shipped, shipped_checked.discharged, (0, 0)),
+        shares(&shipped, shipped_checked.discharged, room),
+    )
 }
 
 /// The trust summary's linkage seams, after the tables, when there are
@@ -6351,8 +8948,11 @@ fn base_limits(
     dirs: &[Krate],
     rev: &str,
 ) -> Result<Vec<rlimit::Limit>, String> {
-    // Each crate's `src/`, relative to the root, as git names paths.
-    let srcs: Vec<(String, PathBuf)> = dirs
+    // Each crate's `src/`, relative to the root, as git names paths, and
+    // whether its walk leaves out the other packages' directories under it
+    // (the head's `skip_packages`, so that the head and the base count
+    // alike; the base copies each Cargo.toml under `src/` that marks one).
+    let srcs: Vec<(String, PathBuf, bool)> = dirs
         .iter()
         .map(|k| {
             let rel: PathBuf = k
@@ -6363,18 +8963,10 @@ fn base_limits(
                 .components()
                 .filter(|c| !matches!(c, std::path::Component::CurDir))
                 .collect();
-            (k.name.clone(), rel)
+            (k.name.clone(), rel, k.skip_packages)
         })
         .collect();
-    let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(["-c", "safe.directory=*"])
-            .args(args)
-            .output()
-            .map_err(|e| format!("git: {e}"))
-    };
+    let git = |args: &[&str]| git_in(root, args);
     let mut c = Counter::new(
         false,
         Atoms::of(cfg),
@@ -6393,17 +8985,20 @@ fn base_limits(
         // The revision's root Cargo.toml, whose `[workspace]` tables a
         // crate inherits its edition and dependencies from
         // ([`crate_manifest`]), when the revision has one.
-        let shown = git(&["show", &format!("{rev}:Cargo.toml")])?;
+        let shown = git(&["show", &in_rev(rev, "Cargo.toml")])?;
         if shown.status.success() {
             fs::create_dir_all(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
             fs::write(scratch.join("Cargo.toml"), &shown.stdout)
                 .map_err(|e| format!("{}: {e}", scratch.display()))?;
         }
-        for (krate, src) in &srcs {
+        for (krate, src, skip_packages) in &srcs {
             let kdir = src.parent().unwrap_or(Path::new("")).to_path_buf();
+            // -z gives each path verbatim; ls-tree lists them relative to
+            // ROOT, as [`in_rev`] reads them.
             let listed = git(&[
                 "ls-tree",
                 "-r",
+                "-z",
                 "--name-only",
                 rev,
                 "--",
@@ -6416,11 +9011,17 @@ fn base_limits(
                     String::from_utf8_lossy(&listed.stderr).trim()
                 ));
             }
-            for path in String::from_utf8_lossy(&listed.stdout).lines() {
+            for entry in listed.stdout.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+                let path = std::str::from_utf8(entry).map_err(|_| {
+                    format!(
+                        "git ls-tree {rev}: {:?} is not a UTF-8 path, so the base's crate cannot be read",
+                        String::from_utf8_lossy(entry)
+                    )
+                })?;
                 if !path.ends_with(".rs") && !path.ends_with("Cargo.toml") {
                     continue;
                 }
-                let shown = git(&["show", &format!("{rev}:{path}")])?;
+                let shown = git(&["show", &in_rev(rev, path)])?;
                 if !shown.status.success() {
                     return Err(format!(
                         "git show {rev}:{path}: {}",
@@ -6435,7 +9036,7 @@ fn base_limits(
             }
             fs::create_dir_all(scratch.join(src)).map_err(|e| format!("{e}"))?;
             c.krate = krate.clone();
-            c.walk_crate(cfg, (&scratch, &scratch.join(&kdir)), None);
+            c.walk_crate(cfg, (&scratch, &scratch.join(&kdir), *skip_packages), None);
         }
         Ok(())
     })();
@@ -6453,9 +9054,12 @@ fn base_limits(
 /// The figures of `t`, as verus/FLOOR records them: the verified share of
 /// functions and of lines, then the verified and discharged share of each,
 /// with `ledger` the functions and lines the generated ledger discharges
-/// besides the Kani marker's.
-fn shares(t: &Tally, ledger: (usize, usize)) -> Floor {
-    let (fns, lines) = (t.fns.iter().sum(), t.lines.iter().sum());
+/// besides the Kani marker's, and `room` that many more unverified
+/// functions and lines (`[floor] room_functions` and `room_lines`, #100)
+/// in each denominator.
+fn shares(t: &Tally, ledger: (usize, usize), room: (usize, usize)) -> Floor {
+    let (fns, lines): (usize, usize) = (t.fns.iter().sum(), t.lines.iter().sum());
+    let (fns, lines) = (fns + room.0, lines + room.1);
     let (v, d) = (Class::Verified as usize, Class::Discharged as usize);
     Floor([
         Some(tenths(t.fns[v], fns)),
@@ -6496,15 +9100,28 @@ fn print_row(name: &str, t: &Tally) {
     );
 }
 
+/// The object name of `path` in `rev`, with `path` relative to ROOT (the
+/// directory `git -C` runs in): `REV:./PATH`, which Git resolves from
+/// there, where `REV:PATH` resolves from the repository's top level and
+/// so misses every file when ROOT is below it.
+fn in_rev(rev: &str, path: &str) -> String {
+    format!("{rev}:./{}", path.trim_start_matches("./"))
+}
+
 /// `REV:FILE` under `root`'s repository (FILE verus/FLOOR or
 /// verus/RLIMIT), failing closed: a
 /// revision that does not resolve to a commit (a shallow clone, another
 /// uid's checkout git refuses, an empty name) is an error, and only a
-/// resolved commit without the file is `None`.
+/// resolved commit without the file is `None`. Whether the file exists
+/// is read from the trees alone (`rev-parse --verify`), so a file whose
+/// blob cannot be read is an error from `git show`, not `None`.
 fn base_file(root: &Path, rev: &str, file: &str) -> Result<Option<String>, String> {
     let commit = base_commit(root, rev, file)?;
-    let path = format!("{commit}:{file}");
-    if !git_in(root, &["cat-file", "-e", &path])?.status.success() {
+    let path = in_rev(&commit, file);
+    if !git_in(root, &["rev-parse", "--verify", "--quiet", &path])?
+        .status
+        .success()
+    {
         return Ok(None);
     }
     let shown = git_in(root, &["show", &path])?;
@@ -6523,11 +9140,17 @@ fn base_file(root: &Path, rev: &str, file: &str) -> Result<Option<String>, Strin
 fn base_dir_crates(root: &Path, rev: &str, dir: &str) -> Result<Vec<String>, String> {
     let commit = base_commit(root, rev, dir)?;
     let dir = config::normal(dir).to_string_lossy().into_owned();
-    let tree = format!("{commit}:{dir}");
+    let tree = in_rev(&commit, &dir);
     if !git_in(root, &["cat-file", "-e", &tree])?.status.success() {
         return Ok(Vec::new());
     }
-    let listed = git_in(root, &["ls-tree", "-z", "-d", "--name-only", &tree])?;
+    // Run below the top level, ls-tree keeps only the entries under the
+    // working directory's path, even of a tree named by `REV:./DIR`;
+    // `--full-tree` lists the whole tree it is given.
+    let listed = git_in(
+        root,
+        &["ls-tree", "--full-tree", "-z", "-d", "--name-only", &tree],
+    )?;
     if !listed.status.success() {
         return Err(format!(
             "git ls-tree {tree}: {}",
@@ -6542,11 +9165,7 @@ fn base_dir_crates(root: &Path, rev: &str, dir: &str) -> Result<Vec<String>, Str
         let src = Path::new(&dir).join(name).join("src");
         let kind = git_in(
             root,
-            &[
-                "cat-file",
-                "-t",
-                &format!("{commit}:{}", src.to_string_lossy()),
-            ],
+            &["cat-file", "-t", &in_rev(&commit, &src.to_string_lossy())],
         )?;
         if kind.status.success() && String::from_utf8_lossy(&kind.stdout).trim() == "tree" {
             out.push(name.to_owned());
@@ -6581,6 +9200,13 @@ fn git_in(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
         .arg("-C")
         .arg(root)
         .args(["-c", "safe.directory=*"])
+        // These change how git reads every pathspec the counter gives it
+        // (`*.toml` taken literally, `*` no longer matching `/`), so a
+        // search would find nothing and compare nothing (#117).
+        .env_remove("GIT_LITERAL_PATHSPECS")
+        .env_remove("GIT_GLOB_PATHSPECS")
+        .env_remove("GIT_NOGLOB_PATHSPECS")
+        .env_remove("GIT_ICASE_PATHSPECS")
         .args(args)
         .output()
         .map_err(|e| format!("git: {e}"))
@@ -6778,7 +9404,17 @@ impl Figures {
     /// Whether `got` meets `want`, with one line per figure `want` gives
     /// saying so. A figure above its floor names the value to record, so the
     /// floor only rises.
+    #[cfg(test)]
     fn check(&self, got: &Floor, want: &Floor) -> (bool, String) {
+        self.check_with_room(got, want, got)
+    }
+
+    /// [`Figures::check`], where the figure a raise records is `room`'s
+    /// (the share with `[floor]`'s room for unverified code, #100) rather
+    /// than `got`'s: a share above its floor names `room`'s figure to
+    /// record where that is above the floor, and no raise where it is not.
+    /// Whether the run passes is `got`'s alone.
+    fn check_with_room(&self, got: &Floor, want: &Floor, room: &Floor) -> (bool, String) {
         let file = &self.file;
         let mut ok = true;
         let mut report = String::new();
@@ -6786,6 +9422,7 @@ impl Figures {
             let (Some(g), Some(w)) = (got.0[k], want.0[k]) else {
                 continue;
             };
+            let r = room.0[k].unwrap_or(g);
             let what = MEANING[k];
             if g < w {
                 ok = false;
@@ -6794,12 +9431,19 @@ impl Figures {
                     shown(g),
                     shown(w)
                 );
-            } else if g > w {
+            } else if g > w && r > w {
                 report += &format!(
                     "ok coverage floor: {name} {what} {}%, above the floor's {}%; raise {file} to `{name} {}`\n",
                     shown(g),
                     shown(w),
-                    shown(g)
+                    shown(r)
+                );
+            } else if g > w {
+                report += &format!(
+                    "ok coverage floor: {name} {what} {}%, above the floor's {}% but within [floor]'s room for unverified code ({}%): no raise\n",
+                    shown(g),
+                    shown(w),
+                    shown(r)
                 );
             } else {
                 report += &format!(
@@ -6827,11 +9471,13 @@ fn badge_line(floor: &Floor) -> String {
 
 /// Whether `rendered`, the part of a line Markdown renders, holds a Verus
 /// badge in any form: `verus` in any case, with `shields.io` or an image
-/// (`![`). The match is wide on purpose: a line it takes for a badge that
-/// is not one fails the gate, while a second badge it missed would pass.
+/// (`![`, or an HTML `<img`, from any host). The match is wide on purpose:
+/// a line it takes for a badge that is not one fails the gate, while a
+/// second badge it missed would pass.
 fn is_badge(rendered: &str) -> bool {
     let lower = rendered.to_lowercase();
-    lower.contains("verus") && (lower.contains("shields.io") || lower.contains("!["))
+    lower.contains("verus")
+        && (lower.contains("shields.io") || lower.contains("![") || lower.contains("<img"))
 }
 
 /// The fence a line opens or closes: its character (`` ` `` or `~`) and
@@ -6848,47 +9494,379 @@ fn fence(line: &str) -> Option<(char, usize)> {
     (n >= 3 && !(c == '`' && rest[n..].contains('`'))).then_some((c, n))
 }
 
-/// Each line of `text`, numbered from 1, with the part Markdown renders:
-/// a line inside a fenced code block renders as none, and the spans
-/// inside HTML comments (`<!--` to `-->`, across lines) are dropped. A
-/// badge on a line that does not render is neither the badge nor a second
-/// one.
-fn rendered_lines(text: &str) -> Vec<(usize, &str, String)> {
-    let mut open: Option<(char, usize)> = None;
-    let mut comment = false;
+/// Each line of `text`, numbered from 1, with the part Markdown renders,
+/// in two readings ([`Rendered`]). In both, a line inside a fenced code
+/// block renders as none, and the spans inside HTML comments (`<!--` to
+/// `-->`, across lines; `<!-->` and `<!--->` are whole comments, as
+/// CommonMark reads them) are dropped. The strict reading hides a fence
+/// or a comment never closed to the end of the file. The lenient reading
+/// reads its opener as text instead; reads as text a `<!--` in a backtick
+/// code span, escaped (`\<!--`), on a line indented 4 or more spaces, or
+/// whose container ends before its `-->` ([`Ends`]: an inline comment's
+/// paragraph, a list item, a block quote); and ends a fence
+/// indented by k > 0 spaces at the first non-blank line indented less (a
+/// list item's fence ends with the item), since a renderer may read the
+/// file either way.
+fn rendered_lines(text: &str) -> Vec<Rendered<'_>> {
+    let (strict, _) = rendered_scan(text, &[], false);
+    // The openers (line index, byte offset) the lenient reading takes as
+    // text, not as the start of a fence or comment, because it found them
+    // unclosed.
+    let mut ignored: Vec<(usize, usize)> = Vec::new();
+    let lenient = loop {
+        match rendered_scan(text, &ignored, true) {
+            (out, None) => break out,
+            (_, Some(opener)) => ignored.push(opener),
+        }
+    };
+    strict
+        .into_iter()
+        .zip(lenient)
+        .map(|((n, line, s), (_, _, l))| (n, line, s, l))
+        .collect()
+}
+
+/// A line of [`rendered_lines`]: its number from 1, its text, and the
+/// part of it Markdown renders in the strict and the lenient reading.
+type Rendered<'t> = (usize, &'t str, String, String);
+
+/// What [`rendered_scan`] gives: each line (its number, text and rendered
+/// part), and the unclosed opener (line index, byte offset), if any.
+type Scan<'t> = (Vec<(usize, &'t str, String)>, Option<(usize, usize)>);
+
+/// The byte ranges of `line`'s backtick code spans: a run of n backticks
+/// up to the next run of exactly n on the line.
+fn code_spans(line: &str) -> Vec<(usize, usize)> {
+    let b = line.as_bytes();
+    let run = |at: usize| b[at..].iter().take_while(|c| **c == b'`').count();
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'`' {
+            i += 1;
+            continue;
+        }
+        let n = run(i);
+        let mut j = i + n;
+        let mut end = None;
+        while j < b.len() {
+            if b[j] == b'`' {
+                let m = run(j);
+                if m == n {
+                    end = Some(j + m);
+                    break;
+                }
+                j += m;
+            } else {
+                j += 1;
+            }
+        }
+        match end {
+            Some(e) => {
+                spans.push((i, e));
+                i = e;
+            }
+            None => i += n,
+        }
+    }
+    spans
+}
+
+/// What ends a comment's container before its `-->`, in the lenient
+/// reading of [`rendered_scan`], by what precedes its `<!--` on its line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Ends {
+    /// `<!--` at the start of a line (after up to 3 spaces) opens an HTML
+    /// block, which only its `-->` ends.
+    Closer,
+    /// After container markers (list markers and `>`, nested in any
+    /// order), an HTML block in them, whose content starts at column
+    /// `col`: a line with fewer `>` markers than the `quote` quotes among
+    /// them ends the innermost ([`quote_depth`]), and a non-blank line
+    /// indented less than `col` ends a list item among them (`item`), as
+    /// an HTML block has no lazy continuation. An ordered marker that
+    /// does not start at 1 cannot interrupt a paragraph, so the line may
+    /// continue the one before it and the `<!--` be inline (`para`): the
+    /// comment then ends where either reading ends it.
+    Container {
+        col: usize,
+        quote: usize,
+        item: bool,
+        para: bool,
+    },
+    /// Anywhere else, an inline comment: a blank line or a line that
+    /// starts a block ends its paragraph. The paragraph's text starts at
+    /// column `col`, and its container's content starts there or before,
+    /// so a block start indented up to `col + 3` columns ends it (more
+    /// than CommonMark's 3 past the content column when the text is
+    /// indented past it: a false failure, never a pass).
+    Paragraph { col: usize },
+}
+
+impl Ends {
+    /// The container of a `<!--` that `before` precedes on its line.
+    fn of(before: &str) -> Ends {
+        let (cols, at) = lead(before);
+        if cols > 3 {
+            return Ends::Paragraph { col: cols };
+        }
+        let mut rest = &before[at..];
+        if rest.is_empty() {
+            return Ends::Closer;
+        }
+        let (mut quote, mut item, mut para) = (0, false, false);
+        loop {
+            rest = rest.trim_start_matches([' ', '\t']);
+            if let Some(r) = rest.strip_prefix('>') {
+                quote += 1;
+                rest = r;
+            } else if let Some(n) = list_marker(rest) {
+                item = true;
+                let digits = &rest[..n - 2];
+                para |= !digits.is_empty() && digits.parse::<u32>() != Ok(1);
+                rest = &rest[n..];
+            } else {
+                break;
+            }
+        }
+        if rest.is_empty() {
+            Ends::Container {
+                col: columns(before),
+                quote,
+                item,
+                para,
+            }
+        } else {
+            Ends::Paragraph {
+                col: columns(&before[..before.len() - rest.len()]),
+            }
+        }
+    }
+
+    /// Whether `line`, after the opener's, ends the container.
+    fn ends_at(self, line: &str) -> bool {
+        let blank = line.trim().is_empty();
+        let (indent, at) = lead(line);
+        let rest = &line[at..];
+        match self {
+            Ends::Closer => false,
+            Ends::Container {
+                col,
+                quote,
+                item,
+                para,
+            } => {
+                quote_depth(line) < quote
+                    || (item && !blank && indent < col)
+                    || (para && Ends::Paragraph { col }.ends_at(line))
+            }
+            Ends::Paragraph { col } => {
+                blank
+                    || (indent <= col + 3
+                        && (rest.starts_with('#')
+                            || rest.starts_with('>')
+                            || fence(rest).is_some()
+                            || list_marker(rest).is_some_and(|n| n < rest.len())
+                            // An HTML block start: `<` and a tag name, `</`,
+                            // `<?`, or `<!` (a declaration, CDATA or a
+                            // comment), each of which can end a paragraph.
+                            || rest
+                                .strip_prefix('<')
+                                .and_then(|r| r.chars().next())
+                                .is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, '/' | '?' | '!'))
+                            || ['-', '*', '_', '='].iter().any(|c| {
+                                rest.chars().all(|x| x == *c || x == ' ' || x == '\t')
+                                    && rest.chars().filter(|x| x == c).count() >= 3
+                            })))
+            }
+        }
+    }
+}
+
+/// Whether what precedes a `<!--` on its line, `before`, puts it in an
+/// indented code block: 4 or more columns of indent at the line's start,
+/// or after a `>` and its one optional space, or after a list marker and
+/// its space, so the `<!--` is code text, not a comment.
+///
+/// Columns count from the line's start, so a tab reaches the next
+/// multiple of 4 from where it sits, and the optional space after a `>`
+/// or a marker takes one column of a tab, leaving the rest as indent
+/// (CommonMark's tab rule, `>\t\tfoo`).
+fn in_code(before: &str) -> bool {
+    let mut rest = before;
+    // The column `rest` starts at, and the columns of a tab already
+    // reached that count as indent (a tab the optional space took one
+    // column of).
+    let (mut col, mut spare) = (0, 0);
+    loop {
+        let at = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+        let end = columns_from(col, &rest[..at]);
+        if spare + end - col >= 4 {
+            return true;
+        }
+        (col, spare) = (end, 0);
+        rest = &rest[at..];
+        let n = if rest.starts_with('>') {
+            1
+        } else if let Some(n) = list_marker(rest) {
+            n - 1
+        } else {
+            return false;
+        };
+        col += n;
+        rest = &rest[n..];
+        if let Some(r) = rest.strip_prefix(' ') {
+            (col, rest) = (col + 1, r);
+        } else if let Some(r) = rest.strip_prefix('\t') {
+            let w = 4 - col % 4;
+            (col, spare, rest) = (col + w, w - 1, r);
+        }
+    }
+}
+
+/// The column `text` ends at when it starts at column `col`, a tab
+/// reaching the next multiple of 4.
+fn columns_from(col: usize, text: &str) -> usize {
+    text.chars()
+        .fold(col, |c, x| if x == '\t' { c + 4 - c % 4 } else { c + 1 })
+}
+
+/// How many block quotes `line` continues: its `>` markers, each after
+/// up to 3 columns of indent.
+fn quote_depth(line: &str) -> usize {
+    let mut rest = line;
+    let mut depth = 0;
+    loop {
+        let (cols, at) = lead(rest);
+        match rest[at..].strip_prefix('>') {
+            Some(r) if cols <= 3 => {
+                depth += 1;
+                rest = r;
+            }
+            _ => return depth,
+        }
+    }
+}
+
+/// The columns `text` spans, a tab reaching the next multiple of 4, as
+/// CommonMark counts indentation.
+fn columns(text: &str) -> usize {
+    columns_from(0, text)
+}
+
+/// The leading spaces and tabs of `line`: the columns they span and their
+/// length in bytes.
+fn lead(line: &str) -> (usize, usize) {
+    let at = line.len() - line.trim_start_matches([' ', '\t']).len();
+    (columns(&line[..at]), at)
+}
+
+/// The length of the list marker `rest` starts with (`-`, `*`, `+`, or
+/// up to 9 digits and `.` or `)`), followed by a space or a tab, if it
+/// has one.
+fn list_marker(rest: &str) -> Option<usize> {
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let n = match rest.as_bytes().first()? {
+        b'-' | b'*' | b'+' => 1,
+        _ if (1..=9).contains(&digits)
+            && matches!(rest.as_bytes().get(digits), Some(b'.' | b')')) =>
+        {
+            digits + 1
+        }
+        _ => return None,
+    };
+    rest[n..].starts_with([' ', '\t']).then_some(n + 1)
+}
+
+/// One pass of [`rendered_lines`], strict or `lenient`, with the openers
+/// in `ignored` read as text: each line with the part of it that renders,
+/// and the opener (line index, byte offset) of the fence or comment still
+/// open at the end of `text`, if one is.
+fn rendered_scan<'t>(text: &'t str, ignored: &[(usize, usize)], lenient: bool) -> Scan<'t> {
+    // Indentation in columns, a tab to the next multiple of 4.
+    let indent = |l: &str| lead(l).0;
+    // An open fence: its character, length, indent and line index.
+    let mut open: Option<(char, usize, usize, usize)> = None;
+    // An open comment: its opener (line index, byte offset), and what ends
+    // its container before its `-->` ([`Ends`]).
+    let mut comment: Option<(usize, usize, Ends)> = None;
     let mut out = Vec::new();
     for (i, line) in text.lines().enumerate() {
-        if let Some((c, n)) = open {
-            if fence(line)
-                .is_some_and(|(d, m)| d == c && m >= n && line.trim().chars().all(|x| x == c))
-            {
+        // The lenient reading takes a comment's opener as text when its
+        // container ends before its `-->`: a paragraph at a blank line or
+        // a line that starts a block, a list item at a line indented less,
+        // a block quote at a line without `>`.
+        if lenient
+            && let Some((ci, co, ends)) = comment
+            && ends.ends_at(line)
+        {
+            return (out, Some((ci, co)));
+        }
+        if let Some((c, n, k, _)) = open {
+            if lenient && k > 0 && !line.trim().is_empty() && indent(line) < k {
                 open = None;
+            } else {
+                if fence(line)
+                    .is_some_and(|(d, m)| d == c && m >= n && line.trim().chars().all(|x| x == c))
+                {
+                    open = None;
+                }
+                out.push((i + 1, line, String::new()));
+                continue;
             }
+        }
+        if comment.is_none()
+            && !ignored.contains(&(i, 0))
+            && let Some((c, n)) = fence(line)
+        {
+            open = Some((c, n, indent(line), i));
             out.push((i + 1, line, String::new()));
             continue;
         }
-        if !comment && let Some(f) = fence(line) {
-            open = Some(f);
-            out.push((i + 1, line, String::new()));
-            continue;
-        }
+        let spans = if lenient {
+            code_spans(line)
+        } else {
+            Vec::new()
+        };
+        // The lenient reading also takes as text a `<!--` that renders as
+        // text: in a backtick code span, escaped (`\<!--`), or in an
+        // indented code block, at the line's start or inside a quote or a
+        // list item ([`in_code`]).
+        let text_at = |pos: usize| {
+            ignored.contains(&(i, pos))
+                || (lenient
+                    && (spans.iter().any(|(s, e)| *s < pos && pos < *e)
+                        || line[..pos].ends_with('\\')
+                        || in_code(&line[..pos])))
+        };
         let mut shown = String::new();
-        let mut rest = line;
+        let mut at = 0;
         loop {
-            if comment {
+            let rest = &line[at..];
+            if comment.is_some() {
                 match rest.find("-->") {
                     Some(end) => {
-                        comment = false;
-                        rest = &rest[end + 3..];
+                        comment = None;
+                        at += end + 3;
                     }
                     None => break,
                 }
             } else {
                 match rest.find("<!--") {
+                    Some(start) if text_at(at + start) => {
+                        shown += &rest[..start + 4];
+                        at += start + 4;
+                    }
                     Some(start) => {
                         shown += &rest[..start];
-                        comment = true;
-                        rest = &rest[start + 4..];
+                        let after = &rest[start + 4..];
+                        // `<!-->` and `<!--->` end where they start.
+                        if let Some(close) = [">", "->"].iter().find(|c| after.starts_with(**c)) {
+                            at += start + 4 + close.len();
+                        } else {
+                            comment = Some((i, at + start, Ends::of(&line[..at + start])));
+                            at += start + 4;
+                        }
                     }
                     None => {
                         shown += rest;
@@ -6899,27 +9877,34 @@ fn rendered_lines(text: &str) -> Vec<(usize, &str, String)> {
         }
         out.push((i + 1, line, shown));
     }
-    out
+    let unclosed = match (open, comment) {
+        (Some((_, _, _, i)), _) => Some((i, 0)),
+        (None, opener) => opener.map(|(i, at, _)| (i, at)),
+    };
+    (out, unclosed)
 }
 
 /// Holds `text`, the badge file `name`, to `want`, the line
-/// [`badge_line`] gives for the FLOOR file `floor`: exactly one rendered
-/// line holds a Verus badge ([`is_badge`], [`rendered_lines`]), and it is
-/// `want`. The report line, or the failure.
+/// [`badge_line`] gives for the FLOOR file `floor`: exactly one line holds
+/// a Verus badge ([`is_badge`]) in either reading of [`rendered_lines`],
+/// and it is `want`, rendered in both. The report line, or the failure.
 fn badge_report(text: &str, name: &str, floor: &str, want: &str) -> Result<String, String> {
-    let found: Vec<(usize, &str)> = rendered_lines(text)
+    let found: Vec<(usize, &str, bool)> = rendered_lines(text)
         .into_iter()
-        .filter(|(_, _, shown)| is_badge(shown))
-        .map(|(n, l, _)| (n, l))
+        .filter(|(_, _, s, l)| is_badge(s) || is_badge(l))
+        .map(|(n, line, s, l)| (n, line, is_badge(&s) && is_badge(&l)))
         .collect();
     match found.as_slice() {
         [] => Err(format!(
             "FAIL badge: {name} has no Verus badge; add this line, which gives {floor}'s functions and lines figures:\n{want}"
         )),
-        [(n, line)] if *line == want => Ok(format!(
+        [(n, line, true)] if *line == want => Ok(format!(
             "ok badge: {name}:{n} gives {floor}'s functions and lines figures"
         )),
-        [(n, _)] => Err(format!(
+        [(n, line, false)] if *line == want => Err(format!(
+            "FAIL badge: {name}:{n} is the badge but may not render: one reading of the file has it inside a fence or an HTML comment (one never closed, `<!--` in inline code, or a list item's fence); move it above that opener, keeping this line:\n{want}"
+        )),
+        [(n, _, _)] => Err(format!(
             "FAIL badge: {name}:{n} is not the badge {floor}'s functions and lines figures give; replace it with this line:\n{want}"
         )),
         _ => Err(format!(
@@ -6927,7 +9912,7 @@ fn badge_report(text: &str, name: &str, floor: &str, want: &str) -> Result<Strin
             found.len(),
             found
                 .iter()
-                .map(|(n, _)| n.to_string())
+                .map(|(n, _, _)| n.to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
         )),
@@ -7030,16 +10015,264 @@ fn unrecorded(discharged: &[(PathBuf, String)], records: &[String]) -> Vec<(Path
         .iter()
         .filter(|(file, name)| {
             let file = format!("`{}`", file.display());
-            let quote = format!("fn {name}");
-            !records.iter().any(|r| {
-                r.contains(&file)
-                    && r.match_indices(&quote).any(|(i, _)| {
-                        !r[i + quote.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
-                    })
-            })
+            !records
+                .iter()
+                .any(|r| r.contains(&file) && quotes_fn(r, name))
         })
         .cloned()
         .collect()
+}
+
+/// The key a record names a method outside `verus!` by, before `::name`:
+/// the `impl`'s self type as written, generics included (`B<u8>`), or for
+/// a trait `impl` `<Type as Trait>` (`<A as From<u8>>`), or a trait's name
+/// for its default methods; `None` for a free function. Spaces go, but
+/// one between two identifier characters (`dyn Tr`), so the key reads as
+/// rustfmt writes the type.
+fn owner_key(owner: &str, trait_: Option<&str>) -> Option<String> {
+    let tight = |s: &str| {
+        let s: Vec<char> = s.trim().chars().collect();
+        let word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_');
+        let mut out = String::new();
+        for (i, c) in s.iter().enumerate() {
+            if c.is_whitespace() {
+                let next = s[i..].iter().find(|c| !c.is_whitespace());
+                if word(out.chars().last().as_ref()) && word(next) && !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            } else {
+                out.push(*c);
+            }
+        }
+        out
+    };
+    let ty = tight(owner);
+    if ty.is_empty() {
+        return None;
+    }
+    Some(match trait_ {
+        Some(t) => format!("<{ty} as {}>", tight(t)),
+        None => ty,
+    })
+}
+
+/// Whether the record `r` quotes `fn NAME`, followed by no further
+/// identifier character, as [`unrecorded`] reads it.
+fn quotes_fn(r: &str, name: &str) -> bool {
+    let quote = format!("fn {name}");
+    r.match_indices(&quote)
+        .any(|(i, _)| !r[i + quote.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+}
+
+/// Appends to `out` each `#[kani::proof]` (or `#[kani::proof_for_contract]`)
+/// function in `items` of `file`, at any depth of inline modules and
+/// `impl`s ([`Harness`], [`harness_body`]). An item under a
+/// `cfg` cargo kani does not meet ([`kani_skips`]: `#[cfg(any())] mod
+/// proofs`, `#[cfg(test)] mod tests`) is left out, since `make kani` never
+/// runs it.
+fn kani_harnesses(items: &[Item], file: &Path, out: &mut Vec<Harness>) {
+    let never = |attrs: &[Attribute]| kani_skips(&cfg_predicates(attrs));
+    let read = |name: String, block: &verus_syn::Block| {
+        let mut h = Harness {
+            file: file.to_path_buf(),
+            name,
+            calls: std::collections::BTreeSet::new(),
+            idents: std::collections::BTreeSet::new(),
+        };
+        harness_body(
+            verus_syn::__private::ToTokens::to_token_stream(block),
+            &mut h,
+        );
+        h
+    };
+    let harness = |attrs: &[Attribute]| {
+        !never(attrs)
+            && attrs.iter().any(|a| {
+                let segs: Vec<String> = a
+                    .path()
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect();
+                segs == ["kani", "proof"] || segs == ["kani", "proof_for_contract"]
+            })
+    };
+    for item in items {
+        match item {
+            Item::Fn(f) if harness(&f.attrs) => {
+                out.push(read(f.sig.ident.to_string(), &f.block));
+            }
+            Item::Mod(m) if !never(&m.attrs) => {
+                if let Some((_, inner)) = &m.content {
+                    kani_harnesses(inner, file, out);
+                }
+            }
+            Item::Impl(i) if !never(&i.attrs) => {
+                for ii in &i.items {
+                    if let ImplItem::Fn(f) = ii
+                        && harness(&f.attrs)
+                    {
+                        out.push(read(f.sig.ident.to_string(), &f.block));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether `cargo kani`, as `make kani` runs it, builds no code under the
+/// `cfg` predicates `preds`: they hold in no build, or only where `test`
+/// is set (`#[cfg(test)] mod tests`), which `cargo kani` leaves unset
+/// without `--tests`. It sets `kani`, so `#[cfg(kani)]` passes. A
+/// predicate it cannot read is taken as one that may hold.
+fn kani_skips(preds: &[String]) -> bool {
+    if preds.is_empty() {
+        return false;
+    }
+    let atoms = Atoms {
+        test: vec!["test".to_owned()],
+        ..Atoms::default()
+    };
+    let p = all_of(preds);
+    [false, true]
+        .into_iter()
+        .all(|verus| cfg_eval(&p, verus, &atoms).is_ok_and(|c| !c.t))
+}
+
+/// A `#[kani::proof]` function ([`kani_harnesses`]): its file (relative to
+/// the root), its name, the names its body calls, and every identifier its
+/// body mentions ([`harness_body`]).
+#[derive(Clone, Debug, PartialEq)]
+struct Harness {
+    file: PathBuf,
+    name: String,
+    calls: std::collections::BTreeSet<String>,
+    idents: std::collections::BTreeSet<String>,
+}
+
+/// Adds to `h` what the harness body `tokens` calls and mentions, at any
+/// depth of nesting. A call is the last identifier before a call's
+/// parentheses, with or without a turbofish, whatever path or receiver
+/// precedes it (`f(..)`, `A::new(..)`, `s.open(..)`, `g::<T>(..)`), macro
+/// arguments included. A `fn` item declared anywhere in the body (`fn`
+/// then its name), to the end of its braces, is left out: the harness
+/// does not make its calls, and its `fn name(..)` is no call. A function
+/// pointer type (`extern "C" fn(*mut u8)`) is no item, and what follows
+/// it is read.
+fn harness_body(tokens: TokenStream, h: &mut Harness) {
+    let toks: Vec<TokenTree> = tokens.into_iter().collect();
+    let mut i = 0;
+    while i < toks.len() {
+        match &toks[i] {
+            // A `fn` item has its name next; a function pointer type
+            // (`fn(*mut u8)`) has its parentheses next, and is read on.
+            TokenTree::Ident(id)
+                if id == "fn" && matches!(toks.get(i + 1), Some(TokenTree::Ident(_))) =>
+            {
+                while i < toks.len()
+                    && !matches!(&toks[i], TokenTree::Group(g) if g.delimiter() == proc_macro2::Delimiter::Brace)
+                {
+                    i += 1;
+                }
+            }
+            // The `fn` of a pointer type is a keyword, not a call.
+            TokenTree::Ident(id) if id == "fn" => {}
+            TokenTree::Ident(id) => {
+                h.idents.insert(id.to_string());
+                if let Some(TokenTree::Group(g)) = toks.get(past_turbofish(&toks, i))
+                    && g.delimiter() == proc_macro2::Delimiter::Parenthesis
+                {
+                    h.calls.insert(id.to_string());
+                }
+            }
+            TokenTree::Group(g) => harness_body(g.stream(), h),
+            _ => {}
+        }
+        i += 1;
+    }
+}
+
+/// The failures of the discharged functions outside `verus!`, each as the
+/// text after `FAIL discharged: `. `dir` names the records' directory.
+/// Plain Rust has no contract a record quotes, so each such function needs
+/// three things the counter checks:
+///
+/// - a path ([`OutsideMark::path`]) no other marked function in its file
+///   shares, since a record could not tell the two apart
+///   (`#[cfg(unix)] fn map` beside `#[cfg(windows)] fn map`);
+/// - a record that names its file in backquotes and its path in
+///   backquotes, exactly (`` `A::new` ``, `` `a::init` ``, or `` `init` ``
+///   for one at the file's top), so that one record for `A::new` covers
+///   no marked `B::new`, `<A as From<u16>>::from` or top-level `new`;
+/// - a record that covers it (its file, `fn NAME` and its path) and
+///   names, each in backquotes, the file and the name of a
+///   `#[kani::proof]` harness of its crate whose body calls it by name
+///   and, for a method, mentions its owner ([`harness_body`]), so that
+///   `Vec::new()` alone does not check a marked `A::new`.
+///
+/// A function reports its first failure only. One with no record at all
+/// fails [`unrecorded`] as well.
+fn outside_unchecked(
+    marks: &[OutsideMark],
+    records: &[String],
+    harnesses: &BTreeMap<String, Vec<Harness>>,
+    dir: &str,
+) -> Vec<String> {
+    let mut fails = Vec::new();
+    let mut shared = std::collections::BTreeSet::new();
+    for m in marks {
+        let n = marks
+            .iter()
+            .filter(|o| o.file == m.file && o.path() == m.path())
+            .count();
+        if n > 1 {
+            if shared.insert((m.file.clone(), m.path())) {
+                fails.push(format!(
+                    "{}: {n} functions outside verus! with the discharged_by = \"kani\" marker share `{}`, so no record can tell them apart; mark one of them, or rename one",
+                    m.file.display(),
+                    m.path()
+                ));
+            }
+            continue;
+        }
+        let file = format!("`{}`", m.file.display());
+        let named = format!("`{}`", m.path());
+        let covering: Vec<&String> = records
+            .iter()
+            .filter(|r| r.contains(&file) && quotes_fn(r, &m.name) && r.contains(&named))
+            .collect();
+        if covering.is_empty() {
+            fails.push(format!(
+                "{}: {named} has the discharged_by = \"kani\" marker outside verus!, but no {dir}/kani-*.md record names its file and {named} in backquotes",
+                m.file.display()
+            ));
+            continue;
+        }
+        let checked = harnesses.get(&m.krate).is_some_and(|hs| {
+            hs.iter().any(|h| {
+                h.calls.contains(&m.name)
+                    && m.owner.as_ref().is_none_or(|o| h.idents.contains(o))
+                    && covering.iter().any(|r| {
+                        r.contains(&format!("`{}`", h.file.display()))
+                            && r.contains(&format!("`{}`", h.name))
+                    })
+            })
+        });
+        if !checked {
+            let owner = m
+                .owner
+                .as_ref()
+                .map_or_else(String::new, |o| format!(" and mentions `{o}`"));
+            fails.push(format!(
+                "{}: {named} has the discharged_by = \"kani\" marker outside verus!, but no {dir}/kani-*.md record that covers it names, each in backquotes, the file and name of a #[kani::proof] harness of crate {} whose body calls `{}`{owner}",
+                m.file.display(),
+                m.krate,
+                m.name
+            ));
+        }
+    }
+    fails
 }
 
 /// Appends to `out` each function `tokens` calls directly, at any depth of
@@ -7101,6 +10334,323 @@ fn direct_calls(tokens: TokenStream, out: &mut Vec<(bool, String)>) {
         if let Some(method) = call {
             out.push((method, id.to_string()));
         }
+    }
+}
+
+/// A closure `let` binds ([`LoopShape::closures`]): its name, whether
+/// its body loops, and its direct calls ([`direct_calls`]).
+type Closure = (String, bool, Vec<(bool, String)>);
+
+/// The loops of a function's body, for the nested-loop check
+/// ([`nested_loops`], #76).
+#[derive(Debug, Default, PartialEq)]
+struct LoopShape {
+    /// Whether the body has a loop (`loop`, `while` or `for`) at all.
+    loops: bool,
+    /// The line of each loop inside another loop's body.
+    nested: Vec<usize>,
+    /// Each direct call ([`direct_calls`]) inside a loop's body (or a
+    /// `while`'s condition), with the line of the outermost loop around it.
+    in_loop: Vec<(bool, String, usize)>,
+    /// Each name a `let` binds (through a type), with whether its
+    /// initializer loops and the initializer's direct calls, so a closure
+    /// is kept whatever wraps it (`Box::new(|..| ..)`, `&`, parentheses).
+    /// One that loops, itself or through a call, makes a call of its name
+    /// a call that loops ([`nested_loops`]).
+    closures: Vec<Closure>,
+    /// Whether the body did not parse as a block, so its loops are
+    /// unknown: the check then names the function (fails closed).
+    unread: bool,
+    /// The line of each macro invocation that holds `loop`, `while` or
+    /// `for`: its expansion's loop structure is unknown, so the check
+    /// names the function (fails closed).
+    macros: Vec<usize>,
+}
+
+/// The loops of `tokens`, a function's body ([`LoopShape`]), parsed as a
+/// block (Verus's syntax included) and read by its structure: `loop`,
+/// `while` and `for` expressions, whatever their headers hold (an
+/// `unsafe` block, a `match`). A `while`'s condition runs each iteration
+/// and is read as inside the loop; a `for`'s iterator runs once and is
+/// not, but a closure in it (`.map(|b| ..)`) runs per item and is. A
+/// nested item (a function, an `impl`) is its own and is left out. A
+/// closure's loops are the body's, and each name a `let` binds is kept
+/// with its initializer's loops and calls
+/// ([`LoopShape::closures`]). A macro
+/// invocation is tokens: one that holds `loop`, `while` or `for` counts
+/// as a loop at its line. A body that does not parse is `unread`.
+fn loop_shape(tokens: TokenStream) -> LoopShape {
+    use verus_syn::__private::ToTokens;
+    use verus_syn::visit::Visit;
+    struct V {
+        /// The line of the outermost loop the walk is inside.
+        at: Option<usize>,
+        /// While a `for`'s iterator is walked, that `for`'s line: a
+        /// closure there runs per item.
+        iter_of: Option<usize>,
+        shape: LoopShape,
+    }
+    impl V {
+        /// A loop at `line`, whose each iteration runs `each`.
+        fn enter(&mut self, line: usize, each: &[TokenStream], walk: impl FnOnce(&mut V)) {
+            self.shape.loops = true;
+            if self.at.is_some() {
+                self.shape.nested.push(line);
+            }
+            let at = self.at.unwrap_or(line);
+            let mut calls = Vec::new();
+            for t in each {
+                direct_calls(t.clone(), &mut calls);
+            }
+            self.shape
+                .in_loop
+                .extend(calls.into_iter().map(|(m, n)| (m, n, at)));
+            let was = self.at.replace(at);
+            walk(self);
+            self.at = was;
+        }
+    }
+    /// Whether `tokens` hold a loop keyword, at any depth.
+    fn has_loop_word(tokens: TokenStream) -> bool {
+        tokens.into_iter().any(|t| match t {
+            TokenTree::Ident(i) => matches!(i.to_string().as_str(), "loop" | "while" | "for"),
+            TokenTree::Group(g) => has_loop_word(g.stream()),
+            _ => false,
+        })
+    }
+    impl<'a> Visit<'a> for V {
+        fn visit_item(&mut self, _: &'a Item) {}
+        fn visit_expr_while(&mut self, w: &'a verus_syn::ExprWhile) {
+            let each = [w.cond.to_token_stream(), w.body.to_token_stream()];
+            self.enter(w.while_token.span.start().line, &each, |v| {
+                v.visit_expr(&w.cond);
+                v.visit_block(&w.body);
+            });
+        }
+        fn visit_expr_for_loop(&mut self, f: &'a verus_syn::ExprForLoop) {
+            let was = self.iter_of.replace(f.for_token.span.start().line);
+            self.visit_expr(&f.expr);
+            self.iter_of = was;
+            let each = [f.body.to_token_stream()];
+            self.enter(f.for_token.span.start().line, &each, |v| {
+                v.visit_block(&f.body)
+            });
+        }
+        fn visit_expr_loop(&mut self, l: &'a verus_syn::ExprLoop) {
+            let each = [l.body.to_token_stream()];
+            self.enter(l.loop_token.span.start().line, &each, |v| {
+                v.visit_block(&l.body)
+            });
+        }
+        fn visit_expr_closure(&mut self, c: &'a verus_syn::ExprClosure) {
+            // In a `for`'s iterator, a closure runs per item: its body is
+            // inside that loop.
+            match self.iter_of.take() {
+                Some(line) => {
+                    let each = [c.body.to_token_stream()];
+                    self.enter(line, &each, |v| v.visit_expr(&c.body));
+                    self.iter_of = Some(line);
+                }
+                None => verus_syn::visit::visit_expr_closure(self, c),
+            }
+        }
+        fn visit_local(&mut self, l: &'a verus_syn::Local) {
+            // The name bound, through a type (`let s: T = ..`).
+            let mut pat = &l.pat;
+            while let verus_syn::Pat::Type(t) = pat {
+                pat = &t.pat;
+            }
+            // The whole initializer, whatever wraps a closure in it
+            // (`Box::new(..)`, `Some(..)`, `&`, parentheses): a call of the
+            // name loops where it loops or calls what loops. A name that is
+            // never called costs nothing.
+            if let (verus_syn::Pat::Ident(p), Some(init)) = (pat, &l.init) {
+                let mut inner = V {
+                    at: None,
+                    iter_of: None,
+                    shape: LoopShape::default(),
+                };
+                inner.visit_expr(&init.expr);
+                let mut calls = Vec::new();
+                direct_calls(init.expr.to_token_stream(), &mut calls);
+                self.shape
+                    .closures
+                    .push((p.ident.to_string(), inner.shape.loops, calls));
+            }
+            verus_syn::visit::visit_local(self, l);
+        }
+        fn visit_macro(&mut self, m: &'a verus_syn::Macro) {
+            if has_loop_word(m.tokens.clone()) {
+                let line = m
+                    .path
+                    .segments
+                    .first()
+                    .map_or(0, |s| s.ident.span().start().line);
+                self.enter(line, std::slice::from_ref(&m.tokens), |_| {});
+                // What the expansion nests is not read: the function is
+                // named (fails closed).
+                self.shape.macros.push(line);
+            }
+        }
+    }
+    let block = TokenTree::Group(proc_macro2::Group::new(
+        proc_macro2::Delimiter::Brace,
+        tokens,
+    ));
+    let Ok(block) = verus_syn::parse2::<verus_syn::Block>(block.into()) else {
+        return LoopShape {
+            unread: true,
+            ..LoopShape::default()
+        };
+    };
+    let mut v = V {
+        at: None,
+        iter_of: None,
+        shape: LoopShape::default(),
+    };
+    v.visit_block(&block);
+    let mut shape = v.shape;
+    shape.in_loop.sort();
+    shape.in_loop.dedup();
+    shape.nested.sort();
+    shape.nested.dedup();
+    shape
+}
+
+/// The nested-loop check (#76): each function of a shipped crate whose
+/// work a loop's `decreases` does not bound, with why: a loop inside
+/// another loop, or a call inside a loop to a function that loops, itself
+/// or through what it calls (each loop's iterations are bounded, but not
+/// the product). Calls are read as the recursion check reads them
+/// ([`recursive`]): by name within a file, a free function for a plain
+/// call and the function's own owner's for `self.f()` or `Self::f()`; a
+/// call across files, or through another receiver or path, is not seen.
+fn nested_loops(fns: &[FnRef], unshipped: &[String]) -> Vec<(usize, Vec<String>)> {
+    use std::collections::BTreeSet;
+    type Key<'a> = (&'a Path, &'a str, &'a str);
+    let key = |f: &FnRef, method: bool, name: &str| -> (PathBuf, String, String) {
+        (
+            f.file.clone(),
+            if method {
+                f.owner.clone()
+            } else {
+                String::new()
+            },
+            name.to_owned(),
+        )
+    };
+    // The functions that loop, themselves or through a call: a fixpoint
+    // over the direct calls, by name.
+    let mut looping: BTreeSet<Key> = fns
+        .iter()
+        .filter(|f| f.loops.loops || f.loops.unread)
+        .map(|f| (f.file.as_path(), f.owner.as_str(), f.name.as_str()))
+        .collect();
+    loop {
+        let before = looping.len();
+        for f in fns {
+            let me: Key = (&f.file, &f.owner, &f.name);
+            if looping.contains(&me) {
+                continue;
+            }
+            let calls_looping = f.calls.iter().any(|(m, c)| {
+                looping.contains(&(
+                    f.file.as_path(),
+                    if *m { f.owner.as_str() } else { "" },
+                    c.as_str(),
+                ))
+            });
+            if calls_looping {
+                looping.insert(me);
+            }
+        }
+        if looping.len() == before {
+            break;
+        }
+    }
+    let mut found = Vec::new();
+    for (i, f) in fns.iter().enumerate() {
+        if unshipped.contains(&f.krate) {
+            continue;
+        }
+        let mut why: Vec<String> = f
+            .loops
+            .nested
+            .iter()
+            .map(|l| format!("a loop at line {l} inside another"))
+            .collect();
+        if f.loops.unread {
+            why.push("a body the check cannot parse".to_owned());
+        }
+        why.extend(f.loops.macros.iter().map(|l| {
+            format!("a macro invocation at line {l} that holds a loop, whose nesting the check cannot read")
+        }));
+        // The function's `let` closures that loop, themselves, through a
+        // call of a function that loops, or through another such closure.
+        let mut closures: BTreeSet<&str> = BTreeSet::new();
+        loop {
+            let before = closures.len();
+            for (name, loops, calls) in &f.loops.closures {
+                let through = calls.iter().any(|(m, c)| {
+                    (!*m && closures.contains(c.as_str()))
+                        || looping.contains(&(
+                            f.file.as_path(),
+                            if *m { f.owner.as_str() } else { "" },
+                            c.as_str(),
+                        ))
+                });
+                if *loops || through {
+                    closures.insert(name);
+                }
+            }
+            if closures.len() == before {
+                break;
+            }
+        }
+        for (m, c, at) in &f.loops.in_loop {
+            if !*m && closures.contains(c.as_str()) {
+                why.push(format!(
+                    "a call to the closure `{c}`, which loops, inside the loop at line {at}"
+                ));
+                continue;
+            }
+            let (file, owner, name) = key(f, *m, c);
+            if looping.contains(&(file.as_path(), owner.as_str(), name.as_str())) {
+                why.push(format!(
+                    "a call to `{c}`, which loops, inside the loop at line {at}"
+                ));
+            }
+        }
+        if !why.is_empty() {
+            found.push((i, why));
+        }
+    }
+    found
+}
+
+/// The nested-loop check (`[loops]`, #76): exits 1 on each function
+/// [`nested_loops`] finds that `table`'s table does not name
+/// ([`documented`]), the work-bound theorem that bounds its product.
+fn check_loops(root: &Path, table: &str, fns: &[FnRef], unshipped: &[String]) {
+    let text = fs::read_to_string(root.join(table)).unwrap_or_default();
+    let mut failed = false;
+    for (i, why) in nested_loops(fns, unshipped) {
+        let f = &fns[i];
+        if documented(&text, f) {
+            continue;
+        }
+        failed = true;
+        eprintln!(
+            "FAIL loops: {}:{}: `{}` has {}, so its loops' `decreases` measures do not bound its work, but {table}'s table has no row naming its file and quoting `fn {}`",
+            f.file.display(),
+            f.line,
+            f.name,
+            why.join("; "),
+            f.name
+        );
+    }
+    if failed {
+        std::process::exit(1);
     }
 }
 
@@ -7501,7 +11051,7 @@ fn token_mints(
     let mut scan = mints::Scan::new(names);
     for k in crates {
         let mut files = Vec::new();
-        rust_files(&k.dir.join("src"), &mut files);
+        rust_files(&k.dir.join("src"), k.skip_packages, &mut files);
         for f in files {
             let rel = f.strip_prefix(root).unwrap_or(&f).display().to_string();
             match fs::read_to_string(&f) {
@@ -7555,6 +11105,147 @@ mod tests {
             verus: vec!["verus_keep_ghost".into(), "feature=\"verus\"".into()],
             sets: vec!["feature=\"jit\"".into()],
             never: vec!["miri".into()],
+            runs: Vec::new(),
+            one_run: false,
+        }
+    }
+
+    /// challoc's two runs declared as `[[runs]]` (#21): x86_64 and
+    /// aarch64, each never setting `loom`.
+    fn two_runs() -> Atoms {
+        Atoms::of(
+            &Config::parse(
+                "[crates]\ndir = \"crates\"\n\
+                 [[runs]]\nname = \"verus\"\nsets = ['target_arch = \"x86_64\"']\nnever_sets = [\"loom\"]\n\
+                 [[runs]]\nname = \"verus-arm64\"\nsets = ['target_arch = \"aarch64\"']\nnever_sets = [\"loom\"]\n",
+            )
+            .expect("parses"),
+        )
+    }
+
+    /// Verus's attribute form under two declared runs (#21): it applies
+    /// surely only where every run that may compile the function applies
+    /// it. Unguarded, `cfg_attr(not(target_arch = "x86_64"), ..)` leaves
+    /// the x86_64 run compiling the function without it: trusted. Under
+    /// `target_arch = "aarch64"`, only the aarch64 run compiles it, and
+    /// applies it: verified.
+    #[test]
+    fn per_run_attribute_form_applies_in_every_run_that_compiles() {
+        let src = r#"
+#[cfg_attr(not(target_arch = "x86_64"), verus_verify)]
+fn unguarded() {}
+#[cfg(target_arch = "aarch64")]
+#[cfg_attr(not(target_arch = "x86_64"), verus_verify)]
+fn on_arm() {}
+#[cfg_attr(any(target_arch = "x86_64", target_arch = "aarch64"), verus_verify)]
+fn both() {}
+"#;
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("lib.rs"),
+            module: vec!["k".into()],
+            ..Counter::new(false, two_runs(), None)
+        };
+        c.items(&parse_file(src).expect("parses").items, false);
+        assert_eq!(c.errors, 0, "errors: got = {}, wanted = 0", c.errors);
+        let t = c.tallies.remove("k").unwrap_or_default();
+        let want = [2, 1, 0, 0];
+        assert_eq!(t.fns, want, "fns: got = {:?}, wanted = {want:?}", t.fns);
+    }
+
+    /// A binding Verus's build may see under two declared runs (#21): one
+    /// only the aarch64 run compiles is seen (the x86_64 run never sets
+    /// its arch), and one no run compiles (`loom`) is not.
+    #[test]
+    fn per_run_bindings_are_seen_where_some_run_compiles() {
+        let src = r#"
+#[cfg(target_arch = "aarch64")]
+use other::verus;
+#[cfg(loom)]
+use loom::verus as v;
+use plain::verus as w;
+"#;
+        let at = BindAt {
+            file: Path::new("lib.rs"),
+            module: vec!["k".into()],
+            guards: Vec::new(),
+            shared: 0,
+            scope: "lib.rs".into(),
+            expansion: None,
+        };
+        let mut out = Vec::new();
+        bindings_in(
+            &parse_file(src).expect("parses").items,
+            &at,
+            &two_runs(),
+            &mut out,
+        );
+        let got: Vec<(&str, bool)> = out.iter().map(|b| (b.name.as_str(), b.verus)).collect();
+        let want = [("verus", true), ("v", false), ("w", true)];
+        assert_eq!(got, want, "got = {got:?}, wanted = {want:?}");
+    }
+
+    /// #21's table: an item is classed in each run, verified where it is
+    /// sure in some run and unsure in none, trusted where some run may
+    /// ship it unchecked, and left out where no build compiles it.
+    #[test]
+    fn per_run_atoms_class_run_by_run() {
+        let runs = two_runs();
+        for (cfg, want) in [
+            ("target_arch = \"x86_64\"", Built::Shipped),
+            ("target_arch = \"aarch64\"", Built::Shipped),
+            // Never in the x86_64 run, sure in the aarch64 one: verified
+            // (trusted under the shorthand).
+            ("not (target_arch = \"x86_64\")", Built::Shipped),
+            (
+                "all (target_arch = \"x86_64\" , any (target_arch = \"aarch64\" , unix))",
+                Built::Unsure,
+            ),
+            (
+                "all (target_arch = \"x86_64\" , target_arch = \"aarch64\")",
+                Built::Test,
+            ),
+            // Sure in one run, never in the other: verified.
+            (
+                "any (target_arch = \"x86_64\" , target_arch = \"aarch64\")",
+                Built::Shipped,
+            ),
+            // Sure in one run, unsure in the other: trusted.
+            ("any (target_arch = \"x86_64\" , unix)", Built::Unsure),
+            // Never in every run, yet a shipped build may: trusted.
+            ("loom", Built::Unsure),
+        ] {
+            let got = cfg_built(cfg, &runs);
+            assert_eq!(got, Ok(want), "{cfg}: got = {got:?}, wanted = {want:?}");
+        }
+        // In a module, each run that may compile the module must be sure
+        // to compile the item there.
+        let s = |v: &[&str]| v.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>();
+        for (shared, own, want) in [
+            (&[][..], &["target_arch = \"x86_64\""][..], false),
+            (
+                &["target_arch = \"x86_64\""][..],
+                &["target_arch = \"x86_64\""][..],
+                true,
+            ),
+            (&["target_arch = \"x86_64\""][..], &["unix"][..], false),
+            (
+                &["target_arch = \"x86_64\""][..],
+                &["not (target_arch = \"aarch64\")"][..],
+                true,
+            ),
+            (
+                &["not (loom)"][..],
+                &["any (target_arch = \"x86_64\" , target_arch = \"aarch64\")"][..],
+                true,
+            ),
+        ] {
+            let got = every_run_sure(&s(shared), &s(own), &runs);
+            assert_eq!(
+                got,
+                Ok(want),
+                "{shared:?} {own:?}: got = {got:?}, wanted = {want}"
+            );
         }
     }
 
@@ -7754,6 +11445,203 @@ mod tests {
                 ],
                 true,
             ),
+            // The forms the manifests' reading (#136) must follow as cargo
+            // does: a renamed dependency, by its key in a feature, and
+            // through the workspace's entry.
+            (
+                vec![(
+                    DATA,
+                    data(
+                        "[dependencies]\nother = { path = \"../lib\", package = \"lib\", features = [\"test-util\"] }\n",
+                    ),
+                )],
+                true,
+            ),
+            (
+                vec![(
+                    DATA,
+                    data(
+                        "[dependencies]\nother = { path = \"../lib\", package = \"lib\" }\n\n[features]\nx = [\"other/test-util\"]\n",
+                    ),
+                )],
+                true,
+            ),
+            (
+                vec![
+                    (
+                        "Cargo.toml",
+                        format!(
+                            "{ROOT}\n[workspace.dependencies]\nother = {{ path = \"crates/lib\", package = \"lib\" }}\n"
+                        ),
+                    ),
+                    (DATA, data("[dependencies]\nother = { workspace = true, features = [\"test-util\"] }\n")),
+                ],
+                true,
+            ),
+            // A feature of a dev-dependency only, which only tests build.
+            (
+                vec![(
+                    DATA,
+                    data(
+                        "[dev-dependencies]\nlib = { path = \"../lib\" }\n\n[features]\nx = [\"lib/test-util\"]\n",
+                    ),
+                )],
+                false,
+            ),
+            // A path dependency that is no member: what it asks counts where
+            // a build compiles it, a member's normal dependency, and not
+            // where only tests do.
+            (
+                vec![
+                    ("Cargo.toml", format!("{ROOT}exclude = [\"helper\"]\n")),
+                    (DATA, data("[dependencies]\nhelper = { path = \"../../helper\" }\n")),
+                    (
+                        "helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../crates/lib\", features = [\"test-util\"] }\n".to_string(),
+                    ),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    ("Cargo.toml", format!("{ROOT}exclude = [\"helper\"]\n")),
+                    (DATA, data("[dev-dependencies]\nhelper = { path = \"../../helper\" }\n")),
+                    (
+                        "helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../crates/lib\", features = [\"test-util\"] }\n".to_string(),
+                    ),
+                ],
+                false,
+            ),
+            // A non-member's own feature that forwards it, which nothing
+            // turns on, is off; one its dependent asks for is on.
+            (
+                vec![
+                    ("Cargo.toml", format!("{ROOT}exclude = [\"helper\"]\n")),
+                    (DATA, data("[dependencies]\nhelper = { path = \"../../helper\" }\n")),
+                    (
+                        "helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../crates/lib\" }\n\n[features]\nx = [\"lib/test-util\"]\n".to_string(),
+                    ),
+                ],
+                false,
+            ),
+            (
+                vec![
+                    ("Cargo.toml", format!("{ROOT}exclude = [\"helper\"]\n")),
+                    (DATA, data("[dependencies]\nhelper = { path = \"../../helper\", features = [\"x\"] }\n")),
+                    (
+                        "helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../crates/lib\" }\n\n[features]\nx = [\"lib/test-util\"]\n".to_string(),
+                    ),
+                ],
+                true,
+            ),
+            // A path dependency inside the workspace's directory is a
+            // member, so its own features are on, even only a dev-dependency.
+            (
+                vec![
+                    (DATA, data("[dev-dependencies]\nhelper = { path = \"../helper\" }\n")),
+                    (
+                        "crates/helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../lib\" }\n\n[features]\nx = [\"lib/test-util\"]\n".to_string(),
+                    ),
+                ],
+                true,
+            ),
+            // An excluded directory is no member.
+            (
+                vec![
+                    (
+                        "Cargo.toml",
+                        format!("{ROOT}exclude = [\"crates/helper\"]\n"),
+                    ),
+                    (DATA, data("[dependencies]\nhelper = { path = \"../helper\" }\n")),
+                    (
+                        "crates/helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../lib\" }\n\n[features]\nx = [\"lib/test-util\"]\n".to_string(),
+                    ),
+                ],
+                false,
+            ),
+            // Resolver 1 (named, or a virtual manifest's with none named)
+            // unifies a member's dev-dependencies' features into its
+            // normal build (found in review).
+            (
+                vec![
+                    (
+                        "Cargo.toml",
+                        "[workspace]\nresolver = \"1\"\nmembers = [\"crates/lib\", \"crates/data\"]\n".to_string(),
+                    ),
+                    (
+                        DATA,
+                        data(
+                            "[dependencies]\nlib = { path = \"../lib\" }\n\n[dev-dependencies]\nlib = { path = \"../lib\", features = [\"test-util\"] }\n",
+                        ),
+                    ),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    (
+                        "Cargo.toml",
+                        "[workspace]\nmembers = [\"crates/lib\", \"crates/data\"]\n".to_string(),
+                    ),
+                    (
+                        DATA,
+                        data(
+                            "[dependencies]\nlib = { path = \"../lib\" }\n\n[dev-dependencies]\nlib = { path = \"../lib\", features = [\"test-util\"] }\n",
+                        ),
+                    ),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    (
+                        "Cargo.toml",
+                        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/lib\", \"crates/data\"]\n".to_string(),
+                    ),
+                    (
+                        DATA,
+                        data(
+                            "[dependencies]\nlib = { path = \"../lib\" }\n\n[dev-dependencies]\nlib = { path = \"../lib\", features = [\"test-util\"] }\n",
+                        ),
+                    ),
+                ],
+                false,
+            ),
+            // An optional dependency's implicit feature, which `dep:`
+            // suppresses (found in review).
+            (
+                vec![
+                    ("Cargo.toml", format!("{ROOT}exclude = [\"helper\"]\n")),
+                    (
+                        "crates/lib/Cargo.toml",
+                        "[package]\nname = \"lib\"\nedition = \"2024\"\n\n[dependencies]\ntest-util = { package = \"helper\", path = \"../../helper\", optional = true }\n\n[features]\nx = [\"test-util\"]\n".to_string(),
+                    ),
+                    (
+                        "helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n".to_string(),
+                    ),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    ("Cargo.toml", format!("{ROOT}exclude = [\"helper\"]\n")),
+                    (
+                        "crates/lib/Cargo.toml",
+                        "[package]\nname = \"lib\"\nedition = \"2024\"\n\n[dependencies]\ntest-util = { package = \"helper\", path = \"../../helper\", optional = true }\n\n[features]\nx = [\"dep:test-util\"]\n".to_string(),
+                    ),
+                    (
+                        "helper/Cargo.toml",
+                        "[package]\nname = \"helper\"\nedition = \"2024\"\n".to_string(),
+                    ),
+                ],
+                false,
+            ),
         ];
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         for (i, (files, want)) in rows.into_iter().enumerate() {
@@ -7781,16 +11669,24 @@ mod tests {
                 "{files:?}: {}",
                 String::from_utf8_lossy(&lock.stderr)
             );
-            let got: Vec<String> = test_util_enablers(&root, &test_util())
-                .unwrap()
-                .iter()
-                .map(|(p, f)| {
-                    assert_eq!(f, "test-util");
-                    p.split(' ').next().unwrap_or_default().to_string()
-                })
-                .collect();
+            // The manifests' reading, and cargo's own resolution, which it
+            // must match.
+            let names = |e: Vec<(String, String)>| -> Vec<String> {
+                e.iter()
+                    .map(|(p, f)| {
+                        assert_eq!(f, "test-util");
+                        p.split(' ').next().unwrap_or_default().to_string()
+                    })
+                    .collect()
+            };
+            let got = names(features::test_util_enablers(&root, &test_util()).unwrap());
+            let cargo_got = names(cargo_enablers(&root, &test_util()).unwrap());
             let wanted: Vec<String> = if want { vec!["lib".into()] } else { Vec::new() };
-            assert_eq!(got, wanted, "{files:?}: got = {got:?}, wanted = {wanted:?}");
+            assert_eq!(
+                (&got, &cargo_got),
+                (&wanted, &wanted),
+                "{files:?}: (got, cargo's) = ({got:?}, {cargo_got:?}), wanted = {wanted:?}"
+            );
             let _ = fs::remove_dir_all(&root);
         }
     }
@@ -7875,6 +11771,284 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// The manifests' reading (#136) fails closed on each form it does not
+    /// read, and where the lockfile shows what the manifests do not.
+    #[test]
+    fn test_features_reading_fails_closed() {
+        const LIB: &str =
+            "[package]\nname = \"lib\"\nedition = \"2024\"\n\n[features]\ntest-util = []\n";
+        const DATA: &str = "[package]\nname = \"data\"\nedition = \"2024\"\n\n";
+        const LOCK: &str = "version = 4\n\n[[package]]\nname = \"data\"\nversion = \"0.0.0\"\ndependencies = [\"lib\"]\n\n[[package]]\nname = \"lib\"\nversion = \"0.0.0\"\n";
+        const ROOT: &str = "[workspace]\nmembers = [\"crates/lib\", \"crates/data\"]\n";
+        const EXT: &str = "\n[[package]]\nname = \"ext\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        let none = || Vec::<(&str, String)>::new();
+        for (case, root_toml, data, lock, extra, want) in [
+            (
+                "a glob other than a trailing /*",
+                "[workspace]\nmembers = [\"crates/l*\", \"crates/data\"]\n",
+                "",
+                LOCK.to_owned(),
+                none(),
+                "glob other than a trailing",
+            ),
+            (
+                "a lockfile package no manifest names",
+                "[workspace]\nmembers = [\"crates/lib\"]\n",
+                "",
+                LOCK.to_owned(),
+                none(),
+                "has the package data with no source",
+            ),
+            (
+                "a feature naming no dependency",
+                ROOT,
+                "[features]\nx = [\"nope/test-util\"]\n",
+                LOCK.to_owned(),
+                none(),
+                "has no dependency `nope`",
+            ),
+            (
+                "a dependency's features that are not a list",
+                ROOT,
+                "[dependencies]\nlib = { path = \"../lib\", features = \"test-util\" }\n",
+                LOCK.to_owned(),
+                none(),
+                "dependency `lib`'s `features` is not a list of strings",
+            ),
+            (
+                "a feature that is not a list",
+                ROOT,
+                "[features]\nx = \"lib/test-util\"\n",
+                LOCK.to_owned(),
+                none(),
+                "features.x is not a list of strings",
+            ),
+            (
+                "[features] that is not a table",
+                ROOT,
+                "features = [\"x\"]\n[package]\nname = \"data\"\n",
+                LOCK.to_owned(),
+                none(),
+                "[features] is not a table",
+            ),
+            (
+                "workspace = true with no entry",
+                ROOT,
+                "[dependencies]\nlib = { workspace = true }\n",
+                LOCK.to_owned(),
+                none(),
+                "the workspace has no such dependency",
+            ),
+            (
+                "a package with no name",
+                ROOT,
+                "[package]\nedition = \"2024\"\n",
+                LOCK.to_owned(),
+                none(),
+                "[package] has no name",
+            ),
+            (
+                "[target] that is not a table",
+                ROOT,
+                "target = 1\n[package]\nname = \"data\"\n",
+                LOCK.to_owned(),
+                none(),
+                "[target] is not a table",
+            ),
+            (
+                "a dependency section that is not a table",
+                ROOT,
+                "dependencies = 1\n[package]\nname = \"data\"\n",
+                LOCK.to_owned(),
+                none(),
+                "a dependency section is not a table",
+            ),
+            (
+                "a dependency that is neither a version nor a table",
+                ROOT,
+                "[dependencies]\nlib = 1\n",
+                LOCK.to_owned(),
+                none(),
+                "dependency `lib` is neither a version nor a table",
+            ),
+            (
+                "a workspace dependency that is neither a version nor a table",
+                "[workspace]\nmembers = [\"crates/lib\", \"crates/data\"]\n[workspace.dependencies]\nlib = 1\n",
+                "[dependencies]\nlib = { workspace = true }\n",
+                LOCK.to_owned(),
+                none(),
+                "dependency `lib` is neither a version nor a table",
+            ),
+            (
+                "a package that is not a string",
+                ROOT,
+                "[dependencies]\nlib = { path = \"../lib\", package = 1 }\n",
+                LOCK.to_owned(),
+                none(),
+                "`package` is not a string",
+            ),
+            (
+                "a path that is not a string",
+                ROOT,
+                "[dependencies]\nlib = { path = 1 }\n",
+                LOCK.to_owned(),
+                none(),
+                "`path` is not a string",
+            ),
+            (
+                "an optional that is not a boolean",
+                ROOT,
+                "[dependencies]\nlib = { path = \"../lib\", optional = 1 }\n",
+                LOCK.to_owned(),
+                none(),
+                "`optional` is not a boolean",
+            ),
+            (
+                "a resolver it does not read",
+                "[workspace]\nresolver = \"4\"\nmembers = [\"crates/lib\", \"crates/data\"]\n",
+                "",
+                LOCK.to_owned(),
+                none(),
+                "is not one verus-count reads",
+            ),
+            (
+                "a lockfile `package` that is not an array",
+                ROOT,
+                "",
+                "version = 4\npackage = 1\n".to_owned(),
+                none(),
+                "`package` is not an array",
+            ),
+            (
+                "a lockfile package with no name",
+                ROOT,
+                "",
+                format!("{LOCK}\n[[package]]\nversion = \"1.0.0\"\n"),
+                none(),
+                "a Cargo.lock package has no name",
+            ),
+            (
+                "a lockfile dependency that is not a string",
+                ROOT,
+                "",
+                format!("{LOCK}{EXT}dependencies = [1]\n"),
+                none(),
+                "a Cargo.lock dependency is not a string",
+            ),
+            (
+                "a package with a source that depends on one with a test-only feature",
+                ROOT,
+                "",
+                format!("{LOCK}{EXT}dependencies = [\"lib\"]\n"),
+                none(),
+                "a package with a source, depend on lib, which has the test-only feature `test-util`",
+            ),
+            (
+                "two manifests of one name",
+                ROOT,
+                "[dependencies]\nlib = { path = \"../lib\" }\nother = { path = \"../../dup\", package = \"lib\" }\n",
+                LOCK.to_owned(),
+                vec![("dup/Cargo.toml", LIB.to_owned())],
+                "two manifests name the package lib",
+            ),
+            (
+                "a member the lockfile does not have (a stale lockfile)",
+                "[workspace]\nmembers = [\"crates/lib\", \"crates/data\", \"crates/x\"]\n",
+                "",
+                LOCK.to_owned(),
+                vec![(
+                    "crates/x/Cargo.toml",
+                    "[package]\nname = \"x\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../lib\", features = [\"test-util\"] }\n".to_owned(),
+                )],
+                "a build compiles the package x, but Cargo.lock",
+            ),
+            ("no lockfile", ROOT, "", String::new(), none(), "cannot read"),
+        ] {
+            let root = std::env::temp_dir()
+                .join(format!("verus-count-fails-closed-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&root);
+            // A case that writes its own `[package]` replaces the whole
+            // manifest.
+            let data = match data.contains("[package]") {
+                true => data.to_owned(),
+                false => format!("{DATA}{data}"),
+            };
+            for (p, t) in [
+                ("Cargo.toml", root_toml.to_owned()),
+                ("crates/lib/Cargo.toml", LIB.to_owned()),
+                ("crates/data/Cargo.toml", data),
+            ]
+            .into_iter()
+            .chain(extra)
+            {
+                let f = root.join(p);
+                fs::create_dir_all(f.parent().unwrap()).unwrap();
+                fs::write(&f, t).unwrap();
+            }
+            if !lock.is_empty() {
+                fs::write(root.join("Cargo.lock"), lock).unwrap();
+            }
+            let got = features::test_util_enablers(&root, &test_util());
+            assert!(
+                got.as_ref().is_err_and(|e| e.contains(want)),
+                "{case}: got = {got:?}, wanted an error with {want:?}"
+            );
+            let _ = fs::remove_dir_all(&root);
+        }
+        // A package with a source that depends on a local one with no
+        // test-only feature of its own may ask for any of its features: one
+        // that forwards a test-only feature reaches it (found in review).
+        let root = std::env::temp_dir().join(format!("verus-count-patched-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for (p, t) in [
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"crates/lib\"]\n\n[patch.crates-io]\nmid = { path = \"mid\" }\n",
+            ),
+            ("crates/lib/Cargo.toml", LIB),
+            (
+                "mid/Cargo.toml",
+                "[package]\nname = \"mid\"\nedition = \"2024\"\n\n[dependencies]\nlib = { path = \"../crates/lib\" }\n\n[features]\nx = [\"lib/test-util\"]\n",
+            ),
+        ] {
+            let f = root.join(p);
+            fs::create_dir_all(f.parent().unwrap()).unwrap();
+            fs::write(&f, t).unwrap();
+        }
+        fs::write(
+            root.join("Cargo.lock"),
+            format!("version = 4\n\n[[package]]\nname = \"lib\"\nversion = \"0.0.0\"\n\n[[package]]\nname = \"mid\"\nversion = \"0.0.0\"\ndependencies = [\"lib\"]\n{EXT}dependencies = [\"mid\"]\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            features::test_util_enablers(&root, &test_util()),
+            Ok(vec![("lib".to_owned(), "test-util".to_owned())])
+        );
+        // An optional dependency's implicit feature is a feature such a
+        // package may ask for, unless a `dep:` entry suppresses it.
+        for (x, want) in [("test-util", false), ("dep:test-util", true)] {
+            fs::write(
+                root.join("crates/lib/Cargo.toml"),
+                format!("[package]\nname = \"lib\"\nedition = \"2024\"\n\n[dependencies]\ntest-util = {{ package = \"helper\", path = \"../../helper\", optional = true }}\n\n[features]\nx = [\"{x}\"]\n"),
+            )
+            .unwrap();
+            fs::create_dir_all(root.join("helper")).unwrap();
+            fs::write(
+                root.join("helper/Cargo.toml"),
+                "[package]\nname = \"helper\"\nedition = \"2024\"\n",
+            )
+            .unwrap();
+            fs::write(
+                root.join("Cargo.lock"),
+                format!("version = 4\n\n[[package]]\nname = \"helper\"\nversion = \"0.0.0\"\n\n[[package]]\nname = \"lib\"\nversion = \"0.0.0\"\n\n[[package]]\nname = \"mid\"\nversion = \"0.0.0\"\ndependencies = [\"lib\"]\n{EXT}dependencies = [\"lib\"]\n"),
+            )
+            .unwrap();
+            let got = features::test_util_enablers(&root, &test_util());
+            assert_eq!(got.is_ok(), want, "{x}: got = {got:?}");
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// A workspace cargo cannot resolve (here, no lockfile under
     /// `--locked`) is an error, not a pass.
     #[test]
@@ -7889,7 +12063,8 @@ mod tests {
             "[package]\nname = \"lib\"\nedition = \"2024\"\n\n[workspace]\n",
         )
         .unwrap();
-        assert!(test_util_enablers(&root, &test_util()).is_err());
+        assert!(features::test_util_enablers(&root, &test_util()).is_err());
+        assert!(cargo_enablers(&root, &test_util()).is_err());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -8013,6 +12188,19 @@ mod tests {
             format!("~~~\n{alt}\n~~~"),
             format!("<!--\n{alt}\n-->"),
             format!("<!-- {alt} -->"),
+            // An HTML block at the start of a line crosses blank lines.
+            format!("<!--\n\n{alt}\n-->"),
+            // A list item's fence holds a tab-indented line: a tab is 4
+            // columns, past the fence's 2, so the line stays in it.
+            format!("- x\n\n  ```\n\t{alt}\n  ```"),
+            // A comment in a nested quote whose lines keep both `>`.
+            format!("> > <!--\n> > {alt}\n> > -->"),
+            // A `1.` item, which may interrupt the paragraph, holds an
+            // HTML block across a blank line.
+            format!("1. <!--\n\n   {alt}\n   -->"),
+            // A nested item's paragraph: a quote 4 columns past its
+            // content column continues it, so the comment stays open.
+            format!("- a\n  - Text <!-- x\n        > {alt}\n    -->"),
         ] {
             assert_eq!(
                 badge_report(
@@ -8140,6 +12328,294 @@ mod tests {
             (
                 readme(&format!("```x``` {want}")),
                 "FAIL badge: README.md:3 is not the badge",
+            ),
+            // An `<img>` badge from a host other than shields.io.
+            (
+                readme(&format!(
+                    "{want}\n<img alt=\"Verus\" src=\"https://badgen.net/badge/Verus/99%25/green\">"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4)",
+            ),
+            // A fence or a comment never closed hides nothing: a list
+            // item's fence that the renderer ends with the item, `<!--` in
+            // inline code, and `<!-->`, a whole comment.
+            (
+                readme(&format!(
+                    "{want}\n- step one\n  ```\n  example\nStale: ![Verus](https://img.shields.io/badge/Verus-99%25-green)"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 7)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nWrite `<!--` to start a comment.\nStale: ![Verus](https://img.shields.io/badge/Verus-99%25-green)"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // The later `-->` would close `<!-->` or `<!--->` read as an
+            // opener, hiding the stale badge in both readings, so these
+            // rows hold only while they are whole comments.
+            (
+                readme(&format!(
+                    "{want}\n<!--> Stale: ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n<!-- note -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n<!---> Stale: ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n<!-- note -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 4)",
+            ),
+            // The strict reading keeps a fence indented 1 to 3 spaces open
+            // across a line indented less, as CommonMark does: only the
+            // lenient reading ends it, so the canonical line is not
+            // credited.
+            (
+                readme(&format!("  ```\n{want}\n  ```")),
+                "FAIL badge: README.md:4 is the badge but may not render",
+            ),
+            // A `<!--` that renders as text, with a `-->` later: escaped,
+            // in an indented code block, and mid-line with a blank line
+            // before its `-->` (an inline comment cannot cross one).
+            (
+                readme(&format!(
+                    "{want}\n\nUse \\<!-- here.\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n<!-- x -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n\n    <!-- example\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n<!-- x -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n\nText <!-- here.\n\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n\n<!-- x -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 7)",
+            ),
+            // A comment whose container ends before its `-->`: an HTML
+            // block in a list item or a block quote (no lazy continuation),
+            // and an inline comment whose paragraph a list item or a
+            // heading ends.
+            (
+                readme(&format!(
+                    "{want}\n- <!--\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n> <!--\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n- ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n# ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // Each other line that ends a paragraph (#120): a block quote,
+            // a thematic break, a fence, an ordered list item, and an HTML
+            // block start (the centered `<p><img>` badge).
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n> ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n***\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n~~~\n~~~\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 7)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n1. ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n<p align=\"center\"><img alt=\"Verus\" src=\"https://img.shields.io/badge/Verus-99%25-green\"></p>\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // An HTML block in an ordered item, in an item's quote, and in
+            // an item a tab separates from its marker; `<!--` after a tab,
+            // an indented code block.
+            (
+                readme(&format!(
+                    "{want}\n1. <!--\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // `2.` cannot interrupt a paragraph, so `2. <!-- x` may
+            // continue the badge's paragraph, its `<!--` inline: the
+            // comment ends where a paragraph would, at a quote line or a
+            // blank line, though the item's rule would keep it open.
+            (
+                readme(&format!(
+                    "{want}\n2. <!-- x\n   > ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n   -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n2. <!-- x\n\n   ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n   -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            // A paragraph in a nested item: a quote at the item's content
+            // column (4), past 3 from the line's start, interrupts it.
+            (
+                readme(&format!(
+                    "{want}\n- a\n  - Text <!-- x\n    > ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n    -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n- a\n  2. <!-- x\n     > ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n     -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            // The same with a fence at the nested item's content column:
+            // `fence` is read on the line after its indent.
+            (
+                readme(&format!(
+                    "{want}\n- a\n  - Text <!-- x\n    ~~~\n    ~~~\n    ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n    -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 8)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n- > <!--\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n-\t<!--\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // The same with the badge and `-->` indented 2: a tab after
+            // the marker puts the item's content at column 4, so a line
+            // indented 2 ends the item (counting bytes, it would not).
+            (
+                readme(&format!(
+                    "{want}\n-\t<!--\n  ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n  -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n\n\t<!-- example\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n<!-- x -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            // The same closed by a bare `-->`, which ends no paragraph, so
+            // only reading the tab-indented `<!--` as code shows the badge.
+            (
+                readme(&format!(
+                    "{want}\n\n\t<!-- example\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            // More HTML block starts that end a paragraph (`<?`, `<!`, a
+            // closing tag), a thematic break of tab-separated `_`, and an
+            // indented code block inside a quote.
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n<?x?>\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n<!DOCTYPE html>\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n</div><img alt=\"Verus\" src=\"https://img.shields.io/badge/Verus-99%25-green\">\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\nText <!-- x\n_\t_\t_\n![Verus](https://img.shields.io/badge/Verus-99%25-green)\n-->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 6)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n>     <!--\n> ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n> -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // The same with a tab after `>`: the optional space takes one
+            // of its 3 columns, so 2 spaces more make 4; and a comment in
+            // a nested quote, which a line with one `>` ends.
+            (
+                readme(&format!(
+                    "{want}\n>\t  <!--\n> ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n> -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n> > <!--\n> ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n> > -->"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            // A closed comment still hides, and an unclosed opener later
+            // in the file does not reopen it.
+            (
+                readme(&format!("<!--\n{want}\n-->\n{alt}\nWrite `<!--` here.")),
+                "FAIL badge: README.md:6 is not the badge",
+            ),
+            // The canonical line only after an opener never closed: the
+            // strict reading hides it, so it is not credited.
+            (
+                readme(&format!("<!--\n{want}\n")),
+                "FAIL badge: README.md:4 is the badge but may not render",
+            ),
+            (
+                readme(&format!("```\n{want}\n")),
+                "FAIL badge: README.md:4 is the badge but may not render",
+            ),
+            // Closers later in the file: `<!--` in inline code closed by
+            // `-->` in inline code, and a list item's fence that a later
+            // top-level fence would close. The stale badge renders.
+            (
+                readme(&format!(
+                    "{want}\nWrite `<!--` to open a comment.\nStale: ![Verus](https://img.shields.io/badge/Verus-99%25-green)\nEnd it with `-->`."
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 5)",
+            ),
+            (
+                readme(&format!(
+                    "{want}\n- step\n  ```\n  ex\nStale: ![Verus](https://img.shields.io/badge/Verus-99%25-green)\n```\ncode\n```"
+                )),
+                "FAIL badge: README.md has 2 Verus badges (lines 3, 7)",
             ),
         ] {
             let got = badge_report(&text, "README.md", "verus/FLOOR", &want);
@@ -8381,6 +12857,246 @@ mod tests {
             .filter(|(i, _)| (c.fns[*i].class == Class::Verified) == verified)
             .map(|(i, path)| format!("{}: {}", c.fns[i].name, path.join(" -> ")))
             .collect()
+    }
+
+    /// What [`nested_loops`] finds in one file, `src`, as `name: why; ..`.
+    fn nesting(src: &str) -> Vec<String> {
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("lib.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        c.items(&parse_file(src).expect("parses").items, false);
+        assert_eq!(c.errors, 0, "{src}");
+        nested_loops(&c.fns, &[])
+            .into_iter()
+            .map(|(i, why)| format!("{}: {}", c.fns[i].name, why.join("; ")))
+            .collect()
+    }
+
+    /// The nested-loop check (#76): a loop in a loop, and a call in a loop
+    /// to a function that loops, itself or through a call, each with its
+    /// line; a single loop, loops one after another, and what only looks
+    /// like a loop (an `impl .. for`, `for<'a>`, a nested function's own
+    /// loop) are not.
+    #[test]
+    fn nested_loops_are_reported() {
+        // A work-bound mutant of a CRC table update: an inner loop that
+        // rescans the bytes before `i`, with its own `decreases`.
+        assert_eq!(
+            nesting(
+                "verus! {\nfn update_table(t: &mut [u32]) {\n    let mut i = 0;\n    while i < t.len()\n        invariant i <= t.len(),\n        decreases t.len() - i,\n    {\n        let mut j = 0;\n        while j < i\n            invariant j <= i,\n            decreases i - j,\n        {\n            j += 1;\n        }\n        i += 1;\n    }\n}\n}\n"
+            ),
+            ["update_table: a loop at line 9 inside another"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(a: &[u8]) {\n    for i in 0..a.len() {\n        for _ in 0..i {}\n    }\n}\n"
+            ),
+            ["f: a loop at line 3 inside another"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f() {\n    'o: loop {\n        while g() { break 'o; }\n    }\n}\nfn g() -> bool { true }\n"
+            ),
+            ["f: a loop at line 3 inside another"]
+        );
+        // A call in a loop, or in its header, to a function that loops,
+        // directly, through another call, or as `self.` or `Self::`.
+        assert_eq!(
+            nesting(
+                "fn g(n: u32) { for _ in 0..n {} }\nfn f() {\n    for _ in 0..4 {\n        g(3);\n    }\n}\n"
+            ),
+            ["f: a call to `g`, which loops, inside the loop at line 3"]
+        );
+        assert_eq!(
+            nesting(
+                "fn h() { for _ in 0..2 {} }\nfn g() { h() }\nfn f() {\n    loop { g(); break; }\n}\n"
+            ),
+            ["f: a call to `g`, which loops, inside the loop at line 4"]
+        );
+        // Through two calls, written before what they call (a fixpoint, not
+        // one pass).
+        assert_eq!(
+            nesting(
+                "fn f() {\n    loop { g(); break; }\n}\nfn g() { k() }\nfn k() { h() }\nfn h() { for _ in 0..2 {} }\n"
+            ),
+            ["f: a call to `g`, which loops, inside the loop at line 2"]
+        );
+        assert_eq!(
+            nesting("fn g() -> bool { for _ in 0..2 {} true }\nfn f() {\n    while g() {}\n}\n"),
+            ["f: a call to `g`, which loops, inside the loop at line 3"]
+        );
+        assert_eq!(
+            nesting(
+                "struct S;\nimpl S {\n    fn g(&self) { for _ in 0..2 {} }\n    fn f(&self) {\n        for _ in 0..2 { self.g(); Self::g(self) }\n    }\n}\n"
+            ),
+            ["f: a call to `g`, which loops, inside the loop at line 5"]
+        );
+        // Not: one loop, loops in sequence, a call in a loop to a function
+        // that does not loop, a call outside any loop to one that does.
+        assert!(nesting("fn f(n: u32) { for _ in 0..n {} let mut i = 0; while i < n { i += 1; } loop { break; } }").is_empty());
+        assert!(nesting("fn g() -> u8 { 1 }\nfn f() { for _ in 0..2 { g(); } }").is_empty());
+        assert!(
+            nesting("fn g() { for _ in 0..2 {} }\nfn f() { g(); for _ in 0..2 {} }").is_empty()
+        );
+        // Not loops: an `impl .. for` and a `for<'a>` inside a loop, and a
+        // nested function's own loop beside one.
+        assert!(nesting("fn f() { for _ in 0..2 { struct A; impl Clone for A { fn clone(&self) -> A { A } } } }").is_empty());
+        assert!(
+            nesting("fn f() { for _ in 0..2 { let _g: &dyn for<'a> Fn(&'a u8) = &|_| {}; } }")
+                .is_empty()
+        );
+        assert!(nesting("fn f() { fn inner() { for _ in 0..2 {} } for _ in 0..2 {} }").is_empty());
+        assert!(nesting("fn f() { for _ in 0..2 { fn inner() { for _ in 0..2 {} } } }").is_empty());
+        // Found in review: a fn-pointer type is no nested item, and a
+        // header may hold a brace group (`unsafe`, a block, `match`).
+        assert_eq!(
+            nesting(
+                "fn id(x: u32) -> u32 { x }\nfn f(n: u32) {\n    let _g: fn(u32) -> u32 = id;\n    let _h = id as fn(u32) -> u32;\n    for i in 0..n {\n        for _ in 0..i {}\n    }\n}\n"
+            ),
+            ["f: a loop at line 6 inside another"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(p: *const u8, n: usize) {\n    for b in unsafe { core::slice::from_raw_parts(p, n) } {\n        for _ in 0..*b {}\n    }\n}\n"
+            ),
+            ["f: a loop at line 3 inside another"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(n: u32) {\n    let mut i = 0;\n    while { i += 1; i < n } {\n        for _ in 0..i {}\n    }\n}\n"
+            ),
+            ["f: a loop at line 4 inside another"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(s: u8) {\n    while match s { 0 => true, _ => false } {\n        loop { break; }\n    }\n}\n"
+            ),
+            ["f: a loop at line 3 inside another"]
+        );
+        // A closure bound by `let` whose body loops, called in a loop.
+        assert_eq!(
+            nesting(
+                "fn f(n: u32) {\n    let scan = |m: u32| { for _ in 0..m {} };\n    for i in 0..n {\n        scan(i);\n    }\n}\n"
+            ),
+            ["f: a call to the closure `scan`, which loops, inside the loop at line 3"]
+        );
+        // A closure that loops through a call, or through another closure,
+        // and one bound with a type or behind a `&` (found in review).
+        assert_eq!(
+            nesting(
+                "fn g(n: u32) { for _ in 0..n {} }\nfn f(n: u32) {\n    let s = |m: u32| g(m);\n    for i in 0..n {\n        s(i);\n    }\n}\n"
+            ),
+            ["f: a call to the closure `s`, which loops, inside the loop at line 4"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(n: u32) {\n    let a = |m: u32| { for _ in 0..m {} };\n    let b = |m: u32| a(m);\n    for i in 0..n {\n        b(i);\n    }\n}\n"
+            ),
+            ["f: a call to the closure `b`, which loops, inside the loop at line 4"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(n: u32) {\n    let s: &dyn Fn(u32) = &|m: u32| { for _ in 0..m {} };\n    let t: fn(u32) = |m: u32| { for _ in 0..m {} };\n    for i in 0..n {\n        s(i);\n        t(i);\n    }\n}\n"
+            ),
+            [
+                "f: a call to the closure `s`, which loops, inside the loop at line 4; a call to the closure `t`, which loops, inside the loop at line 4"
+            ]
+        );
+        // Whatever wraps the closure (found in review).
+        assert_eq!(
+            nesting(
+                "fn f(n: u32) {\n    let s = Box::new(|m: u32| { for _ in 0..m {} });\n    let t = (&|m: u32| { for _ in 0..m {} });\n    for i in 0..n {\n        s(i);\n        t(i);\n    }\n}\n"
+            ),
+            [
+                "f: a call to the closure `s`, which loops, inside the loop at line 4; a call to the closure `t`, which loops, inside the loop at line 4"
+            ]
+        );
+        // A closure that does not loop, called in a loop, is no finding.
+        assert!(
+            nesting("fn f(n: u32) { let s = |m: u32| m + 1; for i in 0..n { s(i); } }").is_empty()
+        );
+        // A closure in a `for`'s iterator runs per item (found in review).
+        assert_eq!(
+            nesting(
+                "fn g(n: u8) { for _ in 0..n {} }\nfn f(v: &[u8]) {\n    for _ in v.iter().map(|b| g(*b)) {}\n}\n"
+            ),
+            ["f: a call to `g`, which loops, inside the loop at line 3"]
+        );
+        assert_eq!(
+            nesting(
+                "fn f(v: &[u8]) {\n    for _ in v.iter().map(|b| {\n        let mut k = 0;\n        while k < *b { k += 1; }\n        k\n    }) {}\n}\n"
+            ),
+            ["f: a loop at line 4 inside another"]
+        );
+        // A macro invocation in a loop that holds a loop keyword.
+        assert_eq!(
+            nesting("fn f() {\n    for _ in 0..2 {\n        run! { while true {} }\n    }\n}\n"),
+            [
+                "f: a loop at line 3 inside another; a macro invocation at line 3 that holds a loop, whose nesting the check cannot read"
+            ]
+        );
+        // Nesting wholly inside a macro invocation is not read, so the
+        // function is named (found in review).
+        assert_eq!(
+            nesting("fn f(n: usize) {\n    run! { for i in 0..n { for _ in 0..i {} } }\n}\n"),
+            [
+                "f: a macro invocation at line 2 that holds a loop, whose nesting the check cannot read"
+            ]
+        );
+        // A `for`'s iterator runs once: a looping call there is outside
+        // the loop.
+        assert!(
+            nesting("fn g() -> u32 { for _ in 0..2 {} 2 }\nfn f() { for _ in g()..9 {} }")
+                .is_empty()
+        );
+        // A body that does not parse is unread, and fails closed.
+        let shape = loop_shape("let = ;".parse().unwrap());
+        assert!(shape.unread, "{shape:?}");
+        let fn_ref = |name: &str, calls: Vec<(bool, String)>, loops: LoopShape| FnRef {
+            krate: "k".into(),
+            file: PathBuf::from("lib.rs"),
+            line: 1,
+            owner: String::new(),
+            name: name.into(),
+            class: Class::Outside,
+            calls,
+            loops,
+            body: inputs::Body::default(),
+            params: 0,
+            receiver: false,
+            entry: false,
+        };
+        let g = fn_ref("g", Vec::new(), shape);
+        let found = nested_loops(std::slice::from_ref(&g), &[]);
+        assert_eq!(
+            found,
+            [(0, vec!["a body the check cannot parse".to_owned()])]
+        );
+        // An unread callee counts as one that loops, so a caller that calls
+        // it in a loop is named too (found in review).
+        let f = fn_ref(
+            "f",
+            vec![(false, "g".into())],
+            LoopShape {
+                loops: true,
+                in_loop: vec![(false, "g".into(), 2)],
+                ..LoopShape::default()
+            },
+        );
+        let found = nested_loops(&[g, f], &[]);
+        assert_eq!(
+            found,
+            [
+                (0, vec!["a body the check cannot parse".to_owned()]),
+                (
+                    1,
+                    vec!["a call to `g`, which loops, inside the loop at line 2".to_owned()]
+                )
+            ]
+        );
     }
 
     #[test]
@@ -8895,6 +13611,85 @@ width::fn_ptr! {
         assert_eq!(named(&["other"]), Vec::<String>::new());
     }
 
+    // An export a `cfg_attr` applies is an entry point when a shipped
+    // build can meet the predicate (#153): a feature
+    // in `verus_sets` (`jit`) or outside it, a platform, nested and beside
+    // other attributes, with a literal or a macro as the name. Negative:
+    // one under a predicate no shipped build meets (`any()`, `test`,
+    // `kani`, the Verus-only `feature = "verus"`, a conjunction needing
+    // two values of one key) is not, nor is a function whose other
+    // attributes only name an export (a doc comment, `inline`). An
+    // unreadable predicate is an error, and leaves the function an entry
+    // point; so is a non-C ABI under an export a shipped build applies.
+    #[test]
+    fn an_export_under_cfg_attr_is_an_entry_where_a_shipped_build_applies_it() {
+        let c = walked(
+            r#"
+#[cfg_attr(feature = "export-symbols", unsafe(export_name = prefix!(BZ2_a)))]
+pub extern "C" fn outside_sets_macro() {}
+#[cfg_attr(feature = "jit", unsafe(export_name = prefix!(BZ2_b)))]
+pub extern "C" fn in_sets_macro() {}
+#[cfg_attr(feature = "export-symbols", unsafe(export_name = "BZ2_c"))]
+pub extern "C" fn outside_sets_literal() {}
+#[cfg_attr(feature = "jit", unsafe(export_name = "BZ2_d"))]
+pub extern "C" fn in_sets_literal() {}
+#[cfg_attr(feature = "export-symbols", export_name = "BZ2_e")]
+pub extern "C" fn bare_export_name() {}
+#[cfg_attr(unix, unsafe(no_mangle))]
+pub extern "C" fn platform_no_mangle() {}
+#[cfg_attr(feature = "jit", cfg_attr(unix, inline, unsafe(no_mangle)))]
+pub extern "C" fn nested_beside() {}
+#[cfg_attr(any(), unsafe(no_mangle))]
+pub extern "C" fn never() {}
+#[cfg_attr(test, unsafe(export_name = prefix!(BZ2_f)))]
+pub extern "C" fn test_only() {}
+#[cfg_attr(kani, unsafe(no_mangle))]
+pub extern "C" fn kani_only() {}
+#[cfg_attr(feature = "verus", unsafe(no_mangle))]
+pub extern "C" fn verus_only() {}
+#[cfg_attr(feature = "jit", cfg_attr(test, unsafe(no_mangle)))]
+pub extern "C" fn nested_test() {}
+#[cfg_attr(all(target_arch = "x86_64", target_arch = "aarch64"), unsafe(no_mangle))]
+pub extern "C" fn two_arches() {}
+/// Not `#[no_mangle]`.
+#[cfg_attr(feature = "jit", inline)]
+pub extern "C" fn names_only() {}
+"#,
+        );
+        assert_eq!(c.errors, 0);
+        let mut entries: Vec<&str> = c
+            .fns
+            .iter()
+            .filter(|f| f.entry)
+            .map(|f| f.name.as_str())
+            .collect();
+        entries.sort_unstable();
+        assert_eq!(
+            entries,
+            [
+                "bare_export_name",
+                "in_sets_literal",
+                "in_sets_macro",
+                "nested_beside",
+                "outside_sets_literal",
+                "outside_sets_macro",
+                "platform_no_mangle"
+            ]
+        );
+        let bad = walked(
+            "#[cfg_attr(feature = \"jit\", unsafe(no_mangle))]\nfn rust_abi() {}\n\
+             #[cfg_attr(test, unsafe(no_mangle))]\nfn test_rust_abi() {}\n\
+             #[cfg_attr(nonsense(x), unsafe(no_mangle))]\nextern \"C\" fn unreadable() {}\n",
+        );
+        assert_eq!(bad.errors, 2);
+        assert!(bad.fns.iter().any(|f| f.name == "unreadable" && f.entry));
+        assert!(
+            bad.fns
+                .iter()
+                .any(|f| f.name == "test_rust_abi" && !f.entry)
+        );
+    }
+
     // A function a `static` or `const` passes by name, bare or by path, is
     // an entry point. Negative: one it only calls is not, though a `<` or
     // a closure in the call's arguments leaves the arity unknown.
@@ -9069,6 +13864,7 @@ fn uncalled() {
             name: "walk".into(),
             class: Class::Verified,
             calls: Vec::new(),
+            loops: LoopShape::default(),
             body: inputs::Body::default(),
             params: 0,
             receiver: false,
@@ -9165,6 +13961,118 @@ fn uncalled() {
         ] {
             let got = assumes_attributes(&attrs(src));
             assert_eq!(got, want, "assumes {src}: got = {got}, wanted = {want}");
+        }
+        for (src, want) in [
+            ("#[verifier::exec_allows_no_decreases_clause]", true),
+            ("#[verifier(exec_allows_no_decreases_clause)]", true),
+            (
+                "#[cfg_attr(windows, verifier::exec_allows_no_decreases_clause)]",
+                true,
+            ),
+            ("#[verifier::loop_isolation(false)]", false),
+            ("/// Not `exec_allows_no_decreases_clause`.", false),
+            (
+                "#[doc = \"verifier::exec_allows_no_decreases_clause\"]",
+                false,
+            ),
+        ] {
+            let got = allows_no_decreases(&attrs(src));
+            assert_eq!(
+                got, want,
+                "no decreases {src}: got = {got}, wanted = {want}"
+            );
+        }
+    }
+
+    /// `exec_allows_no_decreases_clause` lets Verus check exec functions
+    /// with no `decreases`, so nothing proves they terminate: each exec
+    /// function it covers (on the function, or on the `impl`, trait or
+    /// inline module around it, outer or inner) is trusted, not verified.
+    /// A function beside them keeps its class, as do ghost functions,
+    /// and code outside `verus!`. On an out-of-line `mod x;`, whose file
+    /// the counter walks on its own, it fails the run.
+    #[test]
+    fn no_decreases_functions_are_trusted() {
+        let c = walked(
+            "verus! {\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            fn on_fn(n: u32) { loop {} }\n\
+            fn beside() {}\n\
+            struct S;\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            impl S { fn on_impl(&self) {} fn on_impl2(&self) {} }\n\
+            impl S { fn plain_impl(&self) {} }\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            trait T { fn on_trait(&self) {} }\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            mod outer { fn on_mod() {} }\n\
+            mod inner { #![verifier::exec_allows_no_decreases_clause] fn on_inner() {} }\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            proof fn ghostly() {}\n\
+            fn after() {}\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[verifier::external_body]\n\
+            fn marked() {}\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[verifier::external_body]\n\
+            fn marked_no_decreases() {}\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            mod marked_mod {\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[verifier::external_body]\n\
+            fn marked_in_mod() {}\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[verifier::external_body]\n\
+            proof fn marked_proof() {}\n\
+            #[cfg(verus_keep_ghost)]\n\
+            fn verus_only() {}\n\
+            #[cfg(verus_keep_ghost)]\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[verifier::external_body]\n\
+            fn verus_only_marked() {}\n\
+            }\n\
+            #[cfg(verus_keep_ghost)]\n\
+            fn verus_only_plain() {}\n\
+            }\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            fn not_verus() {}\n",
+        );
+        assert_eq!(c.errors, 0, "errors: got = {}, wanted = 0", c.errors);
+        let t = &c.tallies["k"];
+        // Trusted: the six above, the two marked exec functions it covers,
+        // which a Kani record does not discharge, and the two Verus-only
+        // exec functions it covers, which a shipped proof could rest on.
+        // Discharged: `marked`, and `marked_proof`, a ghost function the
+        // attribute leaves alone. `verus_only_plain` stays out of the
+        // tally, as a verified Verus-only function does.
+        assert_eq!(
+            t.fns,
+            [3, 10, 1, 2],
+            "verified, trusted, outside, discharged: got = {:?}, wanted = [3, 10, 1, 2]",
+            t.fns
+        );
+        assert_eq!(t.ghost, 1, "ghost: got = {}, wanted = 1", t.ghost);
+        // `mod elsewhere;` under the attribute, on it or on an inline
+        // module around it (outer or inner), is one error each; with no
+        // attribute, none.
+        for (src, want) in [
+            (
+                "#[verifier::exec_allows_no_decreases_clause]\nmod elsewhere;\n",
+                1,
+            ),
+            (
+                "#[verifier::exec_allows_no_decreases_clause]\nmod outer { mod elsewhere; }\n",
+                1,
+            ),
+            (
+                "mod outer { #![verifier::exec_allows_no_decreases_clause] mod elsewhere; }\n",
+                1,
+            ),
+            ("mod outer { mod elsewhere; }\nmod elsewhere2;\n", 0),
+        ] {
+            let got = walked(src).errors;
+            assert_eq!(got, want, "{src:?}: got = {got} errors, wanted = {want}");
         }
     }
 
@@ -9300,6 +14208,419 @@ fn uncalled() {
             "assumed: got = {:?}, wanted = {want:?}",
             c.assumed
         );
+    }
+
+    /// The Kani marker discharges a shipped function outside `verus!` as it
+    /// does a trusted one inside: under predicates no build meets, with or
+    /// without `exec_allows_no_decreases_clause` around it, which covers
+    /// no code outside `verus!`. It needs a record too. Negative: under a
+    /// predicate some build may meet the function stays outside, one built
+    /// only for Verus leaves the tally, and none of them makes the crate
+    /// one Verus checks.
+    #[test]
+    fn a_marked_function_outside_verus_is_discharged() {
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("lib.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        c.items(
+            &parse_file(
+                r#"
+                #[cfg_attr(any(), discharged_by = "kani")]
+                pub unsafe extern "C" fn checked(p: *mut u8) {
+                    unsafe { *p = 0 };
+                }
+                #[cfg_attr(windows, discharged_by = "kani")]
+                fn maybe() {}
+                fn plain() {}
+                #[cfg(verus_keep_ghost)]
+                #[cfg_attr(any(), discharged_by = "kani")]
+                fn verus_only() {}
+                #[verifier::exec_allows_no_decreases_clause]
+                mod looping {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn spins() {
+                        loop {}
+                    }
+                }
+                "#,
+            )
+            .expect("parses")
+            .items,
+            false,
+        );
+        assert_eq!(c.errors, 0, "errors: got = {}, wanted = 0", c.errors);
+        let d = |n: &str| (PathBuf::from("lib.rs"), n.to_owned());
+        let want = vec![d("checked"), d("spins")];
+        assert_eq!(
+            c.discharged, want,
+            "discharged: got = {:?}, wanted = {want:?}",
+            c.discharged
+        );
+        let got = verus_crates(&c);
+        assert!(got.is_empty(), "verus_crates: got = {got:?}, wanted = []");
+        let t = c.tallies.remove("k").unwrap_or_default();
+        assert_eq!(
+            t.fns,
+            [0, 0, 2, 2],
+            "verified, trusted, outside, discharged: got = {:?}, wanted = [0, 0, 2, 2]",
+            t.fns
+        );
+        assert_eq!(
+            t.lines,
+            [0, 0, 2, 6],
+            "lines: got = {:?}, wanted = [0, 0, 2, 6]",
+            t.lines
+        );
+        let quote = "#[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            pub unsafe extern \"C\" fn checked(p: *mut u8) {\n";
+        let got = unrecorded(
+            &c.discharged,
+            &[format!("Seam F1 (`lib.rs`).\n\n```rust\n{quote}```\n")],
+        );
+        let want = vec![d("spins")];
+        assert_eq!(
+            got, want,
+            "with the checked quote: got = {got:?}, wanted = {want:?}"
+        );
+    }
+
+    /// A marked function outside `verus!` needs a record that names it by
+    /// its key and names a harness that calls it: a record for `A::new`
+    /// that quotes `fn new` does not cover a marked `B<T>::new` in the same
+    /// file, nor one for `<A as From<u8>>::from` a marked
+    /// `<A as From<u16>>::from`; free functions in two inline modules are
+    /// `a::init` and `b::init`, and a record naming only a harness that
+    /// does not call `init` leaves `b::init` failing, and the record for
+    /// `a::init` does not cover a marked `init` at the file's top, which
+    /// needs `` `init` `` itself. A harness that calls `Vec::new` does not
+    /// check a marked `C::new`, whose owner it never mentions, and a record
+    /// that names a harness but not its file does not count it. Two marked
+    /// `cfg` twins share one path and fail together. Negative: a marked
+    /// method inside `verus!` keeps the `fn NAME` rule alone.
+    #[test]
+    fn a_marked_function_outside_verus_needs_its_key_and_harness_named() {
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("lib.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        c.items(
+            &parse_file(
+                r#"
+                verus! {
+                impl V {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    #[verifier::external_body]
+                    fn new() {}
+                }
+                }
+                impl A {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn new() {}
+                }
+                impl<T> B<T> {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn new() {}
+                }
+                impl C {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn new() {}
+                }
+                impl From<u8> for A {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn from(v: u8) -> Self { A }
+                }
+                impl From<u16> for A {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn from(v: u16) -> Self { A }
+                }
+                #[cfg_attr(any(), discharged_by = "kani")]
+                fn free() {}
+                #[cfg_attr(any(), discharged_by = "kani")]
+                fn solo() {}
+                #[cfg_attr(any(), discharged_by = "kani")]
+                fn init() {}
+                mod a {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn init() {}
+                }
+                mod b {
+                    #[cfg_attr(any(), discharged_by = "kani")]
+                    fn init() {}
+                }
+                #[cfg(unix)]
+                #[cfg_attr(any(), discharged_by = "kani")]
+                fn map() {}
+                #[cfg(windows)]
+                #[cfg_attr(any(), discharged_by = "kani")]
+                fn map() {}
+                "#,
+            )
+            .expect("parses")
+            .items,
+            false,
+        );
+        assert_eq!(c.errors, 0, "errors: got = {}, wanted = 0", c.errors);
+        let got: Vec<String> = c.outside.iter().map(OutsideMark::path).collect();
+        let want = [
+            "A::new",
+            "B<T>::new",
+            "C::new",
+            "<A as From<u8>>::from",
+            "<A as From<u16>>::from",
+            "free",
+            "solo",
+            "init",
+            "a::init",
+            "b::init",
+            "map",
+            "map",
+        ];
+        assert_eq!(got, want, "outside: got = {got:?}, wanted = {want:?}");
+        // The first record covers A::new, the u8 `from`, `free` and
+        // `a::init`, and names harnesses in `proofs.rs` that call each; it
+        // quotes `fn init` for `a::init`, which does not cover the
+        // top-level `init`. The second covers `b::init` but names only a
+        // harness that does not call it. The third covers `C::new` but
+        // names only a harness that calls `Vec::new`. The fourth covers
+        // `solo` and names its harness, but not the harness's file.
+        let records = [
+            "`A::new`, `<A as From<u8>>::from`, `free`, `a::init` (`lib.rs`): `proofs.rs`, `check_new`, `check_from`, `check_free`, `check_init`.\n\n```rust\nfn new() {}\nfn from(v: u8) -> Self { A }\nfn free() {}\nfn init() {}\nfn map() {}\n```\n".to_owned(),
+            "`b::init` (`lib.rs`): `proofs.rs`, `check_other`.\n\n```rust\nfn init() {}\n```\n".to_owned(),
+            "`C::new` (`lib.rs`): `proofs.rs`, `check_vec`.\n\n```rust\nfn new() {}\n```\n".to_owned(),
+            "`solo` (`lib.rs`): `elsewhere.rs`, `check_solo`.\n\n```rust\nfn solo() {}\n```\n".to_owned(),
+        ];
+        let harness = |name: &str, calls: &[&str], idents: &[&str]| Harness {
+            file: PathBuf::from("proofs.rs"),
+            name: name.to_owned(),
+            calls: calls.iter().map(|s| s.to_string()).collect(),
+            idents: idents.iter().map(|s| s.to_string()).collect(),
+        };
+        let harnesses = BTreeMap::from([
+            (
+                "k".to_owned(),
+                vec![
+                    harness("check_new", &["new"], &["A", "new"]),
+                    harness("check_from", &["from"], &["A", "from"]),
+                    harness("check_free", &["free"], &["free"]),
+                    harness("check_init", &["init"], &["a", "init"]),
+                    harness("check_other", &["other"], &["other"]),
+                    harness("check_vec", &["new"], &["Vec", "new"]),
+                    harness("check_solo", &["solo"], &["solo"]),
+                ],
+            ),
+            (
+                // Another crate's harness of the same name calls `init`; it
+                // does not check crate k's `b::init`.
+                "b".to_owned(),
+                vec![harness("check_other", &["init"], &["init"])],
+            ),
+        ]);
+        let got = unrecorded(&c.discharged, &records);
+        assert!(got.is_empty(), "unrecorded: got = {got:?}, wanted = []");
+        let got = outside_unchecked(&c.outside, &records, &harnesses, "verus/seams");
+        let unnamed = |p: &str| {
+            format!(
+                "lib.rs: `{p}` has the discharged_by = \"kani\" marker outside verus!, but no verus/seams/kani-*.md record names its file and `{p}` in backquotes"
+            )
+        };
+        let unharnessed = |p: &str, n: &str, owner: &str| {
+            format!(
+                "lib.rs: `{p}` has the discharged_by = \"kani\" marker outside verus!, but no verus/seams/kani-*.md record that covers it names, each in backquotes, the file and name of a #[kani::proof] harness of crate k whose body calls `{n}`{owner}"
+            )
+        };
+        let want = vec![
+            unnamed("B<T>::new"),
+            unharnessed("C::new", "new", " and mentions `C`"),
+            unnamed("<A as From<u16>>::from"),
+            unharnessed("solo", "solo", ""),
+            unnamed("init"),
+            unharnessed("b::init", "init", ""),
+            "lib.rs: 2 functions outside verus! with the discharged_by = \"kani\" marker share `map`, so no record can tell them apart; mark one of them, or rename one".to_owned(),
+        ];
+        assert_eq!(
+            got, want,
+            "outside_unchecked: got = {got:?}, wanted = {want:?}"
+        );
+    }
+
+    /// Harnesses are the `#[kani::proof]` functions at any depth of inline
+    /// modules and `impl`s, test-only ones included, with each name their
+    /// bodies call, through any path, receiver, turbofish or macro
+    /// argument. Negative: a function without the attribute is no
+    /// harness, a name not followed by a call is not a call, a `fn`
+    /// nested in a harness's body, at its top or in an inner block, adds
+    /// no call and no mention (a function pointer type, `fn(*mut u8)`,
+    /// is no such `fn`: the calls after it count), and a harness `make kani`
+    /// never runs is left out: one in a module, `impl` or function under a
+    /// `cfg` no build meets, or under `cfg(test)`. A harness under
+    /// `all(kani, not(test))` is read.
+    #[test]
+    fn kani_harnesses_and_the_names_they_call() {
+        let file = parse_file(
+            r#"
+            #[cfg(kani)]
+            mod proofs {
+                #[kani::proof]
+                fn check() {
+                    let s = A::new();
+                    s.open(1);
+                    helper::<u8>(2);
+                    assert!(close(s));
+                    let f = unused;
+                    fn nested() { hidden(); }
+                    {
+                        fn deep() { deeper(); }
+                    }
+                    if f { fn inner(x: u8) { innermost(x); } }
+                    let cb: Option<unsafe extern "C" fn(*mut u8)> = None;
+                    unsafe { set_cb(cb) };
+                    let g = f as extern "C" fn();
+                    unsafe { after_cast(g) };
+                }
+                fn not_harness() { other(); }
+                #[cfg(any())]
+                mod dead {
+                    #[kani::proof]
+                    fn check_dead() { dead(); }
+                }
+                #[cfg(any())]
+                #[kani::proof]
+                fn check_dead_fn() { dead_fn(); }
+                #[cfg(any())]
+                impl U {
+                    #[kani::proof]
+                    fn check_dead_impl() { dead_impl(); }
+                }
+                #[cfg(test)]
+                mod tests {
+                    #[kani::proof]
+                    fn check_test() { tested(); }
+                }
+                #[cfg(all(kani, not(test)))]
+                mod live {
+                    #[kani::proof]
+                    fn check_live() { live(); }
+                }
+                impl T {
+                    #[kani::proof_for_contract(T::m)]
+                    fn check_m() { T::m(); }
+                }
+            }
+            "#,
+        )
+        .expect("parses");
+        let mut found = Vec::new();
+        kani_harnesses(&file.items, Path::new("proofs.rs"), &mut found);
+        assert!(
+            found.iter().all(|h| h.file == Path::new("proofs.rs")),
+            "files: got = {found:?}, wanted = proofs.rs for each"
+        );
+        let got: Vec<(String, std::collections::BTreeSet<String>)> = found
+            .iter()
+            .map(|h| (h.name.clone(), h.calls.clone()))
+            .collect();
+        let set = |n: &[&str]| n.iter().map(|s| s.to_string()).collect();
+        let want = vec![
+            (
+                "check".to_owned(),
+                set(&["after_cast", "close", "helper", "new", "open", "set_cb"]),
+            ),
+            ("check_live".to_owned(), set(&["live"])),
+            ("check_m".to_owned(), set(&["m"])),
+        ];
+        assert_eq!(got, want, "harnesses: got = {got:?}, wanted = {want:?}");
+        // The first harness mentions `A` and `s`, but nothing of the `fn`s
+        // nested in its body, at the top or in inner blocks.
+        let idents = &found[0].idents;
+        for (name, want) in [
+            ("A", true),
+            ("s", true),
+            ("unused", true),
+            ("nested", false),
+            ("hidden", false),
+            ("deep", false),
+            ("deeper", false),
+            ("innermost", false),
+        ] {
+            assert_eq!(
+                idents.contains(name),
+                want,
+                "mentions {name}: got = {}, wanted = {want}",
+                !want
+            );
+        }
+    }
+
+    /// The key a record names a method by keeps generics and the trait,
+    /// and spaces only between two identifier characters.
+    #[test]
+    fn owner_keys_keep_generics_and_the_trait() {
+        for (owner, trait_, want) in [
+            ("A", None, Some("A")),
+            ("B < u8 >", None, Some("B<u8>")),
+            ("Box < dyn Tr >", None, Some("Box<dyn Tr>")),
+            ("& 'a A", None, Some("&'a A")),
+            ("A", Some("From < u8 >"), Some("<A as From<u8>>")),
+            ("Box < A >", Some("X"), Some("<Box<A> as X>")),
+            ("", None, None),
+        ] {
+            let got = owner_key(owner, trait_);
+            assert_eq!(
+                got.as_deref(),
+                want,
+                "owner_key({owner:?}, {trait_:?}): got = {got:?}, wanted = {want:?}"
+            );
+        }
+    }
+
+    /// A marked function outside `verus!` is discharged, but the functions
+    /// nested in its body (an exported `extern "C"` one included) stay
+    /// outside, for REACH too: its record and harness check none of them.
+    /// Negative: those nested in a verified function inside `verus!` keep
+    /// taking its class.
+    #[test]
+    fn functions_nested_in_a_marked_function_outside_verus_stay_outside() {
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("lib.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        c.items(
+            &parse_file(
+                r#"
+                #[cfg_attr(any(), discharged_by = "kani")]
+                pub fn init() {
+                    #[unsafe(no_mangle)]
+                    pub extern "C" fn lib_free(p: *mut u8) {}
+                    fn helper() {}
+                }
+                verus! {
+                fn verified() {
+                    fn inner() {}
+                }
+                }
+                "#,
+            )
+            .expect("parses")
+            .items,
+            false,
+        );
+        assert_eq!(c.errors, 0, "errors: got = {}, wanted = 0", c.errors);
+        let got: Vec<(String, Class)> = c.fns.iter().map(|f| (f.name.clone(), f.class)).collect();
+        let want = vec![
+            ("init".to_owned(), Class::Discharged),
+            ("lib_free".to_owned(), Class::Outside),
+            ("helper".to_owned(), Class::Outside),
+            ("verified".to_owned(), Class::Verified),
+            ("inner".to_owned(), Class::Verified),
+        ];
+        assert_eq!(got, want, "fns: got = {got:?}, wanted = {want:?}");
     }
 
     /// A marked function built only for Verus is discharged as a shipped
@@ -9747,6 +15068,44 @@ fn uncalled() {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// With `[floor]`'s room (#100), a share above the floor names the
+    /// room's figure to record, or no raise where the room's figure is not
+    /// above the floor; the pass or failure is the share's alone.
+    #[test]
+    fn a_rise_leaves_the_floor_s_room() {
+        let fig = Figures::default();
+        let want = Floor([Some(500), Some(500), Some(500), Some(500)]);
+        let got = Floor([Some(600), Some(600), Some(600), Some(490)]);
+        let room = Floor([Some(550), Some(500), Some(450), Some(400)]);
+        let (ok, report) = fig.check_with_room(&got, &want, &room);
+        assert!(!ok, "{report}");
+        assert!(
+            report.contains("functions verified 60.0%, above the floor's 50.0%; raise verus/FLOOR to `functions 55.0`"),
+            "{report}"
+        );
+        for name in [
+            "lines verified 60.0%",
+            "checked-functions verified or discharged 60.0%",
+        ] {
+            assert!(
+                report.contains(&format!(
+                    "ok coverage floor: {name}, above the floor's 50.0% but within [floor]'s room"
+                )),
+                "{name}: {report}"
+            );
+        }
+        assert!(
+            report.contains("FAIL coverage floor: checked-lines verified or discharged 49.0%, below the floor's 50.0%"),
+            "{report}"
+        );
+        // With no room, the figure to record is the share itself.
+        let (_, report) = fig.check(&got, &want);
+        assert!(
+            report.contains("raise verus/FLOOR to `functions 60.0`"),
+            "{report}"
+        );
+    }
+
     #[test]
     fn the_floor_fails_below_and_names_a_rise() {
         let want = Floor([Some(84), Some(105), Some(200), Some(300)]);
@@ -10002,6 +15361,158 @@ fn outside() {}
         );
     }
 
+    /// The functions `exec_allows_no_decreases_clause` alone makes trusted,
+    /// whose `no_decreases` ledger row may stand as their entry
+    /// ([`ledger::match_ledger`]), are recorded at their `fn` lines: one
+    /// with the attribute and one in an `impl` with it. One that is
+    /// `external_body` as well, with a Kani record (which a ledger does
+    /// not take) or without, one that calls `assume`, and one with no
+    /// attribute are not.
+    #[test]
+    fn the_counter_records_functions_trusted_only_for_termination() {
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("src/a.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        let src = "verus! {\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            fn looping() { loop {} }\n\
+            struct S;\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            impl S {\n\
+            fn method(&self) {}\n\
+            }\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            #[cfg_attr(any(), discharged_by = \"kani\")]\n\
+            #[verifier::external_body]\n\
+            fn marked() {}\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            #[verifier::external_body]\n\
+            fn body_trusted() {}\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            fn assumes() { assume(false); }\n\
+            #[verifier::external_body]\n\
+            fn plain_trusted() {}\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            #[verifier::external_body]\n\
+            proof fn lemma() {}\n\
+            }\n";
+        c.items(&parse_file(src).expect("parses").items, false);
+        let trusted: Vec<&str> = c.trusted.iter().map(|(_, loc, _)| loc.as_str()).collect();
+        let want = [
+            "src/a.rs:3",
+            "src/a.rs:7",
+            "src/a.rs:12",
+            "src/a.rs:15",
+            "src/a.rs:17",
+            "src/a.rs:19",
+            "src/a.rs:22",
+        ];
+        assert_eq!(
+            trusted, want,
+            "trusted: got = {trusted:?}, wanted = {want:?}"
+        );
+        let only: Vec<String> = c.termination_only().into_iter().collect();
+        let want = ["src/a.rs:3", "src/a.rs:7"];
+        assert_eq!(
+            only, want,
+            "termination_only: got = {only:?}, wanted = {want:?}"
+        );
+        // Every trusted function the attribute covers, whatever else makes
+        // it trusted: a function seam does not check one (#169). Not a
+        // ghost one (line 22): the attribute is about exec functions.
+        let covered: Vec<&str> = c.trusted_covered.iter().map(String::as_str).collect();
+        let want = [
+            "src/a.rs:12",
+            "src/a.rs:15",
+            "src/a.rs:17",
+            "src/a.rs:3",
+            "src/a.rs:7",
+        ];
+        assert_eq!(
+            covered, want,
+            "trusted_covered: got = {covered:?}, wanted = {want:?}"
+        );
+
+        // Under a `cfg` Verus's build might not meet, a shipped verified
+        // function is trusted without the attribute too (line 4), so it is
+        // not recorded; one with no `cfg` (line 6) is.
+        let src = "verus! {\n\
+            #[cfg(unix)]\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            fn unsure() {}\n\
+            #[verifier::exec_allows_no_decreases_clause]\n\
+            fn sure() {}\n\
+            }\n";
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("src/a.rs"),
+            module: vec!["k".into()],
+            ..counter()
+        };
+        c.items(&parse_file(src).expect("parses").items, false);
+        assert_eq!(c.errors, 0, "errors: got = {}, wanted = 0", c.errors);
+        let trusted: Vec<&str> = c.trusted.iter().map(|(_, loc, _)| loc.as_str()).collect();
+        let want = ["src/a.rs:4", "src/a.rs:6"];
+        assert_eq!(
+            trusted, want,
+            "trusted: got = {trusted:?}, wanted = {want:?}"
+        );
+        let only: Vec<String> = c.termination_only().into_iter().collect();
+        let want = ["src/a.rs:6"];
+        assert_eq!(
+            only, want,
+            "termination_only, shipped: got = {only:?}, wanted = {want:?}"
+        );
+        let covered: Vec<&str> = c.trusted_covered.iter().map(String::as_str).collect();
+        let want = ["src/a.rs:4", "src/a.rs:6"];
+        assert_eq!(
+            covered, want,
+            "trusted_covered, shipped: got = {covered:?}, wanted = {want:?}"
+        );
+
+        // In a crate that does not ship, verified code leaves the tally
+        // whatever its `cfg`, so the attribute alone makes it trusted.
+        let mut c = Counter {
+            krate: "k".into(),
+            file: PathBuf::from("src/a.rs"),
+            module: vec!["k".into()],
+            shipped: false,
+            ..counter()
+        };
+        c.items(&parse_file(src).expect("parses").items, false);
+        let only: Vec<String> = c.termination_only().into_iter().collect();
+        let want = ["src/a.rs:4", "src/a.rs:6"];
+        assert_eq!(
+            only, want,
+            "termination_only, not shipped: got = {only:?}, wanted = {want:?}"
+        );
+
+        // Functions one macro invocation writes share its line: when one
+        // of them is trusted for another reason (`external_body`), the
+        // line is not termination-only, whichever is tallied first.
+        for order in [[Covered::Only, Covered::No], [Covered::No, Covered::Only]] {
+            let mut c = Counter {
+                krate: "k".into(),
+                file: PathBuf::from("src/a.rs"),
+                module: vec!["k".into()],
+                ..counter()
+            };
+            for (i, only) in order.into_iter().enumerate() {
+                c.tally_fn(Class::Trusted, format!("f{i}"), 15, 1, only);
+            }
+            c.tally_fn(Class::Trusted, "g".into(), 20, 1, Covered::Only);
+            let only: Vec<String> = c.termination_only().into_iter().collect();
+            let want = ["src/a.rs:20"];
+            assert_eq!(
+                only, want,
+                "termination_only, {order:?} at one line: got = {only:?}, wanted = {want:?}"
+            );
+        }
+    }
+
     /// Verus's attribute form (the Expat port's: a contract in `verus_spec` under
     /// a `cfg_attr`, for a port whose MSRV is below vstd's) verifies a plain
     /// function outside `verus!`, under a predicate the configuration
@@ -10125,8 +15636,14 @@ verus! {
         t.lines[Class::Verified as usize] = 60;
         t.lines[Class::Trusted as usize] = 40;
         assert_eq!(
-            shares(&t, (2, 30)),
+            shares(&t, (2, 30), (0, 0)),
             Floor([Some(600), Some(600), Some(800), Some(900)])
+        );
+        // With room for 25 more unverified functions and 250 more lines
+        // (#100): 6/35, 60/350, 8/35 and 90/350, rounded down.
+        assert_eq!(
+            shares(&t, (2, 30), (25, 250)),
+            Floor([Some(171), Some(171), Some(228), Some(257)])
         );
     }
 
@@ -10425,6 +15942,48 @@ verus! {
         std::os::unix::fs::symlink("../crates/a/src", root.join("other/src")).unwrap();
         std::os::unix::fs::symlink("../../crates/a/src/lib.rs", root.join("deep/src/lib.rs"))
             .unwrap();
+        // Links below a crate's `src/` (#71): uutils' `LICENSE` and a
+        // `locales` directory of `.ftl` files, which the source walk never
+        // reads, beside a directory link holding a `.rs` file and a cycle,
+        // which it reads through.
+        for d in [
+            "lic/src/uu",
+            "lic/data/locales",
+            "rsdir/src",
+            "rsdir/data",
+            "cycle/src/m",
+            "diamond/src/uu",
+            "diamond/data/ftl",
+            "eloop/src",
+            "dangle/src",
+            "nloop/src",
+            "nloop/data",
+        ] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        // A diamond: two links to one `.ftl` directory under a linked
+        // directory, which holds no `.rs` file and no cycle.
+        fs::write(root.join("diamond/data/ftl/en-US.ftl"), "x = y\n").unwrap();
+        std::os::unix::fs::symlink("ftl", root.join("diamond/data/l1")).unwrap();
+        std::os::unix::fs::symlink("ftl", root.join("diamond/data/l2")).unwrap();
+        std::os::unix::fs::symlink("../../data", root.join("diamond/src/uu/x")).unwrap();
+        // A link loop, which no stat resolves (ELOOP), and a dangling
+        // link, which the walk reads nothing through.
+        std::os::unix::fs::symlink("l2", root.join("eloop/src/l1")).unwrap();
+        std::os::unix::fs::symlink("l1", root.join("eloop/src/l2")).unwrap();
+        // The same loop inside a linked directory's target.
+        std::os::unix::fs::symlink("../data", root.join("nloop/src/x")).unwrap();
+        std::os::unix::fs::symlink("l2", root.join("nloop/data/l1")).unwrap();
+        std::os::unix::fs::symlink("l1", root.join("nloop/data/l2")).unwrap();
+        std::os::unix::fs::symlink("../nowhere", root.join("dangle/src/gone")).unwrap();
+        fs::write(root.join("crates/a/src/lib.rs"), "").unwrap();
+        fs::write(root.join("lic/LICENSE"), "MIT\n").unwrap();
+        fs::write(root.join("lic/data/locales/en-US.ftl"), "x = y\n").unwrap();
+        std::os::unix::fs::symlink("../../LICENSE", root.join("lic/src/uu/LICENSE")).unwrap();
+        std::os::unix::fs::symlink("../../data/locales", root.join("lic/src/uu/locales")).unwrap();
+        fs::write(root.join("rsdir/data/gen.rs"), "").unwrap();
+        std::os::unix::fs::symlink("../data", root.join("rsdir/src/gen")).unwrap();
+        std::os::unix::fs::symlink("..", root.join("cycle/src/m/up")).unwrap();
         let read = |text: &str| -> Vec<(String, bool)> {
             crate_dirs(&root, &Config::parse(text).expect("parses"))
                 .expect("reads")
@@ -10506,6 +16065,22 @@ verus! {
                 "[crates]\nmembers = [{ name = \"d\", path = \"deep\" }]\n",
                 "[crates] crate d reads deep/src/lib.rs, a symlink",
             ),
+            (
+                "[crates]\nmembers = [{ name = \"g\", path = \"rsdir\" }]\n",
+                "[crates] crate g reads rsdir/src/gen, a symlink",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"c\", path = \"cycle\" }]\n",
+                "[crates] crate c reads cycle/src/m/up, a symlink",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"e\", path = \"eloop\" }]\n",
+                "[crates] crate e reads eloop/src/l1, a symlink",
+            ),
+            (
+                "[crates]\nmembers = [{ name = \"n\", path = \"nloop\" }]\n",
+                "[crates] crate n reads nloop/src/x, a symlink",
+            ),
         ] {
             let got = crate_dirs(&root, &Config::parse(text).expect("parses"));
             assert!(
@@ -10514,6 +16089,31 @@ verus! {
                 got.map(|k| k.into_iter().map(|k| k.name).collect::<Vec<_>>())
             );
         }
+        assert_eq!(
+            read("[crates]\nmembers = [{ name = \"l\", path = \"lic\" }]\n"),
+            [("l".to_string(), true)]
+        );
+        assert_eq!(
+            read("[crates]\nmembers = [{ name = \"m\", path = \"diamond\" }]\n"),
+            [("m".to_string(), true)]
+        );
+        assert_eq!(
+            read("[crates]\nmembers = [{ name = \"g\", path = \"dangle\" }]\n"),
+            [("g".to_string(), true)]
+        );
+        // A directory the guard cannot resolve or list refuses the link.
+        // A mode-000 directory is listable as root, so a missing path and
+        // a regular file stand in for the two read errors.
+        let mut seen = std::collections::HashSet::new();
+        assert!(
+            reaches_rs(&root.join("gone"), false, &mut seen),
+            "a directory that does not resolve: got = passed, wanted = refused"
+        );
+        assert!(
+            reaches_rs(&root.join("lic/LICENSE"), false, &mut seen),
+            "a directory that cannot be listed: got = passed, wanted = refused"
+        );
+        assert!(seen.is_empty(), "seen after the walk: {seen:?}");
         // A path from `/`, even to a crate under the root, is refused:
         // `root.join` would read it while it compares unequal to the base's
         // relative path.
@@ -10531,6 +16131,150 @@ verus! {
             "an absolute member path: got = {:?}, wanted = an error with {want:?}",
             got.map(|k| k.into_iter().map(|k| k.name).collect::<Vec<_>>())
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// With `skip_packages` (#198), a link the walk no longer reads through
+    /// is not refused: one inside another package's directory under
+    /// `src/`, one to such a directory, and one to a directory that holds
+    /// only such a directory. Negative: without the key each is refused,
+    /// as a link the walk reads through; a link to a `.rs`
+    /// file beside the left-out directory is refused either way; and a
+    /// Cargo.toml in `src/` itself leaves nothing out.
+    #[test]
+    fn a_link_in_a_left_out_directory_is_not_refused() {
+        let root =
+            std::env::temp_dir().join(format!("verus-count-skip-links-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for d in [
+            "inner/src/uu/x/src",
+            "outer/src",
+            "pkg/src",
+            "data",
+            "plain/src",
+        ] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        fs::write(root.join("data/gen.rs"), "").unwrap();
+        fs::write(root.join("pkg/Cargo.toml"), "[package]\nname = \"pkg\"\n").unwrap();
+        fs::write(root.join("pkg/src/lib.rs"), "").unwrap();
+        fs::write(root.join("inner/src/lib.rs"), "").unwrap();
+        fs::write(
+            root.join("inner/src/uu/x/Cargo.toml"),
+            "[package]\nname = \"x\"\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("../../../../../data", root.join("inner/src/uu/x/src/gen"))
+            .unwrap();
+        fs::write(root.join("outer/src/lib.rs"), "").unwrap();
+        std::os::unix::fs::symlink("../../pkg", root.join("outer/src/linked")).unwrap();
+        // A link to a directory that holds only a package's directory: the
+        // walk follows it, and leaves the package out.
+        fs::create_dir_all(root.join("via/src")).unwrap();
+        fs::create_dir_all(root.join("vendored/p")).unwrap();
+        fs::write(
+            root.join("vendored/p/Cargo.toml"),
+            "[package]\nname = \"p\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("vendored/p/lib.rs"), "").unwrap();
+        fs::write(root.join("via/src/lib.rs"), "").unwrap();
+        std::os::unix::fs::symlink("../../vendored", root.join("via/src/vendor")).unwrap();
+        fs::write(
+            root.join("plain/src/Cargo.toml"),
+            "[package]\nname = \"p\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("plain/src/lib.rs"), "").unwrap();
+        std::os::unix::fs::symlink("../../data/gen.rs", root.join("plain/src/gen.rs")).unwrap();
+        let read = |name: &str, skip: bool| {
+            let text = format!(
+                "[crates]\nmembers = [{{ name = \"{name}\", path = \"{name}\", skip_packages = {skip} }}]\n"
+            );
+            crate_dirs(&root, &Config::parse(&text).expect("parses")).map(|k| k.len())
+        };
+        for (name, link) in [
+            ("inner", "inner/src/uu/x/src/gen"),
+            ("outer", "outer/src/linked"),
+            ("via", "via/src/vendor"),
+        ] {
+            assert_eq!(read(name, true), Ok(1), "{name} with skip_packages");
+            let want = format!("[crates] crate {name} reads {link}, a symlink");
+            let got = read(name, false);
+            assert!(
+                got.as_ref().is_err_and(|e| e.contains(&want)),
+                "{name} without skip_packages: got = {got:?}, wanted = an error with {want:?}"
+            );
+        }
+        let got = read("plain", true);
+        assert!(
+            got.as_ref()
+                .is_err_and(|e| e.contains("[crates] crate plain reads plain/src/gen.rs")),
+            "plain: got = {got:?}, wanted = refused"
+        );
+        let mut files = Vec::new();
+        rust_files(&root.join("plain/src"), true, &mut files);
+        assert_eq!(
+            files,
+            [root.join("plain/src/gen.rs"), root.join("plain/src/lib.rs")]
+        );
+        // The guard leaves out what the walk does, under a linked
+        // directory too.
+        let mut seen = std::collections::HashSet::new();
+        assert!(
+            !reaches_rs(&root.join("inner/src/uu"), true, &mut seen),
+            "a left-out directory: got = reaches, wanted = none"
+        );
+        assert!(
+            reaches_rs(&root.join("inner/src/uu"), false, &mut seen),
+            "a left-out directory without the key: got = none, wanted = reaches"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The token-mint scan leaves out the directories the walk does
+    /// (#198): with `skip_packages`, a file that does not parse in another
+    /// package's directory under `src/` does not fail it, and the
+    /// outermost left-out directories are listed, through a link too.
+    /// Negative: without the key the scan fails on that file.
+    #[test]
+    fn the_mint_scan_leaves_out_what_the_walk_does() {
+        let root =
+            std::env::temp_dir().join(format!("verus-count-skip-mints-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for d in ["a/src/uu/x/src/inner", "verus", "tool"] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        fs::write(root.join("a/src/lib.rs"), "pub fn c_mint() {}\n").unwrap();
+        fs::write(root.join("a/src/uu/x/Cargo.toml"), "[package]\n").unwrap();
+        fs::write(root.join("a/src/uu/x/src/inner/Cargo.toml"), "[package]\n").unwrap();
+        fs::write(root.join("a/src/uu/x/src/bad.rs"), "fn (\n").unwrap();
+        fs::write(root.join("tool/Cargo.toml"), "[package]\n").unwrap();
+        std::os::unix::fs::symlink("../../tool", root.join("a/src/bin")).unwrap();
+        fs::write(root.join("verus/MINTS"), "").unwrap();
+        assert_eq!(
+            left_out_dirs(&root.join("a/src")),
+            [root.join("a/src/bin"), root.join("a/src/uu/x")]
+        );
+        for skip_packages in [true, false] {
+            let names = mints::Names {
+                mint: "c_mint".into(),
+                token: "CToken".into(),
+                home: "a/src/lib.rs".into(),
+                list: "verus/MINTS".into(),
+                tables: String::new(),
+                stand_ins: Vec::new(),
+            };
+            let crates = [Krate {
+                name: "a".into(),
+                dir: root.join("a"),
+                ships: true,
+                by_rule: true,
+                skip_packages,
+            }];
+            let got = token_mints(&root, names, &crates, &std::collections::BTreeSet::new());
+            assert_eq!(got, skip_packages, "skip_packages = {skip_packages}");
+        }
         let _ = fs::remove_dir_all(&root);
     }
 }
