@@ -121,6 +121,26 @@ where it reports drift.
   `cite-case	GenMC	tests/genmc` (25 GenMC citations), and with one cited case turned
   into a `fail` case both seams.sh and this check refused the same 5
   citations. A port without a `cite-case` line sees no change.
+- The package installs a fourth Go tool, `proved-port-calls`
+  (`kit/checks/calls`, #256), the first half of PLAN step 8's lint that
+  a port's checks call the kit's targets. It reads no check file: its
+  input is the resolved configuration `chainctl checks explain
+  --output=json .` prints, and a rules file of `call CHECK TARGET...
+  [with NAME...]` lines (the check exists, gates a merge, installs
+  theseus-proved-port, sets no variable but VERUS_THREADS (digits or the
+  guest's CPUs), VERUS_BASE (one expansion of the base Checks sets) and
+  the names `with` lists (to plain values or one expansion of a variable
+  the check sets; never a name make, the shell, the loader, cargo or git
+  reads, nor one of the kit's own, the Kani split knobs included),
+  starts no services, and runs `make TARGET` in a step read with
+  certainty, after only such steps: `make ARG...` or
+  `sh -c` with exactly one simple command, options that run every goal,
+  literal goals) and `forbid PATH` lines (no step, service or variable
+  names an in-tree copy the kit replaced). `kit/install.sh` builds it with the other
+  three, and `count-installed` checks it as it checks them; go.yaml's
+  `calls-test` runs its tests, with challoc 7138852's resolved
+  configuration (two values made neutral) as a fixture. Nothing runs it yet: the make target,
+  the rules template and the template check are a later change.
 
 ### Porting notes
 
@@ -150,6 +170,11 @@ where it reports drift.
    cited case line with an empty field, or a template that ends inside
    a block comment or literal now fails, as does a citation with two
    blanks between its words.
+5. Nothing to change for `proved-port-calls`: no target or template
+   runs it in this release. The package's recipe builds it beside the
+   other three Go tools (one more `go/build` of `kit/checks/calls` as
+   `proved-port-calls`, or nothing more where the recipe runs
+   `kit/install.sh`).
 
 ## 0.4.12
 

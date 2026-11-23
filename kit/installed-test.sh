@@ -3,7 +3,7 @@
 # package installs it (the count-installed check). It installs the kit
 # into a scratch root with kit/install.sh, the way the package's build
 # does: the counter built from kit/count as usr/bin/verus-count, the Go
-# tools as usr/bin/proved-port-fncmp, -stats and -seams (each checked to
+# tools as usr/bin/proved-port-fncmp, -stats, -seams and -calls (each checked to
 # be its tool), kit/make/* (mode 0644) in usr/share/proved-port/make/, all of
 # kit/templates in usr/share/proved-port/templates/, kit/CHANGELOG.md as
 # usr/share/proved-port/CHANGELOG.md with porting notes for the release,
@@ -57,10 +57,11 @@ mkdir "$kitrepo/kit/count"
 for f in Cargo.toml Cargo.lock src; do
   cp -R "kit/count/$f" "$kitrepo/kit/count/"
 done
-mkdir -p "$kitrepo/kit/perf/codegen" "$kitrepo/kit/verus"
+mkdir -p "$kitrepo/kit/perf/codegen" "$kitrepo/kit/verus" "$kitrepo/kit/checks"
 cp -R kit/perf/stats "$kitrepo/kit/perf/"
 cp -R kit/perf/codegen/fncmp "$kitrepo/kit/perf/codegen/"
 cp -R kit/verus/seams "$kitrepo/kit/verus/"
+cp -R kit/checks/calls "$kitrepo/kit/checks/"
 git -C "$kitrepo" init -q
 git -C "$kitrepo" add .
 git -C "$kitrepo" -c user.name=installed-test -c user.email=installed-test@example.com \
@@ -116,7 +117,8 @@ rm "$kitrepo/kit/stray"
 echo "ok kit/install.sh installs the release's tag, and refuses another commit or a changed kit/ but with --dev"
 
 # The Go tools, as the package installs them: proved-port-fncmp,
-# proved-port-stats and proved-port-seams in bin/, mode 0755, each the
+# proved-port-stats, proved-port-seams and proved-port-calls in bin/,
+# mode 0755, each the
 # tool its module builds (its usage on a bad flag, exit 2).
 # gotool NAME WANT: bin/proved-port-NAME's first line of usage is WANT.
 gotool() {
@@ -131,6 +133,7 @@ gotool fncmp "usage: fncmp OLD NEW"
 gotool stats "usage:"
 grep -qx '  stats md5 LOG\.\.\.' "$tmp/gotool.out" || { cat "$tmp/gotool.out" >&2; fail "proved-port-stats: its usage names no stats md5"; }
 gotool seams "usage: seams [-C DIR] [-rules FILE] [-write | -check | -entries | -cites]"
+gotool calls "usage: calls -rules RULES WORKFLOW"
 
 # Over the --dev install, at the tag. An install that fails part way (here
 # at its bin/, a file) leaves no KIT, which every kit target refuses, not
@@ -178,9 +181,10 @@ echo "ok kit/install.sh with a Go tool that does not build fails and leaves the 
 rm -rf "$target/go"
 (cd "$(dirname "$target")" && CARGO_TARGET_DIR=$(basename "$target") sh "$kitrepo/kit/install.sh" "$tmp/rel" 2> "$tmp/install.err") \
   || { cat "$tmp/install.err" >&2; fail "kit/install.sh with a relative CARGO_TARGET_DIR failed"; }
-for t in fncmp stats seams; do
+for t in fncmp stats seams calls; do
   [ -x "$tmp/rel/bin/proved-port-$t" ] || fail "kit/install.sh with a relative CARGO_TARGET_DIR: got = no proved-port-$t, want = installed"
   [ ! -e "$kitrepo/kit/verus/seams/$(basename "$target")" ] && [ ! -e "$kitrepo/kit/perf/stats/$(basename "$target")" ] \
+    && [ ! -e "$kitrepo/kit/checks/calls/$(basename "$target")" ] \
     || fail "kit/install.sh with a relative CARGO_TARGET_DIR: got = a target directory under a Go module, want = the caller's"
 done
 echo "ok kit/install.sh with a relative CARGO_TARGET_DIR builds and installs from the caller's target directory"
