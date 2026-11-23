@@ -66,12 +66,13 @@
 // citations in the order they stand in it (a name that serves several
 // seams prints its citations once per seam). A port's checks resolve
 // each line of a tag the rules give no check (challoc's Isla citation
-// reads `NAME in TARGET`, its emptyasm and GenMC ones `NAME @ TARGET`).
+// reads `NAME in TARGET`, its emptyasm one `NAME @ TARGET`).
 //
 // -check resolves each citation of a tag with a cite-fn, cite-assert,
-// cite-test or cite-row line, and fails each that does not resolve
-// (once, though a name serves several seams), as seams.sh's
-// checkcite() resolved Kani, callers, const assert and loom citations.
+// cite-test, cite-case or cite-row line, and fails each that does not
+// resolve (once, though a name serves several seams), as seams.sh's
+// checkcite() resolved Kani, callers, const assert, loom and GenMC
+// citations.
 // A cite-fn citation is a path
 // `a::b::m::f`: the file is the longest leading run of the segments but
 // the last that names SOURCE/a/b.rs or else SOURCE/a/b/mod.rs (a first
@@ -124,9 +125,19 @@
 // no cfg, cfg_attr or ignore attribute but `#[cfg(CFG)]` and no
 // `#[path]`, read as the reach check reads a `mod` line, and neither file
 // may hold an inner cfg attribute but `#![cfg(CFG)]` whole on its line.
-// A `#[doc = ".."]` attribute is not read as a doc comment. A cite-row
-// citation, once
-// its cite-fn, cite-assert or cite-test check passes, needs a line starting `| ` in
+// A `#[doc = ".."]` attribute is not read as a doc comment. A cite-case
+// citation is `CASE [MODEL ...]` (one blank between the words), a case
+// of DIR/cases (challoc's GenMC cases in tests/genmc; seams.sh's
+// genmctest()), read as challoc's tests/genmc/run.sh reads it: lines
+// `name | template | models | constants | expected`, a blank line or
+// one starting `#` none, fields trimmed. Exactly one line names CASE,
+// with no empty field; it expects `pass` alone (a `fail` case is a
+// control); its models, split on blanks, are the cited ones in the same
+// order; and its template is a word whose DIR/TEMPLATE.rs (read whole)
+// names the seam's source file and the seam's function in backquotes,
+// as a cite-test file and test do, anywhere in the file. A cite-row
+// citation, once its cite-fn, cite-assert, cite-test or cite-case check
+// passes, needs a line starting `| ` in
 // FILE's table under the line `## HEADING` (to the next `## ` line)
 // whose first cell holds the citation in backquotes and whose text holds
 // every PART. Each file is read with the lexer: a line in a block
@@ -252,8 +263,12 @@
 //	                           each TAG citation names a test `MOD::TEST`
 //	                           in DIR/MOD.rs naming the seam's function,
 //	                           under no gate but `#[cfg(CFG)]` (CFG with
-//	                           no literal); a tag takes one of cite-fn,
-//	                           cite-assert and cite-test, once
+//	                           no literal)
+//	cite-case<TAB>TAG<TAB>DIR  each TAG citation names a pass case `CASE
+//	                           [MODEL ...]` of DIR/cases whose template
+//	                           names the seam's function; a tag takes one
+//	                           of cite-fn, cite-assert, cite-test and
+//	                           cite-case, once
 //	cite-row<TAB>TAG<TAB>FILE<TAB>HEADING<TAB>PART...
 //	                           each TAG citation needs a row in FILE's
 //	                           `## HEADING` table holding every PART (once
@@ -261,8 +276,8 @@
 //	cite-module<TAB>NAME<TAB>DIR
 //	                           a cite-fn path starting `NAME::` reads under
 //	                           DIR (once per NAME); the TAG of cite-fn,
-//	                           cite-assert, cite-test and cite-row is a cite-tag
-//	                           above the line
+//	                           cite-assert, cite-test, cite-case and cite-row
+//	                           is a cite-tag above the line
 //	notcopy<TAB>FILE<TAB>TAG   the tracked types' not-Copy checks are in
 //	                           FILE, and a tracked-type seam cites them with
 //	                           TAG, a tag with a cite-assert line above (once)

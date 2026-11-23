@@ -446,7 +446,7 @@ func TestResolveRules(t *testing.T) {
 		{base + "cite-fn\tK\n", "r:6: want cite-fn<TAB>TAG<TAB>ATTR[<TAB>CFG...]"},
 		{base + "cite-fn\tK\ttest\t\n", "r:6: want cite-fn<TAB>TAG<TAB>ATTR[<TAB>CFG...], with no empty field"},
 		{base + "cite-fn\tK\t#[test]\n", "r:6: cite-fn K: ATTR #[test]: want the attribute's path"},
-		{base + "cite-fn\tK\ttest\ncite-fn\tK\ttest\n", "r:7: cite-fn K: the tag already has a cite-fn, cite-assert or cite-test line"},
+		{base + "cite-fn\tK\ttest\ncite-fn\tK\ttest\n", "r:7: cite-fn K: the tag already has a cite-fn, cite-assert, cite-test or cite-case line"},
 		{base + "cite-fn\tK\ttest\ncite-assert\tK\n", "r:7: cite-assert K: the tag already has"},
 		{base + "cite-assert\tK\ncite-fn\tK\ttest\n", "r:7: cite-fn K: the tag already has"},
 		{base + "cite-assert\tK\tx\n", "r:6: want cite-assert<TAB>TAG"},

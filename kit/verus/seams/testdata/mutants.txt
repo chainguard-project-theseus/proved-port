@@ -264,9 +264,10 @@ resolve.go	if !seen[s] {	if true {
 resolve.go	f.clean = append(f.clean, lx.depth == 0 && lx.str == 0)	f.clean = append(f.clean, true)
 rules.go	"cite-row": max(len(f), 4)	"cite-row": len(f)
 rules.go	if !slices.Contains(r.CiteTags, f[1]) {	if false {
-rules.go	fn || test || r.CiteAssert[f[1]]	fn || test
-rules.go	fn || test || r.CiteAssert[f[1]]	(fn && false) || test || r.CiteAssert[f[1]]
-rules.go	fn || test || r.CiteAssert[f[1]]	fn || (test && false) || r.CiteAssert[f[1]]
+rules.go	fn || test || cs || r.CiteAssert[f[1]]	fn || test || cs
+rules.go	fn || test || cs || r.CiteAssert[f[1]]	(fn && false) || test || cs || r.CiteAssert[f[1]]
+rules.go	fn || test || cs || r.CiteAssert[f[1]]	fn || (test && false) || cs || r.CiteAssert[f[1]]
+rules.go	fn || test || cs || r.CiteAssert[f[1]]	fn || test || (cs && false) || r.CiteAssert[f[1]]
 rules.go	strings.ContainsAny(f[2], "[] ")	false
 rules.go	if _, ok := r.CiteRow[f[1]]; ok {	if false {
 rules.go	bad("cite-module %s: want an identifier", name)	_ = name
@@ -568,9 +569,10 @@ citetest.go	[]string{lib, file}	[]string{lib}
 citetest.go	innerGate(v.file(p), ct.inner())	innerGate(v.file(p), nil)
 citetest.go	"#!"+strings.TrimPrefix(c, "#")	c
 citetest.go	ok && strings.Contains(rel, "/")	ok
-citetest.go	named = named || strings.Contains(l, src) || strings.Contains(l, short)	named = named || strings.Contains(l, src)
-citetest.go	named = named || strings.Contains(l, src) || strings.Contains(l, short)	named = named || strings.Contains(l, short)
-citetest.go	if !named {	if false {
+citetest.go	if strings.Contains(l, src) || strings.Contains(l, short) {	if strings.Contains(l, src) {
+citetest.go	if strings.Contains(l, src) || strings.Contains(l, short) {	if strings.Contains(l, short) {
+citetest.go	if strings.Contains(l, src) || strings.Contains(l, short) {	if strings.Contains(l, "`") {
+citetest.go	if why := v.namesSrc(f, file, e); why != "" {	if why := v.namesSrc(f, file, e); false && why != "" {
 citetest.go	if strings.Contains(name, "::") {	if false {
 citetest.go	if path.Base(m) == "mod" {	if false {
 citetest.go	if sp == name {	if false {
@@ -625,3 +627,28 @@ rules.go	ct.cfgs = append(ct.cfgs, "#[cfg("+g+")]")	ct.cfgs = append(ct.cfgs, g)
 resolve.go	if why := v.test(ct, e, c.target); why != "" {	if why := v.test(ct, e, c.target); false {
 reach.go	!(ia <= 0 && slices.Contains(allow, strings.TrimSpace(text)))	true
 reach.go	!slices.Contains(allow, strings.TrimSpace(a))	!slices.Contains(allow, a)
+# #254 (cite-case, seams.sh's genmctest()).
+rules.go	"cite-case": 3	"cite-case": max(len(f), 3)
+rules.go	if f[0] == "cite-case" {	if false {
+rules.go	r.CiteCase[f[1]] = c	_ = c
+resolve.go	if why := v.caseCite(dir, e, c.target); why != "" {	if why := v.caseCite(dir, e, c.target); false {
+citecase.go	`^([A-Za-z0-9_]+) \[	`^([A-Za-z0-9_. #]+) \[
+citecase.go	( [^ \[\]]+)*)\]$`	( +[^ \[\]]+)*)\]$`
+citecase.go	\]$`)	\]`)
+citecase.go	if m == nil {	if false {
+citecase.go	name, models := m[1], strings.Fields(m[2])	name, models := m[1], strings.Fields(m[2]+" x")
+citecase.go	if !v.exists(cases) {	if false {
+citecase.go	strings.TrimSpace(f[0]) == name	f[0] == name
+citecase.go	case 0:	case -1:
+citecase.go	case 1:	case 1, 2:
+citecase.go	f[i] = strings.TrimSpace(f[i])	f[i] = f[i]
+citecase.go	if f[i] == "" {	if false {
+citecase.go	if len(f) < 5 {	if false {
+citecase.go	if len(f) != 5 || f[4] != "pass" {	if f[4] != "pass" {
+citecase.go	if len(f) != 5 || f[4] != "pass" {	if len(f) != 5 {
+citecase.go	!slices.Equal(got, models)	!slices.Equal(got, got)
+citecase.go	if !reCaseWord.MatchString(f[1]) {	if false {
+citecase.go	if !t.ok {	if !v.exists(tmpl) {
+citecase.go	if why := v.namesSrc(t, tmpl, e); why != "" {	if why := v.namesSrc(t, tmpl, e); false {
+citecase.go	if namesFn(l, fn) {	if namesFn(l, fn) || l != "" {
+citecase.go	fn := seamFn(e)	fn := e.name

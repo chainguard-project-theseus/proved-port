@@ -99,6 +99,28 @@ where it reports drift.
   tests), and with one cited test made `#[should_panic]` both seams.sh
   and this check refused it. A port without a `cite-test` line sees no
   change.
+- The seam ledger generator resolves cases-table citations (#254),
+  seams.sh's `genmctest()`: with a rules line
+  `cite-case<TAB>TAG<TAB>DIR`, `-check` resolves each TAG citation
+  `CASE [MODEL ...]` against DIR/cases, read as challoc's
+  `tests/genmc/run.sh` reads it (`name | template | models | constants
+  | expected` lines, blank and `#` lines skipped, fields trimmed): the
+  case expects `pass` alone (a `fail` case is a control), runs under
+  exactly the cited models in that order, and its template
+  DIR/TEMPLATE.rs names the seam's source file and function in
+  backquotes, with `genmctest()`'s matching. Where `genmctest()` was
+  lax, the check fails closed: a case named on two lines, a case line
+  with an empty field or fewer than five fields, a template that is not
+  a word, and a template that ends inside a block comment or literal
+  are refused, and a citation must write one blank between its words.
+  A tag takes one of cite-fn, cite-assert, cite-test and cite-case (the
+  rules error for a second one now names cite-case too). The template's
+  `seams.rules` carries challoc's line, commented. In a local run at
+  this commit (#254's pull request has the commands; no check repeats
+  it), challoc 2e71814 passed `-check` with
+  `cite-case	GenMC	tests/genmc` (25 GenMC citations), and with one cited case turned
+  into a `fail` case both seams.sh and this check refused the same 5
+  citations. A port without a `cite-case` line sees no change.
 - `make noalias` finds the library's LLVM IR with cargo 1.100 (Wolfi's
   rust-1.100) and later. That cargo's build directory layout writes
   each unit's outputs to `release/build/PACKAGE/HASH/out` (or
@@ -141,8 +163,15 @@ where it reports drift.
    `tests/loom/src/lib.rs` does not declare ungated, now fails, as does
    a `tests/loom/Cargo.toml` that is missing, moves the library root or
    turns its tests off.
+4. Optional: a port whose own script resolves GenMC citations (challoc's
+   `genmctest()` in `verus/seams.sh`) can add
+   `cite-case<TAB>GenMC<TAB>tests/genmc` to `verus/seams.rules` and drop
+   that function. A case named on two lines of `tests/genmc/cases`, a
+   cited case line with an empty field, or a template that ends inside
+   a block comment or literal now fails, as does a citation with two
+   blanks between its words.
 
-4. A port on rust-1.99 or older changes nothing for these two targets.
+5. A port on rust-1.99 or older changes nothing for these two targets.
    A port moving to rust-1.100 or later moves its pin to 0.4.13 first,
    or in the same change as its rust stream, as 0.3.1's note 1 lists
    (`PROVED_PORT_VERSION` and every `theseus-proved-port~` pin), once
