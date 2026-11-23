@@ -8,7 +8,7 @@ environment:
   packages:
     - busybox
     - curl   # kit/shellcheck.sh fetches the pinned release
-    - git    # kit/shellcheck.sh lists the scripts with git ls-files
+    - git    # kit/shellcheck.sh and kit/internal-test.sh list files with git ls-files
     - xz
 
 checks:
@@ -30,8 +30,10 @@ checks:
     description: >-
       kit/internal-test.sh: no file the kit ships to ports (kit/count,
       kit/make, kit/templates) names an internal repository, tool, URL
-      or person, the kit's own repository excepted by its exact name,
-      and each marker it lists is found when planted.
+      or person, the kit's own repository excepted by its exact name;
+      no file git tracks names a private repository whose name it holds
+      as a sha256 digest; and each marker it lists, and the digest scan,
+      find what is planted.
     trigger: [presubmit, postsubmit]
     timeout: 5m
     cmd: [sh, kit/internal-test.sh]
