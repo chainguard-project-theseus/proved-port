@@ -3,8 +3,11 @@
 # seam ledger generator's mutant runner, on a small stand-in Go package
 # (MUTANTS_KIT and MUTANTS_PKG point the runner at it): a killed mutant,
 # a survivor (fails), a marked equivalent that survives (passes) or is
-# killed (fails), a FROM that occurs twice or not at all, malformed
-# lines, a FILE outside the package, an empty list, a missing list, a
+# killed (fails), a FROM that occurs twice or not at all, FILE#N/M (the
+# Nth occurrence killed, replaced alone, a survivor, M not the count,
+# malformed and oversized indexes, one marked equivalent), a mutant
+# that changes nothing,
+# malformed lines, a FILE outside the package, an empty list, a missing list, a
 # failing unmutated package and usage. The expected lines are written
 # by hand. Run it from the repository root; it needs go.
 set -eu
@@ -125,6 +128,55 @@ toy.go${T}a > b${T}a < b
 
 run "no mutant" 1 "# only a comment
 " "mutants: no mutant in list"
+
+# FILE#N/M names the Nth of M occurrences (#250). `return a` is Max's
+# (tested) then Twice's; `a + a` is Twice's then the comment's.
+run "occurrence killed" 0 "toy.go#1/2${T}return a${T}return b
+" "KILLED toy.go#1/2: return a -> return b" "mutants: 1 killed, 0 equivalent, 0 survived, 0 bad lines"
+
+# Only the Nth is replaced: `a +` breaks the build in Twice (the 1st)
+# but not in the comment (the 2nd).
+run "occurrence index" 1 "toy.go#2/2${T}a + a${T}a +
+toy.go#1/2${T}a + a${T}a +
+" "SURVIVED toy.go#2/2: a + a -> a +" \
+	"BAD list:2: the mutant does not build (or fails go test's vet), so no test can kill it: toy.go#1/2: a + a -> a +" \
+	"mutants: 0 killed, 0 equivalent, 1 survived, 1 bad lines"
+
+# An equivalent mark names one place; FILE#N/M can move unseen.
+run "occurrence marked equivalent" 1 "toy.go#2/2${T}a + a${T}a - a${T}equivalent: the comment's
+toy.go${T}a > b${T}a < b
+" "BAD list:1: a row marked equivalent names one place: widen FROM until it occurs once and write FILE alone: toy.go#2/2"
+
+run "occurrence survivor" 1 "toy.go#1/2${T}a + a${T}a - a
+" "SURVIVED toy.go#1/2: a + a -> a - a" "mutants: 0 killed, 0 equivalent, 1 survived, 0 bad lines"
+
+run "occurrences not M" 1 "toy.go#1/3${T}a + a${T}x
+toy.go#1/2${T}a > b${T}a < b
+toy.go${T}a > b${T}a < b
+" "BAD list:1: FROM occurs 2 times in toy.go, want 3 (toy.go#1/3): a + a" \
+	"BAD list:2: FROM occurs 1 times in toy.go, want 2 (toy.go#1/2): a > b"
+
+# Oversized indexes too: past test's integer range a comparison fails,
+# which must not read as in range.
+for bad in 'toy.go#3/2' 'toy.go#0/2' 'toy.go#1/1' 'toy.go#1/02' 'toy.go#01/2' 'toy.go#a/2' 'toy.go#1' 'toy.go#1/2/3' 'toy.go#' 'toy.go#1/2x' 'toy.go#/2' \
+	'toy.go#999999999999999999999999/2' 'toy.go#1/999999999999999999999999' 'toy.go#1000000000/2'; do
+	run "malformed $bad" 1 "$bad${T}a + a${T}x
+toy.go${T}a > b${T}a < b
+" "BAD list:1: want FILE#N/M, the Nth of M occurrences (1 <= N <= M, M >= 2; a FROM that occurs once takes FILE alone): $bad"
+done
+
+# A mutant that leaves the file as it was is no mutant, though marked
+# equivalent.
+run "changes nothing" 1 "toy.go${T}a > b${T}a > b${T}equivalent: the same text
+toy.go#2/2${T}a + a${T}a + a
+toy.go${T}a > b${T}a < b
+" "BAD list:1: the mutant changes nothing in toy.go: toy.go: a > b -> a > b" \
+	"BAD list:2: the mutant changes nothing in toy.go: toy.go#2/2: a + a -> a + a" \
+	"mutants: 1 killed, 0 equivalent, 0 survived, 2 bad lines"
+
+run "occurrence file outside the package" 1 "../toy.go#1/2${T}a + a${T}x
+toy.go${T}a > b${T}a < b
+" "BAD list:1: FILE is a file name of the package: ../toy.go"
 
 # Each mutant is undone before the next: a mutant of another file runs
 # on the original toy.go (left as `a < b`, the message-only mutant of

@@ -52,6 +52,23 @@ where it reports drift.
   verus/kani/pins.txt`, and on ten broken variants of its pins file and
   source the check printed what seams.sh's functions print. A port
   without a `pins` line sees no change.
+- The seam ledger generator's mutant runner (`kit/verus/seams/mutants.sh`)
+  names one occurrence of a repeated FROM (#250): FILE written
+  `FILE#N/M` is the Nth of M occurrences (1 <= N <= M, M >= 2, each at
+  most 9 digits with no leading zero), and the line fails unless FROM
+  occurs exactly M times; only the Nth is replaced, and the result lines
+  name `FILE#N/M`. The count catches an occurrence added or removed,
+  not one moved, so a `FILE#N/M` row may not be marked equivalent (a
+  mark names one place: widen FROM until it occurs once). A plain FILE
+  still needs FROM exactly once. Any
+  mutant that leaves its file unchanged (TO equal to FROM) now fails as
+  a bad line, though marked equivalent. `testdata/mutants.txt` gains
+  #218's hand mutants whose FROM occurs two to four times, at every
+  occurrence (58 rows: 55 killed, 3 marked equivalent with their
+  reasons, those three with FROMs widened to occur once), and two tests close the gaps they found: the paren form
+  `#[verifier(assume_unsupported_attributes)]`, and the blanks a block
+  comment leaves in an export's contract. Nothing is installed; ports
+  see no change.
 
 ### Porting notes
 
