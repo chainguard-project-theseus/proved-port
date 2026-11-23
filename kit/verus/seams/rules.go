@@ -35,6 +35,7 @@ type Rules struct {
 	CiteModule  map[string]string   // a path's first segment -> the directory it reads
 	NotCopyFile string              // the file of the tracked types' not-Copy checks, or ""
 	NotCopyTag  string              // the cite-assert tag a tracked-type seam cites them with
+	Pins        []string            // the pins files (source lines a copy runs), in rules order
 	Assumption  string              // the tool of a seam no check applies to
 	testRes     []*regexp.Regexp
 	testOnPath  []bool
@@ -322,6 +323,19 @@ func parseRules(file, data string) (*Rules, error) {
 			if c, ok := inTree(f[1]); ok {
 				r.NotCopyFile, r.NotCopyTag = c, f[2]
 			}
+		case "pins":
+			if !want(2, "pins<TAB>FILE") {
+				continue
+			}
+			c, ok := inTree(f[1])
+			if !ok {
+				continue
+			}
+			if slices.Contains(r.Pins, c) {
+				bad("pins %s given twice", f[1])
+				continue
+			}
+			r.Pins = append(r.Pins, c)
 		case "cite-module":
 			if !want(3, "cite-module<TAB>NAME<TAB>DIR") {
 				continue

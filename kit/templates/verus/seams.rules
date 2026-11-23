@@ -98,6 +98,12 @@ cite-assert	const assert
 # passes for a type that is Copy whenever its argument is:
 # notcopy	src/vspec/notcopy.rs	const assert
 #
+# challoc's Kani pins: a harness that runs a copy of a body (Kani has no
+# model of inline assembly) pins the original's lines and the copy's in
+# the file, `SRC<TAB>LINE[<TAB>NAME:ROLE]` rows, and -check holds them in
+# place (and the copy equal to the original but for its `-only` rows):
+# pins	verus/kani/pins.txt
+#
 # The heuristics: the first guess whose conditions all hold proposes its
 # category (- for none, which -check reports until an overrides line
 # names one). FIELD=RE matches, FIELD!RE does not; kind, name, file and
